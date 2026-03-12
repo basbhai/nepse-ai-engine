@@ -11,7 +11,7 @@ models = [
     "gemini-3.1-flash-preview"
 ]
 
-data = {"contents": [{"parts": [{"text": "Hello! reply anything"}]}]}
+data = {"contents": [{"parts": [{"text": "Hello! reply anything, do you know my name"}]}]}
 
 for model in models:
     # Note: Use the stable /v1/ for 2.5 models if v1beta fails
