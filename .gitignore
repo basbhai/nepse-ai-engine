@@ -1,0 +1,29 @@
+
+    # Secrets
+    .env
+    *.env
+    .env.*
+    service_account.json
+    *credentials*.json
+    *secret*.json
+
+    # Python
+    venv/
+    __pycache__/
+    *.pyc
+    *.pyo
+    *.pyd
+    .Python
+
+    # OS files
+    .DS_Store
+    Thumbs.db
+    desktop.ini
+
+    # Logs (optional — or keep for debugging)
+    *.log
+    logs/
+
+    # Test files with real data
+    test_*.py
+
