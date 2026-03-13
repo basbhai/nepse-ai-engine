@@ -11,3 +11,4 @@ python-dotenv
 beautifulsoup4
 lxml
 openai
+google-generativeai

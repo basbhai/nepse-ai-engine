@@ -12,7 +12,7 @@ chat = client.chat.completions.create(
     model = "gpt-5.3-codex-spark",
     messages = [{
       "role": "user",
-      "content": "list down your pricing"
+      "content": "give me js function for anyting"
     }]
 )
 
