@@ -1,11 +1,15 @@
 """
-connection_testing/tms_session_test.py
+tms_scraper.py
 ─────────────────────────────────────────────────────────────────────────────
 NEPSE AI Engine — Phase 2
-Fixes:
-  - google.generativeai → google.genai (new SDK)
-  - save_cookies: explicit logging at every step to catch silent failures
-  - extract_cookies: robust parsing with urllib fallback
+Purpose : Authenticate with TMS49 (NEPSE Trading Management System) and
+          fetch live market data — top securities, indices.
+
+Auth flow : Every run does a fresh login (no session caching).
+            Gemini 2.5 Flash-Lite solves the captcha from raw image bytes
+            — no PNG file is written to disk.
+
+Designed to run on GitHub Actions (no persistent filesystem needed).
 ─────────────────────────────────────────────────────────────────────────────
 """
 
@@ -25,7 +29,6 @@ TMS_AUTH_URL    = f"{TMS_BASE}/tmsapi/authApi/authenticate"
 TMS_TOP25_URL   = f"{TMS_BASE}/tmsapi/rtApi/ws/top25securities"
 TMS_INDICES_URL = f"{TMS_BASE}/tmsapi/exchangeIndex/indices"
 MEMBER_CODE     = "49"
-COOKIE_TTL_DAYS = 9
 
 USERNAME       = os.getenv("TMS_USERNAME")
 PASSWORD       = os.getenv("TMS_PASSWORD")
@@ -157,91 +160,7 @@ def build_host_session_id(session_uuid: str) -> str:
     return base64.b64encode(f"MjQ=-{session_uuid}".encode()).decode()
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# SETTINGS cache
-# ══════════════════════════════════════════════════════════════════════════════
 
-def load_cached_cookies() -> dict | None:
-    try:
-        from sheets import get_setting  # noqa
-        fields = {
-            "TMS_Cookie_rid":      get_setting("TMS_Cookie_rid",      default=""),
-            "TMS_Cookie_aid":      get_setting("TMS_Cookie_aid",      default=""),
-            "TMS_Cookie_xsrf":     get_setting("TMS_Cookie_xsrf",     default=""),
-            "TMS_Cookie_host_sid": get_setting("TMS_Cookie_host_sid", default=""),
-            "TMS_Cookie_expiry":   get_setting("TMS_Cookie_expiry",   default=""),
-        }
-
-        missing = [k for k, v in fields.items() if not v]
-        if missing:
-            log.info("Cache missing keys: %s — fresh login needed", missing)
-            return None
-
-        expiry_dt = datetime.strptime(
-            fields["TMS_Cookie_expiry"], "%Y-%m-%d %H:%M"
-        ).replace(tzinfo=NST)
-        now_nst = datetime.now(tz=timezone.utc).astimezone(NST)
-
-        if now_nst >= expiry_dt:
-            log.info("Cache expired (%s NST)", fields["TMS_Cookie_expiry"])
-            return None
-
-        remaining = expiry_dt - now_nst
-        log.info("✅ Cache valid — %dd %dh remaining",
-                 remaining.days, remaining.seconds // 3600)
-        return {
-            "_rid":            fields["TMS_Cookie_rid"],
-            "_aid":            fields["TMS_Cookie_aid"],
-            "XSRF-TOKEN":      fields["TMS_Cookie_xsrf"],
-            "host_session_id": fields["TMS_Cookie_host_sid"],
-            "expiry":          fields["TMS_Cookie_expiry"],
-        }
-
-    except ImportError:
-        log.warning("sheets.py not importable — no cache")
-        return None
-    except Exception as e:
-        log.warning("Cache load error: %s", e)
-        return None
-
-
-def save_cookies(cookies: dict, host_session_id: str) -> str:
-    """
-    Persist cookies to SETTINGS tab.
-    Logs every individual update_setting call so failures are visible.
-    """
-    expiry = (
-        datetime.now(tz=timezone.utc).astimezone(NST)
-        + timedelta(days=COOKIE_TTL_DAYS)
-    ).strftime("%Y-%m-%d %H:%M")
-
-    desc = "TMS49 session — auto-managed"
-
-    to_save = {
-        "TMS_Cookie_rid":      (cookies.get("_rid",       ""), desc),
-        "TMS_Cookie_aid":      (cookies.get("_aid",       ""), desc),
-        "TMS_Cookie_xsrf":     (cookies.get("XSRF-TOKEN", ""), desc),
-        "TMS_Cookie_host_sid": (host_session_id,               desc),
-        "TMS_Cookie_expiry":   (expiry, f"TMS49 expiry NST ({COOKIE_TTL_DAYS}d TTL)"),
-    }
-
-    try:
-        from sheets import update_setting  # noqa
-        for key, (value, description) in to_save.items():
-            if not value:
-                log.warning("save_cookies: skipping %s — empty value", key)
-                continue
-            ok = update_setting(key, value, description)
-            log.info("  SETTINGS[%s] = %s... → %s",
-                     key, str(value)[:30], "OK" if ok else "FAILED")
-        log.info("✅ All cookies saved to SETTINGS — expire: %s NST", expiry)
-
-    except ImportError:
-        log.warning("sheets.py not available — running in test-only mode (no persistence)")
-    except Exception as e:
-        log.error("save_cookies failed: %s", e)
-
-    return expiry
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -282,9 +201,7 @@ def fresh_login() -> tuple[requests.Session, str]:
         timeout=10,
     )
     image_bytes = r.content
-    with open(f"tms_captcha_{captcha_id[:8]}.png", "wb") as f:
-        f.write(image_bytes)
-    log.info("Captcha image saved: tms_captcha_%s.png", captcha_id[:8])
+    log.info("Captcha image fetched — %d bytes (in-memory only)", len(image_bytes))
 
     # Gemini solve
     solved = gemini_solve_captcha(image_bytes)
@@ -307,9 +224,7 @@ def fresh_login() -> tuple[requests.Session, str]:
     # ── DIAGNOSTIC: log full login response body ──────────────────────────
     try:
         print("\n" + "─" * 60)
-        print("FULL LOGIN RESPONSE BODY:")
-        print(json.dumps(auth.json(), indent=2))
-        print("─" * 60 + "\n")
+
     except Exception:
         print("LOGIN BODY (raw):", auth.text[:1000])
 
@@ -341,23 +256,14 @@ def fresh_login() -> tuple[requests.Session, str]:
     return session, host_session_id
 
 
-def get_session() -> tuple[requests.Session, str, str]:
-    """Returns (session, host_session_id, source). source: 'cache'|'fresh_login'."""
-    cached = load_cached_cookies()
-    if cached:
-        session = build_session(cached)
-        return session, cached["host_session_id"], "cache"
-
+def get_session() -> tuple[requests.Session, str]:
+    """
+    Always performs a fresh login.
+    Returns (session, host_session_id).
+    No caching — designed for GitHub Actions where each run is ephemeral.
+    """
     session, host_sid = fresh_login()
-
-    # Extract cookies from the session we just built for saving
-    cookies = {
-        "_rid":       session.cookies.get("_rid",       ""),
-        "_aid":       session.cookies.get("_aid",       ""),
-        "XSRF-TOKEN": session.cookies.get("XSRF-TOKEN", ""),
-    }
-    save_cookies(cookies, host_sid)
-    return session, host_sid, "fresh_login"
+    return session, host_sid
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -402,23 +308,12 @@ def fetch_indices(session, host_sid) -> list:
 
 if __name__ == "__main__":
     print("\n" + "=" * 60)
-    print("  TMS49 -- Session cache + data test")
-    print("  --fresh  to force new login (shows full response body)")
+    print("  TMS49 -- Fresh login + data test")
     print("=" * 60 + "\n")
 
-    if "--fresh" in sys.argv:
-        log.info("--fresh: bypassing cache, running fresh login")
-        session, host_sid = fresh_login()
-        cookies = {"_rid":       session.cookies.get("_rid",       ""),
-                   "_aid":       session.cookies.get("_aid",       ""),
-                   "XSRF-TOKEN": session.cookies.get("XSRF-TOKEN", "")}
-        save_cookies(cookies, host_sid)
-        source = "fresh_login"
-    else:
-        session, host_sid, source = get_session()
+    session, host_sid = get_session()
 
-    print(f"\n Session ready -- source: {source.upper()}")
-    print(f"   Gemini called    : {'YES' if source == 'fresh_login' else 'NO (cached)'}")
+    print(f"\n Session ready — fresh login every run")
     print(f"   _rid             : {session.cookies.get('_rid','?')[:40]}...")
     print(f"   XSRF-TOKEN       : {session.cookies.get('XSRF-TOKEN','?')}")
     print(f"   host-session-id  : {host_sid[:40]}...")
@@ -445,10 +340,8 @@ if __name__ == "__main__":
                       f"{s.get('volume',0):>10,}")
             print(f"  -> {len(secs)} securities OK")
         else:
-            print("  -> 0 results (market closed -- retest Sun-Thu 10:45-15:00 NST)")
+            print("  -> 0 results (market closed — retest Sun-Thu 10:45-15:00 NST)")
     except Exception as e:
         print(f"  FAIL: {e}")
 
-    print("\n" + "=" * 60)
-    print("  Run again (no --fresh) -> source: CACHE")
-    print("=" * 60 + "\n")
+    print("\n" + "=" * 60 + "\n")

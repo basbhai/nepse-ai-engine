@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # 1. Path to your saved captcha
-captcha_file = "tms_captcha_24a0fb82.png"
+captcha_file = "tms_captcha_8a634dd3.png"
 
 def read_and_solve():
     # 2. Read the file as binary bytes
