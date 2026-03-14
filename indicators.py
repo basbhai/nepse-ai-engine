@@ -6,19 +6,18 @@ Purpose : Compute all technical indicators for every symbol.
 
 Run schedule — ONCE DAILY (not every 6 minutes):
     Triggered by morning_brief.yml at 10:30 AM NST (pre-open window).
-    Results written to INDICATORS tab in NEPSE_CORE_ENGINE sheet.
-    The 6-minute trading loop (trading.yml) reads from that tab —
-    no heavy Sheets reads or math during the trading session.
+    Results written to INDICATORS table in Neon PostgreSQL.
+    The 6-minute trading loop (trading.yml) reads from that table —
+    no heavy DB reads or math during the trading session.
 
 Why once daily is correct:
     RSI, EMA, MACD, Bollinger, ATR are all defined on DAILY closes.
     Recomputing every 6 minutes from intraday ticks adds noise, not
     accuracy. Daily close RSI is the standard used by every serious
-    technical analyst. Running once also avoids burning ~8,000 Sheets
-    API calls/day (200 tabs × 40 runs).
+    technical analyst. Running once also avoids burning API quota.
 
 What the 6-minute loop does instead (in filter_engine.py):
-    Reads pre-computed indicators from INDICATORS tab (one Sheets read)
+    Reads pre-computed indicators from indicators table (one DB read)
     Then applies 3 lightweight live checks:
         1. Volume ratio  — live vol vs 180-day average
         2. Price vs EMA  — is LTP currently above/below EMA20/50/200?
@@ -34,6 +33,15 @@ Indicators computed:
     ATR-14          Average True Range (14-period)
     OBV             On-Balance Volume + trend direction
 
+Fixes applied (v2):
+    1. EMA crossover detection — now detects the actual cross EVENT
+       (today fast crosses above/below slow) instead of just position.
+       Uses _ema_series() to compare yesterday vs today values.
+    2. BB signal — now uses bb_pct_b properly:
+       NEAR_LOWER (<0.05), NEAR_UPPER (>0.95), SQUEEZE, EXPANSION, NEUTRAL
+    3. tech_score BB logic — uses bb_pct_b thresholds not raw price vs band
+    4. DEFAULT_LOAD_PERIODS raised 220 → 260 for better EMA-200 warmup
+
 Data sources:
     Historical OHLCV  ← GOOGLE_SHEET_SHARE_DATA (separate Sheets file)
                          One tab per date e.g. "2024-03-04" (485+ tabs)
@@ -45,17 +53,17 @@ Data sources:
                          computing — so indicators always reflect today.
 
 Output:
-    INDICATORS tab in NEPSE_CORE_ENGINE sheet.
+    indicators table in Neon PostgreSQL.
     One row per symbol. Overwritten fresh each morning.
     Read by filter_engine.py during the trading session.
 
 Usage (morning_brief.yml):
     from indicators import run_daily_indicators
-    run_daily_indicators()   # full pipeline: load → compute → write to Sheets
+    run_daily_indicators()   # full pipeline: load → compute → write to Neon
 
 Usage (filter_engine.py — reading pre-computed results):
-    from indicators import read_indicators_from_sheets
-    indicators = read_indicators_from_sheets()
+    from indicators import read_indicators_from_db
+    indicators = read_indicators_from_db()
     nabil = indicators.get('NABIL')
 
 ─────────────────────────────────────────────────────────────────────────────
@@ -79,49 +87,6 @@ NST = timezone(timedelta(hours=5, minutes=45))
 
 HIST_SHEET_ID_ENV = "GOOGLE_SHEET_SHARE_DATA"
 
-# INDICATORS tab columns — written once daily to NEPSE_CORE_ENGINE
-# Must match TABS["indicators"] in sheets.py (added below)
-INDICATORS_TAB_COLUMNS = [
-    "Symbol",
-    "Date",
-    "LTP",
-    "Prev_Close",
-    "Volume",
-    "History_Days",
-    # RSI
-    "RSI_14",
-    "RSI_Signal",
-    # EMAs
-    "EMA_20",
-    "EMA_50",
-    "EMA_200",
-    "EMA_Trend",
-    "EMA_20_50_Cross",
-    "EMA_50_200_Cross",
-    # MACD
-    "MACD_Line",
-    "MACD_Signal",
-    "MACD_Histogram",
-    "MACD_Cross",
-    # Bollinger
-    "BB_Upper",
-    "BB_Middle",
-    "BB_Lower",
-    "BB_Width",
-    "BB_Pct_B",
-    "BB_Signal",
-    # ATR
-    "ATR_14",
-    "ATR_Pct",
-    # OBV
-    "OBV",
-    "OBV_Trend",
-    # Composite
-    "Tech_Score",
-    "Tech_Signal",
-    "Timestamp",
-]
-
 # Periods required per indicator
 RSI_PERIOD         = 14
 EMA_SHORT          = 12    # MACD fast
@@ -135,16 +100,18 @@ ATR_PERIOD         = 14
 
 # Minimum history needed for all indicators (EMA-200 is the binding constraint)
 MIN_PERIODS_REQUIRED = 200
-# Load a bit extra so EMA-200 is properly "warmed up"
-DEFAULT_LOAD_PERIODS = 220
+# FIX 4: Raised from 220 → 260 for proper EMA-200 warmup.
+# EMA-200 needs 200 bars just to compute. Extra 60 bars allow Wilder's
+# smoothing to converge before we start trusting the values.
+DEFAULT_LOAD_PERIODS = 260
 
 # Column names in the OmitNomis / ShareSansar tabs (exact header strings)
-COL_SYMBOL     = "Symbol"
-COL_CLOSE      = "Close"
-COL_OPEN       = "Open"
-COL_HIGH       = "High"
-COL_LOW        = "Low"
-COL_VOLUME     = "Vol"
+COL_SYMBOL = "Symbol"
+COL_CLOSE  = "Close"
+COL_OPEN   = "Open"
+COL_HIGH   = "High"
+COL_LOW    = "Low"
+COL_VOLUME = "Vol"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -170,9 +137,14 @@ class IndicatorResult:
     ema_trend:      str   = "NEUTRAL"   # BULLISH / BEARISH / NEUTRAL
                                         # based on price vs EMA-200
 
-    # EMA crossover signals
-    ema_20_50_cross:  str = "NONE"      # GOLDEN / DEATH / NONE
-    ema_50_200_cross: str = "NONE"      # GOLDEN / DEATH / NONE
+    # EMA crossover signals — TRUE CROSS EVENT (not just position)
+    # GOLDEN = fast crossed ABOVE slow TODAY
+    # DEATH  = fast crossed BELOW slow TODAY
+    # ABOVE  = fast has been above slow (no fresh cross)
+    # BELOW  = fast has been below slow (no fresh cross)
+    # NONE   = insufficient data
+    ema_20_50_cross:  str = "NONE"
+    ema_50_200_cross: str = "NONE"
 
     # MACD
     macd_line:      float = 0.0
@@ -185,8 +157,10 @@ class IndicatorResult:
     bb_middle:      float = 0.0         # SMA-20
     bb_lower:       float = 0.0
     bb_width:       float = 0.0         # (upper - lower) / middle * 100
-    bb_pct_b:       float = 0.0         # where price sits in band (0-1)
-    bb_signal:      str   = "NEUTRAL"   # SQUEEZE / EXPANSION / NEUTRAL
+    bb_pct_b:       float = 0.0         # where price sits in band (0.0–1.0)
+    # FIX 2: bb_signal now uses bb_pct_b properly
+    # NEAR_LOWER / NEAR_UPPER / SQUEEZE / EXPANSION / NEUTRAL
+    bb_signal:      str   = "NEUTRAL"
 
     # ATR
     atr_14:         float = 0.0
@@ -195,13 +169,12 @@ class IndicatorResult:
     # OBV
     obv:            float = 0.0
     obv_trend:      str   = "NEUTRAL"   # RISING / FALLING / NEUTRAL
-                                        # based on OBV slope over last 5 periods
 
     # Price context
     ltp:            float = 0.0
     prev_close:     float = 0.0
     volume:         int   = 0
-    history_days:   int   = 0           # how many days of history were available
+    history_days:   int   = 0
 
     # Overall technical signal (composite)
     tech_score:     int   = 0           # -10 to +10
@@ -286,9 +259,6 @@ class HistoryCache:
         """
         Return list of the most recent `periods` date tab names,
         sorted oldest → newest.
-
-        Tab names are expected to be date strings like "2024-03-04".
-        Non-date tabs (SETTINGS, SCHEMA etc.) are silently ignored.
         """
         all_tabs = [ws.title for ws in sheet.worksheets()]
 
@@ -300,7 +270,7 @@ class HistoryCache:
             except ValueError:
                 pass  # skip non-date tabs
 
-        date_tabs.sort()  # chronological order
+        date_tabs.sort()
 
         if not date_tabs:
             raise RuntimeError(
@@ -308,12 +278,10 @@ class HistoryCache:
                 "Expected tabs named like '2024-03-04'."
             )
 
-        # Take the most recent `periods` tabs
         selected = date_tabs[-periods:]
         logger.info(
             "History: found %d date tabs, loading last %d (%s → %s)",
-            len(date_tabs), len(selected),
-            selected[0], selected[-1],
+            len(date_tabs), len(selected), selected[0], selected[-1],
         )
         return selected
 
@@ -343,7 +311,7 @@ class HistoryCache:
             volume = _f(COL_VOLUME)
 
             if close <= 0:
-                continue  # skip rows with no closing price
+                continue
 
             day[symbol] = {
                 "close":  close,
@@ -363,12 +331,10 @@ class HistoryCache:
         Builds per-symbol arrays in chronological order.
 
         Args:
-            periods: Number of date tabs to load (default 220 for EMA-200 warmup)
+            periods: Number of date tabs to load (default 260 for EMA-200 warmup)
 
         Returns:
             Number of symbols loaded.
-
-        Should be called ONCE per job at startup.
         """
         logger.info("HistoryCache: loading last %d periods from Sheets...", periods)
         start = time.time()
@@ -385,8 +351,6 @@ class HistoryCache:
             logger.error("HistoryCache: tab discovery failed — %s", exc)
             return 0
 
-        # Read all selected tabs
-        # gspread batch approach: read tab by tab with small delays
         closes:  dict[str, list[float]] = {}
         highs:   dict[str, list[float]] = {}
         lows:    dict[str, list[float]] = {}
@@ -409,7 +373,6 @@ class HistoryCache:
 
                 loaded_dates.append(tab_name)
 
-                # Rate limit protection — pause every 50 tabs
                 if (i + 1) % 50 == 0:
                     logger.info(
                         "HistoryCache: loaded %d/%d tabs...", i + 1, len(date_tabs)
@@ -431,8 +394,7 @@ class HistoryCache:
 
         elapsed = round(time.time() - start, 2)
         logger.info(
-            "HistoryCache: loaded %d symbols across %d days in %.1fs "
-            "(%d tabs failed)",
+            "HistoryCache: loaded %d symbols across %d days in %.1fs (%d tabs failed)",
             len(closes), len(loaded_dates), elapsed, failed_tabs,
         )
         return len(closes)
@@ -529,9 +491,7 @@ def _rsi(closes: list[float], period: int = 14) -> float:
     avg_gain = sum(gains[:period]) / period
     avg_loss = sum(losses[:period]) / period
 
-    # Wilder's smoothing over ALL remaining values — this is the key fix.
-    # With 200 days of history the loop runs 185 times, properly smoothing
-    # the averages before returning the final RSI value.
+    # Wilder's smoothing over ALL remaining values
     for i in range(period, len(gains)):
         avg_gain = (avg_gain * (period - 1) + gains[i]) / period
         avg_loss = (avg_loss * (period - 1) + losses[i]) / period
@@ -554,7 +514,6 @@ def _macd(closes: list[float]) -> tuple[float, float, float]:
     ema12_series = _ema_series(closes, EMA_SHORT)
     ema26_series = _ema_series(closes, EMA_LONG)
 
-    # MACD line = EMA12 - EMA26 (only where both are non-zero)
     macd_series = []
     for i in range(len(closes)):
         if ema12_series[i] != 0.0 and ema26_series[i] != 0.0:
@@ -562,8 +521,6 @@ def _macd(closes: list[float]) -> tuple[float, float, float]:
         else:
             macd_series.append(0.0)
 
-    # Signal = EMA9 of MACD line
-    # Only compute over non-zero portion
     non_zero_start = next(
         (i for i, v in enumerate(macd_series) if v != 0.0), None
     )
@@ -591,8 +548,8 @@ def _bollinger(closes: list[float], period: int = BB_PERIOD) -> tuple[float, flo
     if len(closes) < period:
         return 0.0, 0.0, 0.0
 
-    subset = closes[-period:]
-    middle = sum(subset) / period
+    subset   = closes[-period:]
+    middle   = sum(subset) / period
     variance = sum((p - middle) ** 2 for p in subset) / period
     std_dev  = math.sqrt(variance)
 
@@ -610,7 +567,6 @@ def _atr(highs: list[float], lows: list[float],
     if len(closes) < period + 1 or len(highs) < period + 1 or len(lows) < period + 1:
         return 0.0
 
-    # Align to same length
     n      = min(len(highs), len(lows), len(closes))
     highs  = highs[-n:]
     lows   = lows[-n:]
@@ -626,7 +582,6 @@ def _atr(highs: list[float], lows: list[float],
     if len(tr_values) < period:
         return 0.0
 
-    # Wilder smoothing
     atr = sum(tr_values[:period]) / period
     for tr in tr_values[period:]:
         atr = (atr * (period - 1) + tr) / period
@@ -658,7 +613,6 @@ def _obv(closes: list[float], volumes: list[float]) -> tuple[float, str]:
 
     current_obv = obv_series[-1]
 
-    # Trend: compare average of last 5 vs previous 5
     if len(obv_series) >= 10:
         recent   = sum(obv_series[-5:]) / 5
         previous = sum(obv_series[-10:-5]) / 5
@@ -696,14 +650,52 @@ def _ema_trend_signal(price: float, ema_200: float) -> str:
     return "NEUTRAL"
 
 
-def _ema_cross_signal(fast: float, slow: float) -> str:
-    """Detect EMA crossover — requires comparing to previous period."""
-    if fast <= 0 or slow <= 0:
+def _ema_cross_signal(fast_series: list[float], slow_series: list[float]) -> str:
+    """
+    FIX 1: Detect the actual EMA crossover EVENT — not just current position.
+
+    Compares yesterday's relationship vs today's relationship between
+    fast and slow EMA. Returns:
+        GOLDEN  — fast crossed ABOVE slow today (bullish event)
+        DEATH   — fast crossed BELOW slow today (bearish event)
+        ABOVE   — fast is above slow, no fresh cross (existing bull position)
+        BELOW   — fast is below slow, no fresh cross (existing bear position)
+        NONE    — insufficient data
+
+    Why this matters:
+        A golden cross that happened 6 months ago should NOT score the same
+        as one that happened today. filter_engine.py gives extra weight to
+        fresh crosses (GOLDEN/DEATH) vs existing positions (ABOVE/BELOW).
+    """
+    # Need at least 2 values of each to detect a cross
+    if len(fast_series) < 2 or len(slow_series) < 2:
         return "NONE"
-    if fast > slow * 1.001:
-        return "GOLDEN"    # fast above slow = bullish
-    if fast < slow * 0.999:
-        return "DEATH"     # fast below slow = bearish
+
+    fast_today = fast_series[-1]
+    fast_prev  = fast_series[-2]
+    slow_today = slow_series[-1]
+    slow_prev  = slow_series[-2]
+
+    # Skip if either series is still in its zero-padding zone
+    if fast_today == 0.0 or slow_today == 0.0:
+        return "NONE"
+    if fast_prev == 0.0 or slow_prev == 0.0:
+        return "NONE"
+
+    # Detect cross: yesterday fast was below slow, today fast is above slow
+    if fast_prev <= slow_prev and fast_today > slow_today:
+        return "GOLDEN"
+
+    # Detect cross: yesterday fast was above slow, today fast is below slow
+    if fast_prev >= slow_prev and fast_today < slow_today:
+        return "DEATH"
+
+    # No fresh cross — report current position
+    if fast_today > slow_today:
+        return "ABOVE"
+    if fast_today < slow_today:
+        return "BELOW"
+
     return "NONE"
 
 
@@ -719,9 +711,24 @@ def _macd_cross_signal(macd_line: float, signal_line: float) -> str:
 
 def _bb_signal(bb_width: float, bb_pct_b: float) -> str:
     """
-    Bollinger Band signal.
-    Squeeze = low volatility, potential breakout setup.
+    FIX 2: Bollinger Band signal now uses bb_pct_b properly.
+
+    bb_pct_b = (price - lower) / (upper - lower)
+        0.0  = price AT lower band
+        0.5  = price at middle
+        1.0  = price AT upper band
+
+    Signal priority (most actionable first):
+        NEAR_LOWER  — price hugging lower band (bb_pct_b < 0.05) → mean reversion long setup
+        NEAR_UPPER  — price hugging upper band (bb_pct_b > 0.95) → mean reversion short setup
+        SQUEEZE     — very tight bands (bb_width < 5%) → breakout incoming (direction unknown)
+        EXPANSION   — very wide bands (bb_width > 20%) → high volatility, trend in motion
+        NEUTRAL     — normal conditions
     """
+    if bb_pct_b < 0.05:
+        return "NEAR_LOWER"
+    if bb_pct_b > 0.95:
+        return "NEAR_UPPER"
     if bb_width < 5.0:
         return "SQUEEZE"
     if bb_width > 20.0:
@@ -735,18 +742,20 @@ def _tech_score(result: "IndicatorResult") -> tuple[int, str]:
     Each indicator contributes ±1 or ±2 points.
 
     Scoring:
-        RSI oversold          +2   (entry signal)
-        RSI overbought        -2
-        Price > EMA200        +2   (bull trend)
-        Price < EMA200        -2
-        EMA20 > EMA50 (golden)+1
-        EMA20 < EMA50 (death) -1
-        MACD bullish cross    +1
-        MACD bearish cross    -1
-        OBV rising            +1
-        OBV falling           -1
-        Price < BB lower      +1   (mean reversion setup)
-        Price > BB upper      -1
+        RSI oversold               +2   (entry signal)
+        RSI overbought             -2
+        Price > EMA200             +2   (bull trend)
+        Price < EMA200             -2
+        EMA20/50 GOLDEN cross      +2   (fresh cross — strong signal)
+        EMA20/50 ABOVE (position)  +1   (existing bull — weaker)
+        EMA20/50 DEATH cross       -2   (fresh cross — strong signal)
+        EMA20/50 BELOW (position)  -1   (existing bear — weaker)
+        MACD bullish               +1
+        MACD bearish               -1
+        OBV rising                 +1
+        OBV falling                -1
+        BB NEAR_LOWER              +1   (FIX 3: mean reversion long setup)
+        BB NEAR_UPPER              -1   (FIX 3: mean reversion short setup)
     """
     score = 0
 
@@ -756,17 +765,21 @@ def _tech_score(result: "IndicatorResult") -> tuple[int, str]:
     elif result.rsi_signal == "OVERBOUGHT":
         score -= 2
 
-    # EMA trend
+    # EMA trend (price vs EMA-200)
     if result.ema_trend == "BULLISH":
         score += 2
     elif result.ema_trend == "BEARISH":
         score -= 2
 
-    # EMA cross
+    # FIX 3: EMA cross — differentiate fresh cross vs existing position
     if result.ema_20_50_cross == "GOLDEN":
-        score += 1
+        score += 2   # fresh bullish cross → strong
+    elif result.ema_20_50_cross == "ABOVE":
+        score += 1   # already above → weaker ongoing bull
     elif result.ema_20_50_cross == "DEATH":
-        score -= 1
+        score -= 2   # fresh bearish cross → strong
+    elif result.ema_20_50_cross == "BELOW":
+        score -= 1   # already below → weaker ongoing bear
 
     # MACD
     if result.macd_cross == "BULLISH":
@@ -780,16 +793,15 @@ def _tech_score(result: "IndicatorResult") -> tuple[int, str]:
     elif result.obv_trend == "FALLING":
         score -= 1
 
-    # Bollinger
-    if result.bb_lower > 0 and result.ltp < result.bb_lower:
+    # FIX 3: Bollinger — use bb_signal (which now uses bb_pct_b)
+    if result.bb_signal == "NEAR_LOWER":
         score += 1
-    elif result.bb_upper > 0 and result.ltp > result.bb_upper:
+    elif result.bb_signal == "NEAR_UPPER":
         score -= 1
 
     # Clamp to -10 / +10
     score = max(-10, min(10, score))
 
-    # Signal label
     if score >= 5:
         signal = "STRONG_BUY"
     elif score >= 2:
@@ -809,9 +821,9 @@ def _tech_score(result: "IndicatorResult") -> tuple[int, str]:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def compute_indicators(
-    symbol:     str,
+    symbol:    str,
     price_row,              # scraper.PriceRow
-    cache:      HistoryCache,
+    cache:     HistoryCache,
 ) -> Optional[IndicatorResult]:
     """
     Compute all technical indicators for one symbol.
@@ -835,8 +847,8 @@ def compute_indicators(
 
     # Append today's live values
     today_close  = price_row.ltp if price_row.ltp > 0 else price_row.close
-    today_high   = price_row.high   if price_row.high   > 0 else today_close
-    today_low    = price_row.low    if price_row.low    > 0 else today_close
+    today_high   = price_row.high  if price_row.high  > 0 else today_close
+    today_low    = price_row.low   if price_row.low   > 0 else today_close
     today_volume = float(price_row.volume)
 
     closes  = hist_closes  + [today_close]
@@ -858,13 +870,19 @@ def compute_indicators(
     rsi_s = _rsi_signal(rsi)
 
     # ── EMAs ───────────────────────────────────────────────────────────────
-    ema20  = _ema_last(closes, EMA_20_PERIOD)  if n >= EMA_20_PERIOD  else 0.0
-    ema50  = _ema_last(closes, EMA_50_PERIOD)  if n >= EMA_50_PERIOD  else 0.0
-    ema200 = _ema_last(closes, EMA_200_PERIOD) if n >= EMA_200_PERIOD else 0.0
+    ema20_series  = _ema_series(closes, EMA_20_PERIOD)  if n >= EMA_20_PERIOD  else [0.0] * n
+    ema50_series  = _ema_series(closes, EMA_50_PERIOD)  if n >= EMA_50_PERIOD  else [0.0] * n
+    ema200_series = _ema_series(closes, EMA_200_PERIOD) if n >= EMA_200_PERIOD else [0.0] * n
 
-    ema_trend   = _ema_trend_signal(today_close, ema200)
-    cross_20_50 = _ema_cross_signal(ema20, ema50)
-    cross_50_200 = _ema_cross_signal(ema50, ema200)
+    ema20  = ema20_series[-1]
+    ema50  = ema50_series[-1]
+    ema200 = ema200_series[-1]
+
+    ema_trend = _ema_trend_signal(today_close, ema200)
+
+    # FIX 1: Pass full series so cross detector can compare today vs yesterday
+    cross_20_50  = _ema_cross_signal(ema20_series,  ema50_series)
+    cross_50_200 = _ema_cross_signal(ema50_series,  ema200_series)
 
     # ── MACD ───────────────────────────────────────────────────────────────
     macd_line, macd_sig, macd_hist = _macd(closes)
@@ -876,6 +894,7 @@ def compute_indicators(
     bb_pct_b = round(
         (today_close - bb_lower) / (bb_upper - bb_lower), 4
     ) if (bb_upper - bb_lower) > 0 else 0.5
+    # FIX 2: _bb_signal now uses bb_pct_b properly
     bb_sig = _bb_signal(bb_width, bb_pct_b)
 
     # ── ATR ────────────────────────────────────────────────────────────────
@@ -887,33 +906,33 @@ def compute_indicators(
 
     # ── Composite score ────────────────────────────────────────────────────
     result = IndicatorResult(
-        symbol         = sym,
-        rsi_14         = rsi,
-        rsi_signal     = rsi_s,
-        ema_20         = round(ema20, 2),
-        ema_50         = round(ema50, 2),
-        ema_200        = round(ema200, 2),
-        ema_trend      = ema_trend,
+        symbol           = sym,
+        rsi_14           = rsi,
+        rsi_signal       = rsi_s,
+        ema_20           = round(ema20, 2),
+        ema_50           = round(ema50, 2),
+        ema_200          = round(ema200, 2),
+        ema_trend        = ema_trend,
         ema_20_50_cross  = cross_20_50,
         ema_50_200_cross = cross_50_200,
-        macd_line      = macd_line,
-        macd_signal    = macd_sig,
-        macd_histogram = macd_hist,
-        macd_cross     = macd_cross,
-        bb_upper       = bb_upper,
-        bb_middle      = bb_mid,
-        bb_lower       = bb_lower,
-        bb_width       = bb_width,
-        bb_pct_b       = bb_pct_b,
-        bb_signal      = bb_sig,
-        atr_14         = atr,
-        atr_pct        = atr_pct,
-        obv            = obv_val,
-        obv_trend      = obv_trend,
-        ltp            = today_close,
-        prev_close     = price_row.prev_close,
-        volume         = price_row.volume,
-        history_days   = n,
+        macd_line        = macd_line,
+        macd_signal      = macd_sig,
+        macd_histogram   = macd_hist,
+        macd_cross       = macd_cross,
+        bb_upper         = bb_upper,
+        bb_middle        = bb_mid,
+        bb_lower         = bb_lower,
+        bb_width         = bb_width,
+        bb_pct_b         = bb_pct_b,
+        bb_signal        = bb_sig,
+        atr_14           = atr,
+        atr_pct          = atr_pct,
+        obv              = obv_val,
+        obv_trend        = obv_trend,
+        ltp              = today_close,
+        prev_close       = price_row.prev_close,
+        volume           = price_row.volume,
+        history_days     = n,
     )
 
     score, signal      = _tech_score(result)
@@ -925,18 +944,13 @@ def compute_indicators(
 
 def compute_all_indicators(
     market_data: dict,       # dict[symbol, PriceRow] from scraper.py
-    cache: HistoryCache,
+    cache:       HistoryCache,
     min_history: int = RSI_PERIOD + 1,
 ) -> dict[str, IndicatorResult]:
     """
     Compute indicators for ALL symbols in market_data.
     Returns dict[symbol, IndicatorResult].
     Symbols with insufficient history are silently skipped.
-
-    Args:
-        market_data:  Output of scraper.get_all_market_data()
-        cache:        Loaded HistoryCache
-        min_history:  Minimum days required (default 15 for RSI)
     """
     results: dict[str, IndicatorResult] = {}
     skipped = 0
@@ -956,152 +970,82 @@ def compute_all_indicators(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SHEETS I/O — write once daily, read during trading session
+# NEON DB I/O — write once daily, read during trading session
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _result_to_row(r: IndicatorResult) -> dict:
-    """Convert IndicatorResult to a flat dict matching INDICATORS_TAB_COLUMNS."""
-    today = datetime.now(tz=NST).strftime("%Y-%m-%d")
+    """Convert IndicatorResult to a flat dict for Neon DB write."""
     return {
-        "Symbol":           r.symbol,
-        "Date":             today,
-        "LTP":              r.ltp,
-        "Prev_Close":       r.prev_close,
-        "Volume":           r.volume,
-        "History_Days":     r.history_days,
-        "RSI_14":           r.rsi_14,
-        "RSI_Signal":       r.rsi_signal,
-        "EMA_20":           r.ema_20,
-        "EMA_50":           r.ema_50,
-        "EMA_200":          r.ema_200,
-        "EMA_Trend":        r.ema_trend,
-        "EMA_20_50_Cross":  r.ema_20_50_cross,
-        "EMA_50_200_Cross": r.ema_50_200_cross,
-        "MACD_Line":        r.macd_line,
-        "MACD_Signal":      r.macd_signal,
-        "MACD_Histogram":   r.macd_histogram,
-        "MACD_Cross":       r.macd_cross,
-        "BB_Upper":         r.bb_upper,
-        "BB_Middle":        r.bb_middle,
-        "BB_Lower":         r.bb_lower,
-        "BB_Width":         r.bb_width,
-        "BB_Pct_B":         r.bb_pct_b,
-        "BB_Signal":        r.bb_signal,
-        "ATR_14":           r.atr_14,
-        "ATR_Pct":          r.atr_pct,
-        "OBV":              r.obv,
-        "OBV_Trend":        r.obv_trend,
-        "Tech_Score":       r.tech_score,
-        "Tech_Signal":      r.tech_signal,
-        "Timestamp":        r.timestamp,
+        "symbol":           r.symbol,
+        "date":             datetime.now(tz=NST).strftime("%Y-%m-%d"),
+        "ltp":              str(r.ltp),
+        "prev_close":       str(r.prev_close),
+        "volume":           str(r.volume),
+        "history_days":     str(r.history_days),
+        "rsi_14":           str(r.rsi_14),
+        "rsi_signal":       r.rsi_signal,
+        "ema_20":           str(r.ema_20),
+        "ema_50":           str(r.ema_50),
+        "ema_200":          str(r.ema_200),
+        "ema_trend":        r.ema_trend,
+        "ema_20_50_cross":  r.ema_20_50_cross,
+        "ema_50_200_cross": r.ema_50_200_cross,
+        "macd_line":        str(r.macd_line),
+        "macd_signal":      str(r.macd_signal),
+        "macd_histogram":   str(r.macd_histogram),
+        "macd_cross":       r.macd_cross,
+        "bb_upper":         str(r.bb_upper),
+        "bb_middle":        str(r.bb_middle),
+        "bb_lower":         str(r.bb_lower),
+        "bb_width":         str(r.bb_width),
+        "bb_pct_b":         str(r.bb_pct_b),
+        "bb_signal":        r.bb_signal,
+        "atr_14":           str(r.atr_14),
+        "atr_pct":          str(r.atr_pct),
+        "obv":              str(r.obv),
+        "obv_trend":        r.obv_trend,
+        "tech_score":       str(r.tech_score),
+        "tech_signal":      r.tech_signal,
+        "timestamp":        r.timestamp,
     }
 
 
-def write_indicators_to_sheets(
-    results: dict[str, IndicatorResult],
-) -> bool:
+def write_indicators_to_db(results: dict[str, IndicatorResult]) -> bool:
     """
-    Write all indicator results to the INDICATORS tab in NEPSE_CORE_ENGINE.
-
-    Strategy:
-        Clear the tab (keep header) → batch write all rows at once.
-        One write operation per run — not one per symbol.
-        Called once daily by run_daily_indicators().
-
-    Returns True on success, False on failure (never raises).
+    Write all indicator results to Neon indicators table.
+    Uses upsert on symbol — safe to run multiple times.
+    Returns True on success.
     """
-    if not results:
-        logger.warning("write_indicators_to_sheets: no results to write")
-        return False
-
     try:
-        from sheets import get_setting  # noqa — just to test sheets import
-        import gspread
-        from sheets import _get_tab, TABS  # noqa
-
-        # Ensure INDICATORS tab exists in TABS dict
-        if "indicators" not in TABS:
-            TABS["indicators"] = "INDICATORS"
-
-        ws = _get_tab("INDICATORS")
-
-        # Clear existing data (keep header row)
-        ws.clear()
-        ws.append_row(INDICATORS_TAB_COLUMNS, value_input_option="USER_ENTERED")
-
-        # Build all rows at once for batch write
-        rows = []
-        for r in results.values():
-            row_dict = _result_to_row(r)
-            row = [row_dict.get(col, "") for col in INDICATORS_TAB_COLUMNS]
-            rows.append(row)
-
-        if rows:
-            # Batch write — single API call for all symbols
-            start_row = 2  # row 1 = header
-            end_row   = start_row + len(rows) - 1
-            end_col   = len(INDICATORS_TAB_COLUMNS)
-
-            # Convert col number to letter
-            def col_letter(n: int) -> str:
-                result = ""
-                while n > 0:
-                    n, r = divmod(n - 1, 26)
-                    result = chr(65 + r) + result
-                return result
-
-            range_notation = f"A{start_row}:{col_letter(end_col)}{end_row}"
-            ws.update(range_notation, rows, value_input_option="USER_ENTERED")
-
-        logger.info(
-            "write_indicators_to_sheets: wrote %d symbols to INDICATORS tab",
-            len(rows),
-        )
+        from db import write_indicators_batch
+        rows = [_result_to_row(r) for r in results.values()]
+        write_indicators_batch(rows)
+        logger.info("write_indicators_to_db: wrote %d rows to Neon", len(rows))
         return True
-
-    except ImportError:
-        logger.warning("sheets.py not importable — indicators not written to Sheets")
-        return False
     except Exception as exc:
-        logger.error("write_indicators_to_sheets failed: %s", exc)
+        logger.error("write_indicators_to_db failed: %s", exc)
         return False
 
 
-def read_indicators_from_sheets() -> dict[str, IndicatorResult]:
+def read_indicators_from_db() -> dict[str, IndicatorResult]:
     """
-    Read today's pre-computed indicators from the INDICATORS tab.
+    Read today's pre-computed indicators from Neon indicators table.
     Called by filter_engine.py during the 6-minute trading loop.
 
     Returns dict[symbol, IndicatorResult].
-    Returns empty dict if tab is missing or stale (different date).
-    filter_engine.py handles the empty dict gracefully.
+    Returns empty dict if table is empty or stale.
     """
     try:
-        from sheets import read_tab, TABS  # noqa
+        from db import read_today_indicators
 
-        if "indicators" not in TABS:
-            TABS["indicators"] = "INDICATORS"
-
-        rows = read_tab("indicators")
+        rows = read_today_indicators()
         if not rows:
-            logger.warning("read_indicators_from_sheets: INDICATORS tab is empty")
+            logger.warning("read_indicators_from_db: indicators table is empty")
             return {}
 
-        today = datetime.now(tz=NST).strftime("%Y-%m-%d")
         results: dict[str, IndicatorResult] = {}
-        stale = 0
 
-        for row in rows:
-            symbol = str(row.get("Symbol", "")).strip().upper()
-            if not symbol:
-                continue
-
-            # Check freshness — skip if from a previous day
-            row_date = str(row.get("Date", "")).strip()
-            if row_date and row_date != today:
-                stale += 1
-                continue
-
+        for symbol, row in rows.items():
             def _f(key: str, default: float = 0.0) -> float:
                 try:
                     return float(str(row.get(key, default)).replace(",", "") or default)
@@ -1119,56 +1063,45 @@ def read_indicators_from_sheets() -> dict[str, IndicatorResult]:
 
             result = IndicatorResult(
                 symbol           = symbol,
-                ltp              = _f("LTP"),
-                prev_close       = _f("Prev_Close"),
-                volume           = _i("Volume"),
-                history_days     = _i("History_Days"),
-                rsi_14           = _f("RSI_14"),
-                rsi_signal       = _s("RSI_Signal", "NEUTRAL"),
-                ema_20           = _f("EMA_20"),
-                ema_50           = _f("EMA_50"),
-                ema_200          = _f("EMA_200"),
-                ema_trend        = _s("EMA_Trend", "NEUTRAL"),
-                ema_20_50_cross  = _s("EMA_20_50_Cross", "NONE"),
-                ema_50_200_cross = _s("EMA_50_200_Cross", "NONE"),
-                macd_line        = _f("MACD_Line"),
-                macd_signal      = _f("MACD_Signal"),
-                macd_histogram   = _f("MACD_Histogram"),
-                macd_cross       = _s("MACD_Cross", "NONE"),
-                bb_upper         = _f("BB_Upper"),
-                bb_middle        = _f("BB_Middle"),
-                bb_lower         = _f("BB_Lower"),
-                bb_width         = _f("BB_Width"),
-                bb_pct_b         = _f("BB_Pct_B"),
-                bb_signal        = _s("BB_Signal", "NEUTRAL"),
-                atr_14           = _f("ATR_14"),
-                atr_pct          = _f("ATR_Pct"),
-                obv              = _f("OBV"),
-                obv_trend        = _s("OBV_Trend", "NEUTRAL"),
-                tech_score       = _i("Tech_Score"),
-                tech_signal      = _s("Tech_Signal", "NEUTRAL"),
-                timestamp        = _s("Timestamp"),
+                ltp              = _f("ltp"),
+                prev_close       = _f("prev_close"),
+                volume           = _i("volume"),
+                history_days     = _i("history_days"),
+                rsi_14           = _f("rsi_14"),
+                rsi_signal       = _s("rsi_signal", "NEUTRAL"),
+                ema_20           = _f("ema_20"),
+                ema_50           = _f("ema_50"),
+                ema_200          = _f("ema_200"),
+                ema_trend        = _s("ema_trend", "NEUTRAL"),
+                ema_20_50_cross  = _s("ema_20_50_cross", "NONE"),
+                ema_50_200_cross = _s("ema_50_200_cross", "NONE"),
+                macd_line        = _f("macd_line"),
+                macd_signal      = _f("macd_signal"),
+                macd_histogram   = _f("macd_histogram"),
+                macd_cross       = _s("macd_cross", "NONE"),
+                bb_upper         = _f("bb_upper"),
+                bb_middle        = _f("bb_middle"),
+                bb_lower         = _f("bb_lower"),
+                bb_width         = _f("bb_width"),
+                bb_pct_b         = _f("bb_pct_b"),
+                bb_signal        = _s("bb_signal", "NEUTRAL"),
+                atr_14           = _f("atr_14"),
+                atr_pct          = _f("atr_pct"),
+                obv              = _f("obv"),
+                obv_trend        = _s("obv_trend", "NEUTRAL"),
+                tech_score       = _i("tech_score"),
+                tech_signal      = _s("tech_signal", "NEUTRAL"),
+                timestamp        = _s("timestamp"),
             )
             results[symbol] = result
 
-        if stale:
-            logger.warning(
-                "read_indicators_from_sheets: %d stale rows skipped "
-                "(from previous day — morning run may not have completed yet)",
-                stale,
-            )
-
         logger.info(
-            "read_indicators_from_sheets: loaded %d symbols from INDICATORS tab",
-            len(results),
+            "read_indicators_from_db: loaded %d symbols from Neon", len(results)
         )
         return results
 
-    except ImportError:
-        logger.warning("sheets.py not importable — cannot read INDICATORS tab")
-        return {}
     except Exception as exc:
-        logger.error("read_indicators_from_sheets failed: %s", exc)
+        logger.error("read_indicators_from_db failed: %s", exc)
         return {}
 
 
@@ -1179,10 +1112,10 @@ def read_indicators_from_sheets() -> dict[str, IndicatorResult]:
 def run_daily_indicators() -> dict[str, IndicatorResult]:
     """
     Full daily pipeline:
-        1. Load 220 days history from GOOGLE_SHEET_SHARE_DATA
+        1. Load 260 days history from GOOGLE_SHEET_SHARE_DATA
         2. Fetch today's live prices from TMS + ShareSansar
         3. Compute all indicators
-        4. Write results to INDICATORS tab in NEPSE_CORE_ENGINE
+        4. Write results to Neon indicators table
         5. Return results dict
 
     Called once per day by morning_brief.yml before market open.
@@ -1200,7 +1133,7 @@ def run_daily_indicators() -> dict[str, IndicatorResult]:
 
     # Step 2: Live prices
     try:
-        from scraper import get_all_market_data  # noqa
+        from scraper import get_all_market_data
         market_data = get_all_market_data(write_breadth=True)
     except Exception as exc:
         logger.error("run_daily_indicators: scraper failed — %s", exc)
@@ -1211,22 +1144,20 @@ def run_daily_indicators() -> dict[str, IndicatorResult]:
             "run_daily_indicators: no live prices (market not open yet?) "
             "— computing from last historical close instead"
         )
-        # Pre-open scenario: use last cache close as today's price
-        # This is fine at 10:30 AM before open — indicators are daily anyway
         try:
-            from scraper import PriceRow  # noqa
+            from scraper import PriceRow
             market_data = {}
             for sym, closes in cache.closes.items():
                 if closes:
-                    last = closes[-1]
-                    highs  = cache.get_highs(sym)
-                    lows   = cache.get_lows(sym)
+                    last  = closes[-1]
+                    highs = cache.get_highs(sym)
+                    lows  = cache.get_lows(sym)
                     market_data[sym] = PriceRow(
                         symbol     = sym,
                         ltp        = last,
                         close      = last,
-                        high       = highs[-1]  if highs  else last,
-                        low        = lows[-1]   if lows   else last,
+                        high       = highs[-1] if highs else last,
+                        low        = lows[-1]  if lows  else last,
                         prev_close = closes[-2] if len(closes) > 1 else last,
                         volume     = 0,
                     )
@@ -1240,17 +1171,17 @@ def run_daily_indicators() -> dict[str, IndicatorResult]:
         logger.error("run_daily_indicators: no indicators computed — aborting")
         return {}
 
-    # Step 4: Write to Sheets
-    ok = write_indicators_to_sheets(results)
+    # Step 4: Write to Neon
+    ok = write_indicators_to_db(results)
     if not ok:
         logger.warning(
-            "run_daily_indicators: Sheets write failed — "
+            "run_daily_indicators: Neon write failed — "
             "results still returned in memory for this session"
         )
 
     elapsed = round(time.time() - start, 2)
     logger.info(
-        "run_daily_indicators: complete — %d symbols in %.1fs | Sheets write: %s",
+        "run_daily_indicators: complete — %d symbols in %.1fs | Neon write: %s",
         len(results), elapsed, "✅" if ok else "❌",
     )
     return results
@@ -1258,8 +1189,8 @@ def run_daily_indicators() -> dict[str, IndicatorResult]:
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CLI
-#   python indicators.py --daily          → full daily pipeline (write to Sheets)
-#   python indicators.py --read           → read back from INDICATORS tab
+#   python indicators.py --daily          → full daily pipeline (write to Neon)
+#   python indicators.py --read           → read back from Neon indicators table
 #   python indicators.py --cache-only     → test history loading only
 #   python indicators.py NABIL HBL        → compute specific symbols, no write
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1276,38 +1207,39 @@ if __name__ == "__main__":
     args = sys.argv[1:]
 
     print("\n" + "=" * 70)
-    print("  NEPSE AI — indicators.py")
+    print("  NEPSE AI — indicators.py  (v2 — fixed EMA cross + BB signal)")
     print("=" * 70)
 
     # ── --daily: full pipeline ─────────────────────────────────────────────
     if "--daily" in args:
-        print("\n  Running full daily pipeline → will write to INDICATORS tab\n")
+        print("\n  Running full daily pipeline → will write to Neon indicators table\n")
         results = run_daily_indicators()
         if not results:
             print("  ❌ Daily run failed")
             sys.exit(1)
-        print(f"\n  ✅ {len(results)} symbols computed and written to Sheets")
+        print(f"\n  ✅ {len(results)} symbols computed and written to Neon")
         dist = Counter(r.tech_signal for r in results.values())
         print("\n  Signal distribution:")
         for sig, count in sorted(dist.items(), key=lambda x: -x[1]):
             print(f"    {sig:<15} {count}")
         sys.exit(0)
 
-    # ── --read: verify what's in Sheets ───────────────────────────────────
+    # ── --read: verify what's in Neon ─────────────────────────────────────
     if "--read" in args:
-        print("\n  Reading INDICATORS tab from Sheets...\n")
-        results = read_indicators_from_sheets()
+        print("\n  Reading indicators from Neon...\n")
+        results = read_indicators_from_db()
         if not results:
             print("  ❌ Nothing found — run --daily first")
             sys.exit(1)
         print(f"  ✅ {len(results)} symbols loaded\n")
-        print(f"  {'Symbol':<10} {'RSI':>6} {'EMA_Trend':<10} {'MACD_Cross':<12} "
-              f"{'Score':>6} {'Signal'}")
-        print("  " + "-" * 60)
+        print(f"  {'Symbol':<10} {'RSI':>6} {'EMA_Trend':<10} {'20/50 Cross':<14} "
+              f"{'MACD':>8} {'BB_Sig':<12} {'Score':>6} {'Signal'}")
+        print("  " + "-" * 80)
         top = sorted(results.values(), key=lambda r: r.tech_score, reverse=True)[:15]
         for r in top:
             print(f"  {r.symbol:<10} {r.rsi_14:>6.1f} {r.ema_trend:<10} "
-                  f"{r.macd_cross:<12} {r.tech_score:>+6}  {r.tech_signal}")
+                  f"{r.ema_20_50_cross:<14} {r.macd_cross:>8} "
+                  f"{r.bb_signal:<12} {r.tech_score:>+6}  {r.tech_signal}")
         sys.exit(0)
 
     # ── --cache-only: test history loading ────────────────────────────────
@@ -1329,7 +1261,7 @@ if __name__ == "__main__":
             print(f"    {s:<10} {cov:>4} days  last_close={last:.2f}")
         sys.exit(0)
 
-    # ── Symbol / test mode: compute without writing to Sheets ──────────────
+    # ── Symbol / test mode: compute without writing ────────────────────────
     print("\n[1/3] Loading history cache...")
     cache = HistoryCache()
     count = cache.load(periods=DEFAULT_LOAD_PERIODS)
@@ -1362,7 +1294,7 @@ if __name__ == "__main__":
         market_data = {k: v for k, v in market_data.items() if k in requested}
         print(f"  Symbols: {list(market_data.keys())}")
     else:
-        print(f"  ✅ {len(market_data)} symbols (use --daily to write to Sheets)")
+        print(f"  ✅ {len(market_data)} symbols (use --daily to write to Neon)")
 
     print(f"\n[3/3] Computing indicators...")
     results = compute_all_indicators(market_data, cache)
@@ -1373,15 +1305,14 @@ if __name__ == "__main__":
         sys.exit(0)
 
     sorted_results = sorted(results.values(), key=lambda r: r.tech_score, reverse=True)
-    print(f"  {'Symbol':<10} {'LTP':>8} {'RSI':>6} {'EMA20':>8} {'EMA200':>8} "
-          f"{'MACD':>7} {'OBV':>8} {'Score':>6} {'Signal'}")
-    print("  " + "-" * 80)
+    print(f"  {'Symbol':<10} {'LTP':>8} {'RSI':>6} {'20/50 Cross':<14} "
+          f"{'BB_Sig':<12} {'OBV':>8} {'Score':>6} {'Signal'}")
+    print("  " + "-" * 85)
     for r in sorted_results[:20]:
         print(
             f"  {r.symbol:<10} {r.ltp:>8.2f} {r.rsi_14:>6.1f} "
-            f"{r.ema_20:>8.2f} {r.ema_200:>8.2f} "
-            f"{r.macd_line:>+7.3f} {r.obv_trend:>8} "
-            f"{r.tech_score:>+6}  {r.tech_signal}"
+            f"{r.ema_20_50_cross:<14} {r.bb_signal:<12} "
+            f"{r.obv_trend:>8} {r.tech_score:>+6}  {r.tech_signal}"
         )
 
     dist = Counter(r.tech_signal for r in results.values())
@@ -1389,5 +1320,11 @@ if __name__ == "__main__":
     for sig, count in sorted(dist.items(), key=lambda x: -x[1]):
         print(f"    {sig:<15} {count}")
 
-    print(f"\n  💡 Run with --daily to compute all + write to Sheets")
+    # Show cross breakdown — useful to verify fix 1 is working
+    cross_dist = Counter(r.ema_20_50_cross for r in results.values())
+    print(f"\n  EMA 20/50 cross breakdown (should see ABOVE/BELOW/GOLDEN/DEATH):")
+    for val, count in sorted(cross_dist.items(), key=lambda x: -x[1]):
+        print(f"    {val:<15} {count}")
+
+    print(f"\n  💡 Run with --daily to compute all + write to Neon")
     print("=" * 70 + "\n")
