@@ -41,7 +41,8 @@ TABS: dict[str, str] = {
     "financial_advisor":  "financial_advisor",
     "backtest_results":   "backtest_results",
     "indicators":         "indicators",
-    "schema":             "db_schema",       # 'schema' is reserved in postgres
+    "schema":             "db_schema",    # 'schema' is reserved in postgres 
+    "nepal_pulse": "nepal_pulse",  
 }
 
 
@@ -519,6 +520,54 @@ TABLE_DDL: dict[str, str] = {
         CREATE UNIQUE INDEX IF NOT EXISTS ux_schema_migration_id
             ON db_schema (migration_id);
     """,
+    "nepal_pulse": """
+    CREATE TABLE IF NOT EXISTS nepal_pulse (
+        id                  SERIAL PRIMARY KEY,
+        date                TEXT,
+        time                TEXT,
+
+        -- NRB / Monetary Policy
+        policy_rate         TEXT,
+        policy_rate_change  TEXT,   -- RAISED / CUT / UNCHANGED
+        ccd_ratio           TEXT,   -- Credit to Core Capital + Deposit
+        crr                 TEXT,   -- Cash Reserve Ratio
+        slr                 TEXT,   -- Statutory Liquidity Ratio
+        nrb_event           TEXT,   -- description of NRB action
+
+        -- SEBON / Market Structure
+        sebon_event         TEXT,   -- e.g. "Margin lending cap changed to 65%"
+        circuit_breaker     TEXT,   -- any circuit breaker rule changes
+        ipo_fpo_active      TEXT,   -- IPO/FPO open today draining liquidity (YES/NO)
+        ipo_fpo_detail      TEXT,   -- company name + amount
+
+        -- Government / Political
+        govt_stability      TEXT,   -- STABLE / UNSTABLE / CRISIS
+        political_event     TEXT,   -- e.g. "PM lost confidence vote"
+        budget_season       TEXT,   -- YES/NO (May-June budget period)
+        budget_event        TEXT,   -- e.g. "Capital gains tax increased to 7.5%"
+
+        -- Economic Indicators
+        remittance_yoy_pct  TEXT,   -- NRB monthly remittance growth %
+        inflation_pct       TEXT,   -- CPI YoY %
+        forex_reserve_months TEXT,  -- import cover in months
+        trade_deficit_npr   TEXT,
+
+        -- Domestic Disruption
+        bandh_today         TEXT,   -- YES/NO
+        bandh_detail        TEXT,   -- who called it, which areas
+        load_shedding_hrs   TEXT,   -- hours per day (affects business sentiment)
+
+        -- Composite Score
+        nepal_score         TEXT,   -- 0-100 (higher = better environment)
+        nepal_status        TEXT,   -- BULLISH / NEUTRAL / BEARISH / CRISIS
+        key_event           TEXT,   -- single most important event today
+        source              TEXT,   -- where data came from
+        timestamp           TEXT,
+        inserted_at         TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS ix_nepal_pulse_date
+        ON nepal_pulse (date);
+""",
 }
 
 
@@ -642,4 +691,13 @@ TABLE_COLUMNS: dict[str, list[str]] = {
         "migration_id", "name", "applied_at", "rolled_back_at",
         "status", "notes",
     ],
+    "nepal_pulse": [
+    "date", "time",
+    "policy_rate", "policy_rate_change", "ccd_ratio", "crr", "slr", "nrb_event",
+    "sebon_event", "circuit_breaker", "ipo_fpo_active", "ipo_fpo_detail",
+    "govt_stability", "political_event", "budget_season", "budget_event",
+    "remittance_yoy_pct", "inflation_pct", "forex_reserve_months", "trade_deficit_npr",
+    "bandh_today", "bandh_detail", "load_shedding_hrs",
+    "nepal_score", "nepal_status", "key_event", "source", "timestamp",
+],
 }

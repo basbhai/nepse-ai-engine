@@ -382,6 +382,7 @@ def batch_upsert(
         return 0
 
 
+
 def update_row(
     tab_key: str,
     updates: dict[str, Any],
@@ -488,7 +489,18 @@ def clear_table(tab_key: str) -> bool:
         log.error("clear_table(%s) failed: %s", table, e)
         return False
 
+# ══════════════════════════════════════════════════════════════════════════════
+# NEPAL PULSE.
+# ══════════════════════════════════════════════════════════════════════════════
 
+def write_nepal_pulse(pulse_data: dict) -> bool:
+    """Write a Nepal domestic market snapshot. Called by nepal_pulse.py."""
+    return write_row("nepal_pulse", pulse_data)
+
+def get_latest_pulse() -> Optional[dict]:
+    """Return the most recent Nepal pulse snapshot."""
+    rows = read_tab("nepal_pulse", limit=1)
+    return rows[0] if rows else None
 # ══════════════════════════════════════════════════════════════════════════════
 # SETTINGS — get/set key-value config
 # ══════════════════════════════════════════════════════════════════════════════

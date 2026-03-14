@@ -13,3 +13,5 @@ lxml
 openai
 google-generativeai
 psycopg2-binary
+pandas
+numpy

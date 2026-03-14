@@ -14,6 +14,8 @@ All public API lives here.
 # Re-export everything from sheets.py as the public API
 from sheets import (
     # Core CRUD
+    write_nepal_pulse,
+    get_latest_pulse,
     read_tab,
     read_tab_where,
     write_row,
