@@ -1,0 +1,17 @@
+anthropic
+gspread
+google-auth
+google-auth-oauthlib
+requests
+python-telegram-bot
+pdfplumber
+pytz
+playwright
+python-dotenv
+beautifulsoup4
+lxml
+openai
+google-generativeai
+psycopg2-binary
+pandas
+numpy

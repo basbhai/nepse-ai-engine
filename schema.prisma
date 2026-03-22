@@ -1,0 +1,650 @@
+// schema.prisma — NEPSE AI Engine
+// Single source of truth for all tables.
+// Edit here, then run: python db/codegen.py → python -m db.migrations
+//
+// Type conventions:
+//   Text     — nullable TEXT column (most columns)
+//   Text!    — NOT NULL TEXT column
+//   Serial   — SERIAL PRIMARY KEY (auto-increment id)
+//   Boolean  — TEXT storing "true"/"false" (kept as Text for simplicity)
+//
+// Annotations:
+//   @id              — PRIMARY KEY
+//   @unique          — UNIQUE INDEX
+//   @default("val")  — DEFAULT value
+//   @@index([col])   — regular index
+//   @@index([a, b])  — composite index
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PRICE & MARKET DATA
+// ─────────────────────────────────────────────────────────────────────────────
+
+model price_history {
+  id           Serial
+  date         Text!          // YYYY-MM-DD
+  symbol       Text!
+  open         Text
+  high         Text
+  low          Text
+  close        Text
+  ltp          Text
+  volume       Text
+  turnover     Text
+  vwap         Text
+  prev_close   Text
+  transactions Text
+  conf_score   Text
+  avg_120d     Text
+  avg_180d     Text
+  week52_high  Text
+  week52_low   Text
+  source       Text  @default("sharesansar")
+
+  @@unique([date, symbol])
+  @@index([symbol])
+  @@index([date])
+}
+
+model market_breadth {
+  id                Serial
+  date              Text!  @unique
+  advancing         Text
+  declining         Text
+  unchanged         Text
+  new_52w_high      Text
+  new_52w_low       Text
+  total_turnover_npr Text
+  total_volume      Text
+  breadth_score     Text
+  market_signal     Text
+  nepse_index       Text
+  nepse_change_pct  Text
+  timestamp         Text
+
+  @@index([date])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WATCHLIST & PORTFOLIO
+// ─────────────────────────────────────────────────────────────────────────────
+
+model watchlist {
+  id                Serial
+  symbol            Text!  @unique
+  company           Text
+  sector            Text
+  added_date        Text
+  fundamental_score Text
+  technical_score   Text
+  combined_score    Text
+  last_updated      Text
+  sector_momentum   Text
+  dividend_yield_pct Text
+  pe_ratio          Text
+  eps               Text
+  npl_pct           Text
+  car_pct           Text
+  week52_high       Text
+  week52_low        Text
+  pct_from_52w_high Text
+  notes             Text
+
+  @@index([sector])
+}
+
+model portfolio {
+  id           Serial
+  symbol       Text!
+  entry_date   Text
+  entry_price  Text
+  shares       Text
+  total_cost   Text
+  current_price Text
+  current_value Text
+  pnl_npr      Text
+  pnl_pct      Text
+  peak_price   Text
+  stop_type    Text
+  stop_level   Text
+  trail_active Text
+  trail_stop   Text
+  status       Text  @default("OPEN")
+  exit_date    Text
+  exit_price   Text
+  exit_reason  Text
+
+  @@index([symbol])
+  @@index([status])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SIGNALS & TRADING LOG
+// ─────────────────────────────────────────────────────────────────────────────
+
+model market_log {
+  id               Serial
+  date             Text
+  time             Text
+  symbol           Text
+  sector           Text
+  action           Text
+  confidence       Text
+  entry_price      Text
+  stop_loss        Text
+  target           Text
+  allocation_npr   Text
+  shares           Text
+  breakeven        Text
+  risk_reward      Text
+  rsi_14           Text
+  ema_20           Text
+  ema_50           Text
+  ema_200          Text
+  macd_line        Text
+  macd_signal      Text
+  volume           Text
+  volume_ratio     Text
+  obv_trend        Text
+  vwap             Text
+  atr_14           Text
+  bollinger_upper  Text
+  bollinger_lower  Text
+  support_level    Text
+  resistance_level Text
+  candle_pattern   Text
+  conf_score       Text
+  pe_ratio         Text
+  eps              Text
+  roe              Text
+  npl_pct          Text
+  fundamental_score Text
+  geo_score        Text
+  macro_score      Text
+  reasoning        Text
+  outcome          Text  @default("PENDING")
+  actual_pnl       Text
+  exit_price       Text
+  exit_date        Text
+  exit_reason      Text
+  dual_audit       Text
+  gpt_verdict      Text
+  timestamp        Text
+
+  @@index([symbol])
+  @@index([date])
+  @@index([outcome])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INDICATORS & CANDLES
+// ─────────────────────────────────────────────────────────────────────────────
+
+model indicators {
+  id               Serial
+  symbol           Text!
+  date             Text!
+  ltp              Text
+  prev_close       Text
+  volume           Text
+  history_days     Text
+  rsi_14           Text
+  rsi_signal       Text   // OVERSOLD | NEUTRAL | OVERBOUGHT
+  ema_20           Text
+  ema_50           Text
+  ema_200          Text
+  ema_trend        Text   // ABOVE_ALL | BELOW_ALL | MIXED
+  ema_20_50_cross  Text   // GOLDEN | DEATH | NONE
+  ema_50_200_cross Text   // GOLDEN | DEATH | NONE
+  macd_line        Text
+  macd_signal      Text
+  macd_histogram   Text
+  macd_cross       Text   // BULLISH | BEARISH | NONE
+  bb_upper         Text
+  bb_middle        Text
+  bb_lower         Text
+  bb_width         Text
+  bb_pct_b         Text
+  bb_signal        Text   // SQUEEZE | EXPANSION | UPPER_TOUCH | LOWER_TOUCH | NEUTRAL
+  atr_14           Text
+  atr_pct          Text
+  obv              Text
+  obv_trend        Text   // RISING | FALLING | FLAT
+  tech_score       Text   // 0–100
+  tech_signal      Text   // STRONG_BULL | BULL | NEUTRAL | BEAR | STRONG_BEAR
+  timestamp        Text
+
+  @@unique([symbol, date])
+  @@index([date])
+  @@index([tech_signal])
+}
+
+model candle_patterns {
+  id                 Serial
+  pattern_name       Text!  @unique
+  type               Text   // BULLISH | BEARISH | NEUTRAL
+  tier               Text   // 1 | 2 | 3
+  nepal_win_rate_pct Text
+  sample_size        Text
+  avg_gain_pct       Text
+  best_sector        Text
+  best_rsi_range     Text
+  volume_condition   Text
+  reliability        Text
+  notes              Text
+}
+
+model candle_signals {
+  id               Serial
+  symbol           Text!
+  date             Text!
+  pattern_name     Text!
+  signal           Text   // BULLISH | BEARISH | NEUTRAL
+  tier             Text   // 1 | 2 | 3
+  confidence       Text
+  volume_confirmed Text   // "true" | "false"
+  candles_used     Text
+  description      Text
+  timestamp        Text
+
+  @@unique([symbol, date, pattern_name])
+  @@index([date])
+  @@index([symbol])
+  @@index([signal])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GEO & MACRO CONTEXT
+// ─────────────────────────────────────────────────────────────────────────────
+
+model geopolitical_data {
+  id               Serial
+  date             Text
+  time             Text
+  crude_price      Text
+  crude_change_pct Text
+  vix              Text
+  vix_level        Text   // CALM | LOW | ELEVATED | HIGH | EXTREME
+  nifty            Text
+  nifty_change_pct Text
+  dxy              Text
+  gold_price       Text
+  geo_score        Text   // -5 to +5
+  status           Text   // BULLISH | POSITIVE | NEUTRAL | BEARISH | CRISIS
+  key_event        Text
+  timestamp        Text
+
+  @@index([date])
+}
+
+model nepal_pulse {
+  id                   Serial
+  date                 Text
+  time                 Text
+  // NRB / Monetary
+  policy_rate          Text
+  policy_rate_change   Text   // RAISED | CUT | UNCHANGED
+  ccd_ratio            Text
+  crr                  Text
+  slr                  Text
+  nrb_event            Text
+  // SEBON / Market
+  sebon_event          Text
+  circuit_breaker      Text
+  ipo_fpo_active       Text   // YES | NO
+  ipo_fpo_detail       Text
+  // Political
+  govt_stability       Text   // STABLE | UNSTABLE | CRISIS
+  political_event      Text
+  budget_season        Text   // YES | NO
+  budget_event         Text
+  // Economic
+  remittance_yoy_pct   Text
+  inflation_pct        Text
+  forex_reserve_months Text
+  trade_deficit_npr    Text
+  // Disruption
+  bandh_today          Text   // YES | NO
+  bandh_detail         Text
+  load_shedding_hrs    Text
+  // Score
+  nepal_score          Text   // -5 to +5
+  nepal_status         Text   // BULLISH | POSITIVE | NEUTRAL | BEARISH | CRISIS
+  key_event            Text
+  source               Text
+  timestamp            Text
+
+  @@index([date])
+}
+
+model macro_data {
+  id           Serial
+  indicator    Text!  @unique
+  value        Text
+  unit         Text
+  direction    Text
+  impact       Text
+  last_updated Text
+  source       Text
+}
+
+model nrb_monthly {
+  id                         Serial
+  period                     Text!  @unique   // e.g. "fy2023/24-month1"
+  fiscal_year                Text
+  month_number               Text
+  is_annual                  Text   @default("false")
+  nepse_index                Text
+  policy_rate                Text
+  bank_rate                  Text
+  crr_percentage             Text
+  slr_percentage             Text
+  cpi_inflation              Text
+  credit_growth_rate         Text
+  liquidity_injected_billion Text
+  remittance_yoy_change_pct  Text
+  fx_reserve_months          Text
+  bop_overall_balance_usd_m  Text
+  bop_current_account_usd_m  Text
+  bop_status                 Text
+  bop_trend                  Text
+  overall_sentiment          Text   // BULLISH | NEUTRAL | BEARISH
+  forward_guidance           Text   // TIGHT | LOOSE | NEUTRAL
+  key_risks                  Text
+
+  @@index([fiscal_year, month_number])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FUNDAMENTALS
+// ─────────────────────────────────────────────────────────────────────────────
+
+model fundamentals {
+  id                    Serial
+  symbol                Text!
+  company               Text
+  sector                Text
+  quarter               Text
+  fiscal_year           Text
+  eps                   Text
+  pe_ratio              Text
+  bvps                  Text
+  pbv_ratio             Text
+  roe                   Text
+  roa                   Text
+  dps                   Text
+  dividend_yield        Text
+  net_profit_npr        Text
+  revenue_npr           Text
+  net_profit_growth_pct Text
+  revenue_growth_pct    Text
+  debt_to_equity        Text
+  market_cap_npr        Text
+  car_pct               Text
+  npl_pct               Text
+  nim_pct               Text
+  cd_ratio              Text
+  report_date           Text
+  data_source           Text
+
+  @@index([symbol])
+  @@index([quarter, fiscal_year])
+}
+
+model sector_momentum {
+  id                    Serial
+  date                  Text
+  sector                Text
+  weekly_return_pct     Text
+  monthly_return_pct    Text
+  avg_volume_change_pct Text
+  momentum_score        Text
+  status                Text
+  top_stock_1           Text
+  top_stock_2           Text
+  catalyst              Text
+  last_updated          Text
+
+  @@index([date])
+  @@index([sector])
+}
+
+model corporate_events {
+  id                  Serial
+  symbol              Text
+  company             Text
+  event_type          Text
+  announcement_date   Text
+  event_date          Text
+  book_close_date     Text
+  details             Text
+  expected_impact_pct Text
+  days_until_event    Text
+  status              Text
+  source              Text
+
+  @@index([symbol])
+  @@index([event_date])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LEARNING & SELF-IMPROVEMENT
+// ─────────────────────────────────────────────────────────────────────────────
+
+model learning_hub {
+  id               Serial
+  date             Text
+  symbol           Text
+  sector           Text
+  pattern          Text
+  lesson           Text
+  outcome          Text   // WIN | LOSS | BREAKEVEN
+  pnl_npr          Text
+  confidence       Text
+  applied_count    Text
+  win_when_applied Text
+  source           Text   // user | claude | gpt
+  timestamp        Text
+
+  @@index([symbol])
+  @@index([pattern])
+}
+
+model news_sentiment {
+  id                 Serial
+  date               Text
+  overall_score      Text
+  banking_score      Text
+  hydro_score        Text
+  insurance_score    Text
+  microfinance_score Text
+  top_positive_news  Text
+  top_negative_news  Text
+  key_stock_mentions Text
+  source_count       Text
+  timestamp          Text
+
+  @@index([date])
+}
+
+model backtest_results {
+  id                  Serial
+  test_name           Text
+  parameter_tested    Text
+  optimal_value       Text
+  win_rate_at_optimal Text
+  sample_size         Text
+  confidence          Text
+  date_run            Text
+  notes               Text
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CAPITAL MANAGEMENT
+// ─────────────────────────────────────────────────────────────────────────────
+
+model capital_allocation {
+  id              Serial
+  date            Text
+  market_state    Text   // FULL_BULL | CAUTIOUS_BULL | SIDEWAYS | BEAR | CRISIS
+  nepse_vs_200dma Text
+  stocks_pct      Text
+  fd_pct          Text
+  savings_pct     Text
+  od_pct          Text
+  fd_rate_used    Text
+  expected_return Text
+  reasoning       Text
+  review_date     Text
+  status          Text
+
+  @@index([date])
+}
+
+model financial_advisor {
+  id                     Serial
+  date                   Text
+  recommendation_type    Text
+  market_phase           Text
+  confidence_pct         Text
+  capital_in_stocks_pct  Text
+  capital_in_fd_pct      Text
+  capital_in_savings_pct Text
+  capital_in_od_pct      Text
+  three_month_outlook    Text
+  expected_return_pct    Text
+  fd_rate_used           Text
+  trigger_to_change      Text
+  review_date            Text
+  actual_outcome         Text
+  was_forecast_correct   Text
+
+  @@index([date])
+}
+
+model financials {
+  id            Serial
+  kpi_name      Text!  @unique
+  current_value Text
+  target_value  Text
+  alert_level   Text
+  status        Text
+  last_updated  Text
+  notes         Text
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SYSTEM CONFIG
+// ─────────────────────────────────────────────────────────────────────────────
+
+model settings {
+  id           Serial
+  key          Text!  @unique
+  value        Text
+  description  Text
+  last_updated Text
+  set_by       Text
+}
+
+// db_schema is managed internally by db/migrations.py — do not touch
+model db_schema {
+  id             Serial
+  migration_id   Text!  @unique
+  name           Text!
+  applied_at     Text
+  rolled_back_at Text
+  status         Text  @default("applied")
+  notes          Text
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INDEX HISTORY (for statistical analysis / backtester)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model nepse_indices {
+  id            Serial
+  date          Text!
+  index_id      Text!
+  index_name    Text!
+  current_value Text          // closing value
+  high          Text
+  low           Text
+  change_abs    Text
+  change_pct    Text
+  week52_high   Text
+  week52_low    Text
+  turnover      Text          // turnover value NPR
+  volume        Text          // turnover volume (shares)
+  transactions  Text          // total transactions
+  source        Text  @default("nepalstock")
+
+  @@unique([date, index_id])
+  @@index([date])
+  @@index([index_id])
+  @@index([index_name])
+}
+// ─────────────────────────────────────────────────────────────────────────────
+// STATISTICAL ANALYSIS RESULTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+model macro_stat_results {
+  id              Serial
+  variable        Text!          // e.g. "cpi_inflation"
+  variable_label  Text           // e.g. "CPI Inflation (%)"
+  lag_months      Text!          // 0 / 1 / 2 / 3 months
+  spearman_rho    Text           // Spearman rank correlation coefficient
+  p_value         Text           // Raw p-value (uncorrected)
+  p_corrected     Text           // Bonferroni-corrected p-value
+  significant     Text           // "true" / "false" — survived Bonferroni
+  effect_size     Text           // negligible / small / medium / large
+  n_pairs         Text           // Number of valid observation pairs
+  rho_3m_forward  Text           // ρ vs NEPSE 3-month forward return
+  p_3m_forward    Text           // p-value for 3-month forward correlation
+  n_pairs_3m      Text           // n for 3-month forward test
+  n_total_tests   Text           // Total tests run (for Bonferroni denominator)
+  alpha_corrected Text           // Bonferroni threshold used
+  run_date        Text           // YYYY-MM-DD when analysis was run
+  notes           Text           // Free text for context
+
+  @@unique([variable, lag_months, run_date])
+  @@index([variable])
+  @@index([run_date])
+}
+
+
+model fd_rates {
+  id               Serial
+  fetch_date       Text!          // YYYY-MM-DD when fetched
+  institute_code   Text           // e.g. "Janaki Finan."
+  institute_name   Text           // e.g. "Janaki Finance Co."
+  product_name     Text           // e.g. "Fixed Deposit-2Y&above"
+  interest_rate    Text           // raw string e.g. "7.00%"
+  interest_pct     Text           // parsed float e.g. "7.00"
+  tenure_label     Text           // e.g. "2 years"
+  tenure_months    Text           // e.g. "24"
+  tenure_category  Text           // SHORT / MEDIUM / LONG / VLONG
+  minimum_balance  Text           // e.g. "0"
+  institute_type   Text           // bank / finance / dev_bank / other
+  source           Text  @default("bankbyaj")
+
+  @@unique([fetch_date, institute_code, product_name])
+  @@index([fetch_date])
+  @@index([tenure_category])
+  @@index([interest_pct])
+}
+
+model fd_rate_summary {
+  id               Serial
+  fetch_date       Text!  @unique  // one summary per fetch date
+  avg_rate_pct     Text            // average across all products
+  max_rate_pct     Text            // highest rate available
+  min_rate_pct     Text            // lowest rate available
+  best_bank_name   Text            // institution with best rate
+  best_bank_rate   Text            // their rate %
+  best_tenure      Text            // their tenure
+  rate_vs_prev_pct Text            // change from previous month (+ = rising)
+  rate_direction   Text            // RISING / FALLING / UNCHANGED
+  fd_score_signal  Text            // STRONG_BUY_STOCKS / BUY_STOCKS / NEUTRAL / PREFER_FD / STRONG_FD
+  total_products   Text            // how many products fetched
+
+  @@index([fetch_date])
+}
