@@ -708,7 +708,7 @@ def run_filter(
     # ── Live prices ───────────────────────────────────────────────────────────
     if market_data is None:
         try:
-            from scraper import get_all_market_data
+            from modules.scraper import get_all_market_data
             market_data = get_all_market_data(write_breadth=False)
         except Exception as exc:
             logger.error("Market data fetch failed: %s", exc)
