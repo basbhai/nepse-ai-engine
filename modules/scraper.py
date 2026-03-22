@@ -348,7 +348,6 @@ def fetch_sharesansar_data() -> dict[str, dict]:
                 "high_52w":     _parse_sharesansar_number(get_cell(22)),
                 "low_52w":      _parse_sharesansar_number(get_cell(23)),
             }
-
         logger.info("ShareSansar: parsed %d symbols", len(data))
         return data
 
@@ -678,10 +677,10 @@ def get_watchlist_data(symbols: list[str]) -> dict[str, PriceRow]:
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CLI — test runner
-#   python scraper.py              → full run, print summary
-#   python scraper.py --ss-only    → ShareSansar scrape only (no TMS login)
-#   python scraper.py --tms-only   → TMS only (skip ShareSansar)
-#   python scraper.py NABIL HBL    → watchlist mode for named symbols
+#   python -m modules.scraper             → full run, print summary
+#   python -m modules.scraper --ss-only    → ShareSansar scrape only (no TMS login)
+#   python -m modules.scraper NABIL HBL    → watchlist mode for named symbols
+#   python -m modules.scraper --tms-only   → TMS only (skip ShareSansar)
 # ══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":

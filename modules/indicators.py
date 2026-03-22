@@ -731,10 +731,10 @@ def run_daily_indicators(
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CLI
-#   python indicators.py --cache-only    → test HistoryCache load
-#   python indicators.py --daily         → compute all + write to Neon
-#   python indicators.py --read          → read today's rows from Neon
-#   python indicators.py NABIL HBL       → compute specific symbols
+#   python -m modules.indicators --cache-only    → test HistoryCache load
+#   python -m modules.indicators --daily         → compute all + write to Neon
+#   python -m modules.indicators --read          → read today's rows from Neon
+#   python -m modules.indicators NABIL HBL       → compute specific symbols
 # ══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":

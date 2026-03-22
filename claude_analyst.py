@@ -66,7 +66,7 @@ CLAUDE_MODEL      = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5-20251022")
 BROKERAGE_PCT = 0.40
 SEBON_PCT     = 0.015
 DP_CHARGE_NPR = 25.0
-CGT_PCT       = 5.0
+CGT_PCT       = 7.5
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -559,6 +559,7 @@ AVOID if: risk too high, wrong sector, Learning Hub warns against it, or contra-
 
 For BUY: calculate exact NPR amounts. Use max 10% of total capital per position.
 For WAIT/AVOID: give specific conditions that would change your answer.
+Include only ordinary shares, exclude mutual funds, debentures, promotor shares etc
 
 Respond ONLY with this JSON — no markdown, no explanation outside JSON:
 {{

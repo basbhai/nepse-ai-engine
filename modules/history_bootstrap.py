@@ -258,11 +258,11 @@ def scrape_and_upsert(dry_run: bool = False) -> dict:
                 "vwap":         str(_parse_number(row_dict.get("VWAP")) or ""),
                 "prev_close":   str(_parse_number(row_dict.get("Prev. Close")) or ""),
                 "transactions": str(_parse_number(row_dict.get("Trans.")) or ""),
-                "conf_score":   "",  # not available from ShareSansar
-                "avg_120d":     "",
-                "avg_180d":     "",
-                "week52_high":  "",
-                "week52_low":   "",
+                "conf_score":   str(_parse_number(row_dict.get("Conf.")) or ""),
+                "avg_120d":     str(_parse_number(row_dict.get("120 Days")) or ""),
+                "avg_180d":     str(_parse_number(row_dict.get("180 Days")) or ""),
+                "week52_high":  str(_parse_number(row_dict.get("52 Weeks High")) or ""),
+                "week52_low":   str(_parse_number(row_dict.get("52 Weeks Low")) or ""),
                 "source":       "direct_web_scrape",
             })
 

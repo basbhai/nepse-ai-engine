@@ -941,10 +941,10 @@ def write_daily_signals_to_db(
 # ══════════════════════════════════════════════════════════════════════════════
 # CLI
 #   python -m modules.candle_detector            → detect all symbols
-#   python candle_detector.py NABIL HBL   → specific symbols
-#   python candle_detector.py --bullish   → BULLISH only
-#   python candle_detector.py --bearish   → BEARISH only
-#   python candle_detector.py --save      → also write to DB
+#   python -m modules.candle_detector NABIL HBL   → specific symbols
+#   python -m modules.candle_detector --bullish   → BULLISH only
+#   python -m modules.candle_detector --bearish   → BEARISH only
+#   python -m modules.candle_detector --save      → also write to DB
 # ══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
