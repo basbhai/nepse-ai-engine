@@ -460,9 +460,9 @@ def print_status() -> None:
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CLI
-#   python history_bootstrap.py --scrape
-#   python history_bootstrap.py --scrape --dry-run
-#   python history_bootstrap.py --status
+#   python -m modules.history_bootstrap --scrape
+#   python -m modules.history_bootstrap --scrape --dry-run
+#   python -m modules.history_bootstrap --status
 # ══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":

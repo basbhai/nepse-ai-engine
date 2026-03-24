@@ -927,9 +927,9 @@ def get_combined_geo_score() -> int:
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CLI
-#   python nepal_pulse.py           → full run with Gemini Flash
-#   python nepal_pulse.py score     → print latest scores only
-#   python nepal_pulse.py keywords  → full run, force keyword fallback
+#   python -m modules.nepal_pulse           → full run with Gemini Flash
+#   python -m modules.nepal_pulse score     → print latest scores only
+#   python -m modules.nepal_pulse keywords  → full run, force keyword fallback
 # ══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":

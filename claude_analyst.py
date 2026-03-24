@@ -597,7 +597,7 @@ def _call_claude(prompt: str) -> Optional[dict]:
 
     try:
         response = client.chat.completions.create(
-            model="anthropic/claude-sonnet-4-5",
+            model="anthropic/claude-sonnet-4.6" ,#"anthropic/claude-sonnet-4-5",
             messages=[
                 {
                     "role": "system",
