@@ -370,11 +370,13 @@ Detect signals relevant to Nepal stock market (NEPSE).
 
 1. Is there a bandh, strike, chakka jam, or transport/business shutdown IN NEPAL today?
    Only count events physically happening inside Nepal — ignore global news.
-2. Is any IPO, FPO, or right share application open on NEPSE today?
+2. Is any IPO, FPO, or right share application open on NEPSE today? must be general public not right, reserved issue.
 3. Is there a political crisis, PM resignation, or government instability IN NEPAL?
 4. What is the Gulf/Middle East stability? (affects Nepal remittance workers abroad)
 5. What is the remittance risk level based on Gulf/foreign employment news?
 6. What is the overall Nepal market sentiment today?
+7. Crisis details should be only that effect share market.
+
 
 Headlines:
 {data_str}
@@ -387,12 +389,12 @@ Return ONLY this JSON object with no other text, no markdown, no explanation:
   "ipo_fpo_detail": "company name and issue type, or empty string",
   "crisis_detected": "YES or NO",
   "crisis_detail": "what happened in Nepal, or empty string",
-  "gulf_signal": "STABLE or TENSE or CRISIS",
+  "gulf_signal": "STABLE or TENSE or CRISIS",   
   "gulf_detail": "reason from headlines, or empty string",
   "remittance_signal": "LOW or MEDIUM or HIGH",
   "remittance_detail": "reason from headlines, or empty string",
   "overall_sentiment": "POSITIVE or NEUTRAL or NEGATIVE",
-  "key_event": "single most important Nepal market event in one sentence, or empty string"
+  "key_event": "single most important news that will directly effect NEPSE"
 }}"""
 
     log.info("Sending %d headlines to Gemini Flash...", len(df))
@@ -927,9 +929,9 @@ def get_combined_geo_score() -> int:
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CLI
-#   python nepal_pulse.py           → full run with Gemini Flash
-#   python nepal_pulse.py score     → print latest scores only
-#   python nepal_pulse.py keywords  → full run, force keyword fallback
+#   python -m modules.nepal_pulse           → full run with Gemini Flash
+#   python -m modules.nepal_pulse score     → print latest scores only
+#   python -m modules.nepal_pulse keywords  → full run, force keyword fallback
 # ══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":

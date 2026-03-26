@@ -106,8 +106,73 @@ class PriceRow:
 
     def to_dict(self) -> dict:
         return asdict(self)
+# ══════════════════════════════════════════════════════════════════════════════
+# SOURCE 0 — share shansaar live
+# ══════════════════════════════════════════════════════════════════════════════
 
+SHARESANSAR_LIVE_URL = "https://www.sharesansar.com/live-trading"
 
+def fetch_live_trading() -> dict[str, PriceRow]:
+    """
+    Fetch live prices from ShareSansar live-trading page.
+    No login, no captcha, ~5 sec, ~1 min delay acceptable.
+    Columns: S.No, Symbol, LTP, Point Change, % Change, 
+             Open, High, Low, Volume, Prev. Close
+    """
+    logger.info("ShareSansar live-trading: fetching...")
+    try:
+        resp = requests.get(
+            SHARESANSAR_LIVE_URL,
+            headers=SHARESANSAR_HEADERS,
+            timeout=SHARESANSAR_TIMEOUT,
+        )
+        resp.raise_for_status()
+
+        soup  = BeautifulSoup(resp.text, "html.parser")
+        table = soup.find("table")
+        if not table:
+            logger.warning("ShareSansar live-trading: no table found")
+            return {}
+
+        rows   = table.find_all("tr")
+        prices = {}
+
+        for row in rows[1:]:
+            cells = row.find_all("td")
+            if len(cells) < 10:
+                continue
+
+            def cell(i):
+                return cells[i].get_text(strip=True).replace(",", "")
+
+            symbol = cell(1).upper()
+            if not symbol:
+                continue
+
+            ltp        = _safe_float(cell(2))
+            prev_close = _safe_float(cell(9))
+            change_pct = _safe_float(cell(4))
+
+            prices[symbol] = PriceRow(
+                symbol      = symbol,
+                ltp         = ltp,
+                open_price  = _safe_float(cell(5)),
+                high        = _safe_float(cell(6)),
+                low         = _safe_float(cell(7)),
+                close       = prev_close,
+                prev_close  = prev_close,
+                change      = _safe_float(cell(3)),
+                change_pct  = change_pct,
+                volume      = _safe_int(cell(8)),
+                source      = "ss_live",
+            )
+
+        logger.info("ShareSansar live-trading: %d symbols", len(prices))
+        return prices
+
+    except Exception as exc:
+        logger.error("ShareSansar live-trading failed: %s", exc)
+        return {}
 # ══════════════════════════════════════════════════════════════════════════════
 # SOURCE 1 — TMS49 API
 # ══════════════════════════════════════════════════════════════════════════════
@@ -591,71 +656,43 @@ def write_market_breadth(breadth: dict) -> bool:
 # ══════════════════════════════════════════════════════════════════════════════
 # MAIN PUBLIC API
 # ══════════════════════════════════════════════════════════════════════════════
-
 def get_all_market_data(
     write_breadth: bool = True,
     ss_fallback_ok: bool = True,
 ) -> dict[str, PriceRow]:
-    """
-    PRIMARY ENTRY POINT — called by filter_engine.py / main.py.
 
-    Fetches TMS prices + ShareSansar conf scores, merges them,
-    optionally writes market breadth to Sheets.
-
-    Args:
-        write_breadth:  If True, writes MARKET_BREADTH row to Neon DB.
-                        Set False during testing / backtest mode.
-        ss_fallback_ok: If True, continues with TMS-only data when
-                        ShareSansar is unreachable. If False, raises
-                        on ShareSansar failure (for strict mode).
-
-    Returns:
-        dict[symbol, PriceRow] — merged, ready for indicators.py
-        Empty dict only if TMS itself fails.
-    """
-    start = time.time()
-    logger.info("=" * 60)
-    logger.info("scraper.get_all_market_data() starting...")
-
-    # ── Step 1: TMS prices (primary, required) ─────────────────────────────
-    tms_data = fetch_tms_prices()
-    if not tms_data:
-        logger.error("FATAL: TMS returned no data — aborting scrape run")
+    # Step 1: Live prices from ShareSansar (fast, no login)
+    live_data = fetch_live_trading()
+    if not live_data:
+        logger.error("ShareSansar live-trading returned no data")
         return {}
 
-    # ── Step 2: Indices ─────────────────────────────────────────────────────
-    indices = fetch_tms_indices()
-
-    # ── Step 3: ShareSansar Conf. scores (critical enrichment) ─────────────
+    # Step 2: Conf scores + 120d/180d/52W from today-share-price
     ss_data = fetch_sharesansar_data()
 
-    if not ss_data:
-        if not ss_fallback_ok:
-            raise RuntimeError("ShareSansar returned no data and fallback is disabled")
-        logger.warning(
-            "ShareSansar unavailable — proceeding with TMS data only. "
-            "Conf. scores will be 0 (NEUTRAL) for all symbols."
-        )
+    # Step 3: Enrich live prices with conf scores
+    for symbol, row in live_data.items():
+        ss = ss_data.get(symbol, {})
+        if ss:
+            row.conf_score  = ss.get("conf_score", 0.0)
+            row.conf_signal = _conf_signal(row.conf_score)
+            row.avg_120d    = ss.get("avg_120d", 0.0)
+            row.avg_180d    = ss.get("avg_180d", 0.0)
+            row.high_52w    = ss.get("high_52w", 0.0)
+            row.low_52w     = ss.get("low_52w", 0.0)
+            row.turnover    = ss.get("turnover", 0.0)
+            row.transactions= ss.get("transactions", 0)
+            row.vwap        = ss.get("vwap", 0.0)
+            row.source      = "ss_merged"
+        else:
+            row.conf_signal = "NEUTRAL"
 
-    # ── Step 4: Merge ───────────────────────────────────────────────────────
-    merged = merge_market_data(tms_data, ss_data)
-
-    # ── Step 5: Market breadth → Neon DB ────────────────────────────────────
-    if write_breadth and merged:
-        breadth = compute_market_breadth(merged, indices)
+    if write_breadth and live_data:
+        breadth = compute_market_breadth(live_data, [])
         write_market_breadth(breadth)
 
-    elapsed = round(time.time() - start, 2)
-    logger.info(
-        "scraper complete: %d symbols in %.2fs | "
-        "TMS: %d | SS: %d | merged: %d",
-        len(merged), elapsed,
-        len(tms_data), len(ss_data), len(merged),
-    )
-    logger.info("=" * 60)
-
-    return merged
-
+    logger.info("scraper: %d symbols | source=sharesansar_only", len(live_data))
+    return live_data
 
 def get_watchlist_data(symbols: list[str]) -> dict[str, PriceRow]:
     """

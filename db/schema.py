@@ -20,6 +20,9 @@ TABS: dict[str, str] = {
     "fundamentals": "fundamentals",
     "sector_momentum": "sector_momentum",
     "corporate_events": "corporate_events",
+    "dividend_announcements": "dividend_announcements",
+    "dividend_pattern_study": "dividend_pattern_study",
+    "trade_journal": "trade_journal",
     "learning_hub": "learning_hub",
     "news_sentiment": "news_sentiment",
     "backtest_results": "backtest_results",
@@ -476,27 +479,189 @@ TABLE_DDL: dict[str, str] = {
         ON "corporate_events" (event_date);
     """,
 
+    "dividend_announcements": """
+    CREATE TABLE IF NOT EXISTS "dividend_announcements" (
+        id SERIAL PRIMARY KEY,
+        symbol TEXT NOT NULL,
+        company TEXT,
+        sector TEXT,
+        announcement_date TEXT NOT NULL,
+        fiscal_year TEXT,
+        dividend_type TEXT,
+        cash_dividend_pct TEXT,
+        bonus_share_pct TEXT,
+        total_dividend_pct TEXT,
+        book_close_date TEXT,
+        direction TEXT,
+        prev_dividend_pct TEXT,
+        source TEXT DEFAULT 'sharesansar',
+        scraped_at TEXT,
+        inserted_at TIMESTAMPTZ DEFAULT NOW(),
+        CONSTRAINT ux_dividend_announcements_symbol_announcement_date UNIQUE (symbol, announcement_date)
+    );
+    CREATE INDEX IF NOT EXISTS ix_dividend_announcements_symbol
+        ON "dividend_announcements" (symbol);
+    CREATE INDEX IF NOT EXISTS ix_dividend_announcements_announcement_date
+        ON "dividend_announcements" (announcement_date);
+    CREATE INDEX IF NOT EXISTS ix_dividend_announcements_direction
+        ON "dividend_announcements" (direction);
+    CREATE INDEX IF NOT EXISTS ix_dividend_announcements_sector
+        ON "dividend_announcements" (sector);
+    """,
+
+    "dividend_pattern_study": """
+    CREATE TABLE IF NOT EXISTS "dividend_pattern_study" (
+        id SERIAL PRIMARY KEY,
+        symbol TEXT NOT NULL,
+        announcement_date TEXT NOT NULL,
+        sector TEXT,
+        direction TEXT,
+        price_drift_d10 TEXT,
+        price_drift_d6 TEXT,
+        price_drift_d4 TEXT,
+        price_drift_d2 TEXT,
+        vol_ratio_d6 TEXT,
+        vol_ratio_d4 TEXT,
+        vol_ratio_d2 TEXT,
+        vol_ratio_d1 TEXT,
+        rsi_d6 TEXT,
+        rsi_d4 TEXT,
+        obv_trend_d6_to_d1 TEXT,
+        atr_ratio_d6 TEXT,
+        macd_state_d4 TEXT,
+        return_d0 TEXT,
+        return_d1 TEXT,
+        return_d2_d9 TEXT,
+        vs_nepse_d1 TEXT,
+        pattern_detected TEXT,
+        pattern_type TEXT,
+        pattern_strength TEXT,
+        entry_feasible TEXT,
+        optimal_entry_day TEXT,
+        run_date TEXT,
+        inserted_at TIMESTAMPTZ DEFAULT NOW(),
+        CONSTRAINT ux_dividend_pattern_study_symbol_announcement_date UNIQUE (symbol, announcement_date)
+    );
+    CREATE INDEX IF NOT EXISTS ix_dividend_pattern_study_symbol
+        ON "dividend_pattern_study" (symbol);
+    CREATE INDEX IF NOT EXISTS ix_dividend_pattern_study_direction
+        ON "dividend_pattern_study" (direction);
+    CREATE INDEX IF NOT EXISTS ix_dividend_pattern_study_pattern_detected
+        ON "dividend_pattern_study" (pattern_detected);
+    CREATE INDEX IF NOT EXISTS ix_dividend_pattern_study_sector
+        ON "dividend_pattern_study" (sector);
+    """,
+
+    "trade_journal": """
+    CREATE TABLE IF NOT EXISTS "trade_journal" (
+        id SERIAL PRIMARY KEY,
+        created_at TEXT,
+        symbol TEXT NOT NULL,
+        sector TEXT,
+        paper_mode TEXT,
+        entry_date TEXT,
+        entry_price TEXT,
+        shares TEXT,
+        allocation_npr TEXT,
+        primary_signal TEXT,
+        secondary_signal TEXT,
+        candle_pattern TEXT,
+        confidence_at_entry TEXT,
+        rsi_entry TEXT,
+        macd_hist_entry TEXT,
+        bb_signal_entry TEXT,
+        ema_trend_entry TEXT,
+        obv_trend_entry TEXT,
+        conf_score_entry TEXT,
+        volume_ratio_entry TEXT,
+        atr_pct_entry TEXT,
+        market_state_entry TEXT,
+        geo_score_entry TEXT,
+        nepal_score_entry TEXT,
+        combined_geo_entry TEXT,
+        nepse_index_entry TEXT,
+        stop_loss_planned TEXT,
+        target_planned TEXT,
+        hold_days_planned TEXT,
+        exit_date TEXT,
+        exit_price TEXT,
+        exit_reason TEXT,
+        market_state_exit TEXT,
+        geo_score_exit TEXT,
+        nepal_score_exit TEXT,
+        combined_geo_exit TEXT,
+        nepse_index_exit TEXT,
+        hold_days_actual TEXT,
+        return_pct TEXT,
+        pnl_npr TEXT,
+        result TEXT,
+        geo_delta TEXT,
+        nepal_delta TEXT,
+        combined_geo_delta TEXT,
+        nepse_return_pct TEXT,
+        alpha_vs_nepse TEXT,
+        loss_cause TEXT,
+        lesson_ids TEXT,
+        inserted_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS ix_trade_journal_symbol
+        ON "trade_journal" (symbol);
+    CREATE INDEX IF NOT EXISTS ix_trade_journal_result
+        ON "trade_journal" (result);
+    CREATE INDEX IF NOT EXISTS ix_trade_journal_primary_signal
+        ON "trade_journal" (primary_signal);
+    CREATE INDEX IF NOT EXISTS ix_trade_journal_entry_date
+        ON "trade_journal" (entry_date);
+    CREATE INDEX IF NOT EXISTS ix_trade_journal_sector
+        ON "trade_journal" (sector);
+    CREATE INDEX IF NOT EXISTS ix_trade_journal_loss_cause
+        ON "trade_journal" (loss_cause);
+    CREATE INDEX IF NOT EXISTS ix_trade_journal_paper_mode
+        ON "trade_journal" (paper_mode);
+    """,
+
     "learning_hub": """
     CREATE TABLE IF NOT EXISTS "learning_hub" (
         id SERIAL PRIMARY KEY,
-        date TEXT,
+        created_at TEXT,
+        lesson_type TEXT,
+        source TEXT,
         symbol TEXT,
         sector TEXT,
-        pattern TEXT,
-        lesson TEXT,
-        outcome TEXT,
-        pnl_npr TEXT,
-        confidence TEXT,
-        applied_count TEXT,
-        win_when_applied TEXT,
-        source TEXT,
-        timestamp TEXT,
+        applies_to TEXT,
+        condition TEXT,
+        finding TEXT,
+        action TEXT,
+        trade_count TEXT,
+        win_count TEXT,
+        loss_count TEXT,
+        win_rate TEXT,
+        avg_return_pct TEXT,
+        avg_pnl_npr TEXT,
+        confidence_level TEXT,
+        loss_cause_primary TEXT,
+        geo_delta_avg TEXT,
+        nepal_delta_avg TEXT,
+        alpha_vs_nepse_avg TEXT,
+        active TEXT DEFAULT 'true',
+        superseded_by TEXT,
+        last_validated TEXT,
+        validation_count TEXT,
+        trade_journal_ids TEXT,
         inserted_at TIMESTAMPTZ DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS ix_learning_hub_symbol
         ON "learning_hub" (symbol);
-    CREATE INDEX IF NOT EXISTS ix_learning_hub_pattern
-        ON "learning_hub" (pattern);
+    CREATE INDEX IF NOT EXISTS ix_learning_hub_sector
+        ON "learning_hub" (sector);
+    CREATE INDEX IF NOT EXISTS ix_learning_hub_lesson_type
+        ON "learning_hub" (lesson_type);
+    CREATE INDEX IF NOT EXISTS ix_learning_hub_active
+        ON "learning_hub" (active);
+    CREATE INDEX IF NOT EXISTS ix_learning_hub_source
+        ON "learning_hub" (source);
+    CREATE INDEX IF NOT EXISTS ix_learning_hub_confidence_level
+        ON "learning_hub" (confidence_level);
     """,
 
     "news_sentiment": """
@@ -741,7 +906,10 @@ TABLE_COLUMNS: dict[str, list[str]] = {
     "fundamentals": ["symbol", "company", "sector", "quarter", "fiscal_year", "eps", "pe_ratio", "bvps", "pbv_ratio", "roe", "roa", "dps", "dividend_yield", "net_profit_npr", "revenue_npr", "net_profit_growth_pct", "revenue_growth_pct", "debt_to_equity", "market_cap_npr", "car_pct", "npl_pct", "nim_pct", "cd_ratio", "report_date", "data_source"],
     "sector_momentum": ["date", "sector", "weekly_return_pct", "monthly_return_pct", "avg_volume_change_pct", "momentum_score", "status", "top_stock_1", "top_stock_2", "catalyst", "last_updated"],
     "corporate_events": ["symbol", "company", "event_type", "announcement_date", "event_date", "book_close_date", "details", "expected_impact_pct", "days_until_event", "status", "source"],
-    "learning_hub": ["date", "symbol", "sector", "pattern", "lesson", "outcome", "pnl_npr", "confidence", "applied_count", "win_when_applied", "source", "timestamp"],
+    "dividend_announcements": ["symbol", "company", "sector", "announcement_date", "fiscal_year", "dividend_type", "cash_dividend_pct", "bonus_share_pct", "total_dividend_pct", "book_close_date", "direction", "prev_dividend_pct", "source", "scraped_at"],
+    "dividend_pattern_study": ["symbol", "announcement_date", "sector", "direction", "price_drift_d10", "price_drift_d6", "price_drift_d4", "price_drift_d2", "vol_ratio_d6", "vol_ratio_d4", "vol_ratio_d2", "vol_ratio_d1", "rsi_d6", "rsi_d4", "obv_trend_d6_to_d1", "atr_ratio_d6", "macd_state_d4", "return_d0", "return_d1", "return_d2_d9", "vs_nepse_d1", "pattern_detected", "pattern_type", "pattern_strength", "entry_feasible", "optimal_entry_day", "run_date"],
+    "trade_journal": ["created_at", "symbol", "sector", "paper_mode", "entry_date", "entry_price", "shares", "allocation_npr", "primary_signal", "secondary_signal", "candle_pattern", "confidence_at_entry", "rsi_entry", "macd_hist_entry", "bb_signal_entry", "ema_trend_entry", "obv_trend_entry", "conf_score_entry", "volume_ratio_entry", "atr_pct_entry", "market_state_entry", "geo_score_entry", "nepal_score_entry", "combined_geo_entry", "nepse_index_entry", "stop_loss_planned", "target_planned", "hold_days_planned", "exit_date", "exit_price", "exit_reason", "market_state_exit", "geo_score_exit", "nepal_score_exit", "combined_geo_exit", "nepse_index_exit", "hold_days_actual", "return_pct", "pnl_npr", "result", "geo_delta", "nepal_delta", "combined_geo_delta", "nepse_return_pct", "alpha_vs_nepse", "loss_cause", "lesson_ids"],
+    "learning_hub": ["created_at", "lesson_type", "source", "symbol", "sector", "applies_to", "condition", "finding", "action", "trade_count", "win_count", "loss_count", "win_rate", "avg_return_pct", "avg_pnl_npr", "confidence_level", "loss_cause_primary", "geo_delta_avg", "nepal_delta_avg", "alpha_vs_nepse_avg", "active", "superseded_by", "last_validated", "validation_count", "trade_journal_ids"],
     "news_sentiment": ["date", "overall_score", "banking_score", "hydro_score", "insurance_score", "microfinance_score", "top_positive_news", "top_negative_news", "key_stock_mentions", "source_count", "timestamp"],
     "backtest_results": ["test_name", "parameter_tested", "optimal_value", "win_rate_at_optimal", "sample_size", "confidence", "date_run", "notes"],
     "capital_allocation": ["date", "market_state", "nepse_vs_200dma", "stocks_pct", "fd_pct", "savings_pct", "od_pct", "fd_rate_used", "expected_return", "reasoning", "review_date", "status"],

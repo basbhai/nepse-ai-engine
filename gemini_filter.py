@@ -239,7 +239,7 @@ Time NST:        {nst_now.strftime('%H:%M')}
 PORTFOLIO STATUS
 ═══════════════════════════════════════
 Open Positions:      {positions_str}
-Slots Remaining:     {slots_remaining} of 3 max
+Slots Remaining:     {slots_remaining} 
 Total Capital:       NPR {total_capital:,.0f}
 
 ═══════════════════════════════════════
@@ -260,7 +260,8 @@ CANDLE=pattern CSTAR=C*signal HOLD=optimal_days SIG=primary_signal
 ═══════════════════════════════════════
 SCREENING RULES (apply in order)
 ═══════════════════════════════════════
-1. SKIP if symbol is already in open positions
+1. Don't skip if symbol is already in open positions
+2. don't provide recommendations if the shares/scripts belongs to mutual fund or debentures category
 2. SKIP if symbol already analyzed today (avoid duplicate flags)
 3. SKIP if market_state is BEAR and signal is not MACD or BB
    (paper: only MACD/BB profitable in bear markets)
@@ -402,7 +403,7 @@ def _keyword_fallback(
             continue
 
         # Rule 2: portfolio full
-        if slots_remaining == 0:
+        if slots_remaining == 0 and len(open_positions) >= 99:
             skipped.append({"symbol": sym, "reason": "portfolio full (3/3 positions)"})
             continue
 
@@ -611,18 +612,18 @@ def run_gemini_filter(
 
     # ── Portfolio + Learning Hub ──────────────────────────────────────────────
     open_positions  = _load_open_positions()
-    slots_remaining = max(0, 3 - len(open_positions))
+    slots_remaining =  99#max(0, 3 - len(open_positions))
     total_capital   = _load_total_capital()
     symbols         = [c.symbol for c in candidates]
     lessons         = _load_relevant_lessons(symbols)
 
     logger.info(
-        "Portfolio: %d open | %d slots | capital NPR %,.0f | %d lessons loaded",
+        "Portfolio: %d open | %d slots | capital NPR %.0f | %d lessons loaded",
         len(open_positions), slots_remaining, total_capital, len(lessons),
     )
 
     # ── Portfolio full check ──────────────────────────────────────────────────
-    if slots_remaining == 0:
+    if slots_remaining == 0 and len(open_positions) >= 99:  #temp disable
         logger.info("Portfolio full (3/3 positions) — no new signals needed")
         return []
 

@@ -72,7 +72,7 @@ def gemini_solve_captcha(image_bytes: bytes) -> str | None:
     try:
         # Use the clean stable string to avoid 404 errors
         # 'gemini-2.5-flash' is the standard ID for the v1beta/v1 endpoints
-        TARGET_MODEL = "gemini-2.5-flash"
+        TARGET_MODEL = "gemini-2.5-flash-lite"
 
         client = genai.Client(api_key=GEMINI_API_KEY)
         

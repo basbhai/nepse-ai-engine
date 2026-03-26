@@ -58,9 +58,9 @@ logger = logging.getLogger(__name__)
 
 NST = timezone(timedelta(hours=5, minutes=45))
 
-# ── Anthropic native API config ───────────────────────────────────────────────
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-CLAUDE_MODEL      = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5-20251022")
+# # ── Anthropic native API config ───────────────────────────────────────────────
+# ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+# CLAUDE_MODEL      = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5-20251022")
 
 # ── Nepal fee constants (for breakeven calculation) ───────────────────────────
 BROKERAGE_PCT = 0.40
@@ -142,7 +142,7 @@ def _load_portfolio() -> dict:
             "invested_npr":      invested,
             "open_positions":    len(open_pos),
             "max_positions":     3,
-            "slots_remaining":   max(0, 3 - len(open_pos)),
+            "slots_remaining":    99 ,#max(0, 3 - len(open_pos)),
             "holdings": [
                 {
                     "symbol":    r.get("symbol", ""),
@@ -161,8 +161,8 @@ def _load_portfolio() -> dict:
             "liquid_npr":        100000,
             "invested_npr":      0,
             "open_positions":    0,
-            "max_positions":     3,
-            "slots_remaining":   3,
+            "max_positions":     99, #3
+            "slots_remaining":   99, #3
             "holdings":          [],
         }
 
@@ -417,7 +417,7 @@ def _build_prompt(
     herding_alert = _herding_context(flag, market_state)
 
     # Candle info
-    candle_str = f"{flag.best_candle} (Tier {flag.candle_tier}, conf {flag.candle_conf}%)" if flag.best_candle else "None"
+    candle_str = f"{flag.best_candle} (Tier {flag.candle_tier})" if flag.best_candle else "None"
 
     # Suggested hold from Gemini
     hold_days = getattr(flag, "suggested_hold", 17)
@@ -448,7 +448,7 @@ TECHNICAL INDICATORS (frozen at 10:30 AM NST, computed from historical data):
   EMA Trend:       {getattr(flag, 'ema_trend', '?')}
   Tech Score:      {flag.tech_score}/100
   Candle Pattern:  {candle_str}
-  C* Signal:       {'YES — excess return above C*=0.129 (SIM paper)' if flag.cstar_signal else 'NO'}
+  C* Signal:       {'YES — excess return above C*=0.129 (SIM paper)' if getattr(flag, 'cstar_signal', False) else 'NO'}
 
 Primary Signal:  {flag.primary_signal}
 Composite Score: {flag.composite_score:.1f}
@@ -545,7 +545,7 @@ NEPAL FEES (always include):
   Brokerage: 0.40% buy + 0.40% sell
   SEBON:     0.015% buy + 0.015% sell
   DP charge: NPR 25 flat per transaction
-  CGT:       5% on profit
+  CGT:       7.5% on profit
   Breakeven formula: entry × (1 + 0.83%) + NPR 50/shares (approximate)
 
 ═══════════════════════════════════════════════
@@ -557,7 +557,7 @@ BUY if: confidence ≥ 70%, setup is clean, risk is defined, allocation makes se
 WAIT if: setup looks good but timing is off, or need confirmation
 AVOID if: risk too high, wrong sector, Learning Hub warns against it, or contra-indicators present
 
-For BUY: calculate exact NPR amounts. Use max 10% of total capital per position.
+For BUY: calculate exact NPR amounts. Use max 20% of total capital per position.
 For WAIT/AVOID: give specific conditions that would change your answer.
 Include only ordinary shares, exclude mutual funds, debentures, promotor shares etc
 
@@ -584,45 +584,88 @@ Respond ONLY with this JSON — no markdown, no explanation outside JSON:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 6 — CALL CLAUDE VIA NATIVE ANTHROPIC API
+# SECTION 6.a — CALL CLAUDE
 # ══════════════════════════════════════════════════════════════════════════════
-
-def _call_claude(prompt: str) -> Optional[dict]:
-    """
-    Send prompt to Claude via native Anthropic API.
-    Uses $5 free credit (14-day trial) for testing phase.
-    Switch ANTHROPIC_API_KEY → OPENROUTER_API_KEY after trial ends.
-    Returns parsed JSON dict or None on failure.
-    """
-    if not ANTHROPIC_API_KEY:
-        logger.error("ANTHROPIC_API_KEY not set in .env")
-        return None
+def ask_claude(prompt: str) -> Optional[dict]:
+    from typing import Optional
+    from anthropic import Anthropic
+    # The SDK automatically uses os.environ.get("ANTHROPIC_API_KEY")
+    client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
     try:
-        import anthropic
-
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-
-        logger.info("Calling Claude (%s) via Anthropic API...", CLAUDE_MODEL)
-
         response = client.messages.create(
-            model=CLAUDE_MODEL,
+            model="claude-3-5-sonnet-20241022", # Latest Sonnet 3.5 identifier
             max_tokens=1200,
+            # Native SDK moves system instruction to its own argument
             system=(
                 "You are a senior NEPSE quantitative analyst. "
                 "You respond ONLY in valid JSON. No markdown fences. "
-                "You apply Nepal-specific research findings strictly. "
-                "You never recommend a trade without a clear stop loss. "
-                "You always account for Nepal transaction fees in profit calculations."
+                "You never recommend a trade without a clear stop loss."
             ),
             messages=[
                 {"role": "user", "content": prompt},
+                # Tip: You can "prefill" the assistant response with "{" 
+                # to further force JSON, but requires a different structure.
             ],
         )
 
+        # Content is a list of blocks; get the text from the first one
         raw = response.content[0].text.strip()
 
-        # Strip code fences if present
+        # Robust cleaning in case Claude still includes markdown fences
+        if raw.startswith("```"):
+            # Split by backticks and find the segment that looks like JSON
+            parts = raw.split("```")
+            raw = parts[1] if len(parts) > 1 else parts[0]
+            if raw.lower().startswith("json"):
+                raw = raw[4:]
+            raw = raw.strip()
+
+        result = json.loads(raw)
+        
+        logger.info("Claude: %s %s | conf=%s",
+                    result.get("action", "?"),
+                    result.get("primary_signal", "?"),
+                    result.get("confidence", "?"))
+        return result
+
+    except json.JSONDecodeError as exc:
+        logger.error("Claude returned invalid JSON: %s | Raw: %s", exc, raw)
+        return None
+    except Exception as exc:
+        logger.error("Claude API call failed: %s", exc)
+        return None
+    
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 6.b — CALL CLAUDE VIA NATIVE ANTHROPIC API
+# ══════════════════════════════════════════════════════════════════════════════
+def _call_claude(prompt: str) -> Optional[dict]:
+    from openai import OpenAI
+
+    client = OpenAI(
+        base_url="https://openrouter.ai/api/v1",
+        api_key=os.getenv("OPENROUTER_API_KEY"),
+    )
+
+    try:
+        response = client.chat.completions.create(
+            model="anthropic/claude-sonnet-4.6" ,#"anthropic/claude-sonnet-4-5",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a senior NEPSE quantitative analyst. "
+                        "You respond ONLY in valid JSON. No markdown fences. "
+                        "You never recommend a trade without a clear stop loss."
+                    )
+                },
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=1200,
+        )
+
+        raw = response.choices[0].message.content.strip()
+
         if raw.startswith("```"):
             raw = raw.split("```")[1]
             if raw.startswith("json"):
@@ -630,15 +673,10 @@ def _call_claude(prompt: str) -> Optional[dict]:
             raw = raw.strip()
 
         result = json.loads(raw)
-        logger.info(
-            "Claude: %s %s | conf=%s | entry=%s target=%s stop=%s",
-            result.get("action", "?"),
-            result.get("primary_signal", "?"),
-            result.get("confidence", "?"),
-            result.get("entry_price", "?"),
-            result.get("target", "?"),
-            result.get("stop_loss", "?"),
-        )
+        logger.info("Claude: %s %s | conf=%s",
+                    result.get("action", "?"),
+                    result.get("primary_signal", "?"),
+                    result.get("confidence", "?"))
         return result
 
     except json.JSONDecodeError as exc:
@@ -647,7 +685,6 @@ def _call_claude(prompt: str) -> Optional[dict]:
     except Exception as exc:
         logger.error("Claude API call failed: %s", exc)
         return None
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 7 — ASSEMBLE RESULT
@@ -777,9 +814,9 @@ def run_analysis(flags: list) -> list[AnalystResult]:
     )
 
     # ── Portfolio full check ──────────────────────────────────────────────────
-    if portfolio.get("slots_remaining", 0) == 0:
-        logger.info("Portfolio full — no analysis needed")
-        return []
+    # if portfolio.get("slots_remaining", 0) == 0:
+    #     logger.info("Portfolio full — no analysis needed")
+    #     return []
 
     # ── Circuit breaker ───────────────────────────────────────────────────────
     if loss_streak >= 8:
@@ -795,7 +832,7 @@ def run_analysis(flags: list) -> list[AnalystResult]:
 
         # Skip if portfolio now full (from earlier BUY in this run)
         buy_count = sum(1 for r in results if r.action == "BUY")
-        if portfolio.get("open_positions", 0) + buy_count >= 3:
+        if portfolio.get("open_positions", 0) + buy_count >= 99:
             logger.info("%s: portfolio full after earlier BUYs — skipping", sym)
             continue
 
@@ -806,7 +843,7 @@ def run_analysis(flags: list) -> list[AnalystResult]:
         prompt = _build_prompt(
             flag, portfolio, geo, macro, lessons, market_state, loss_streak
         )
-        claude_json = _call_claude(prompt)
+        claude_json = ask_claude(prompt)               #_call_claude(prompt)
 
         if claude_json is None:
             logger.warning("%s: Claude returned no result — skipping", sym)
@@ -884,13 +921,77 @@ if __name__ == "__main__":
         format="%(asctime)s [CLAUDE_ANALYST] %(levelname)s: %(message)s",
     )
 
-    args     = sys.argv[1:]
-    dry_run  = "--dry-run" in args
-    sym_args = [a.upper() for a in args if not a.startswith("--")]
+    args         = sys.argv[1:]
+    dry_run      = "--dry-run"      in args
+    print_prompt = "--print-prompt" in args
+    sym_args     = [a.upper() for a in args if not a.startswith("--")]
 
     print("\n" + "=" * 70)
     print("  NEPSE AI — claude_analyst.py")
     print("=" * 70)
+
+    # ── Print-prompt mode: full pipeline run but NO Claude API call ───────────
+    if print_prompt:
+        print("\n[PRINT-PROMPT MODE] Running gemini_filter → building Claude prompt(s) — NO API call\n")
+
+        # Step 1: run gemini_filter exactly as live
+        print("[1/3] Running gemini_filter to get real flags...")
+        try:
+            from gemini_filter import run_gemini_filter
+            flags = run_gemini_filter()
+            if not flags:
+                print("  No flags from Gemini — nothing to print")
+                sys.exit(0)
+            print(f"  {len(flags)} flag(s) received from Gemini\n")
+        except Exception as e:
+            print(f"  gemini_filter failed: {e}")
+            sys.exit(1)
+
+        # Filter to specific symbol if passed on CLI
+        if sym_args:
+            flags = [f for f in flags if f.symbol in sym_args]
+            if not flags:
+                print(f"  Symbol(s) {sym_args} not in Gemini flag list")
+                sys.exit(0)
+
+        # Step 2: load shared context exactly as live
+        print("[2/3] Loading context (portfolio, geo, macro, market state)...")
+        portfolio    = _load_portfolio()
+        geo          = _load_geo_context()
+        macro        = _load_macro_context()
+        market_state = _load_market_state()
+        loss_streak  = _load_loss_streak()
+        print(f"  market={market_state} | liquid=NPR {portfolio.get('liquid_npr',0):,.0f} | "
+              f"slots={portfolio.get('slots_remaining',0)} | loss_streak={loss_streak}\n")
+
+        # Step 3: build and print prompt for each flag — NO Claude call
+        print(f"[3/3] Building prompt(s) for {len(flags)} flag(s)...\n")
+        for i, flag in enumerate(flags, 1):
+            lessons = _load_lessons(flag.symbol, getattr(flag, "sector", ""))
+            prompt  = _build_prompt(flag, portfolio, geo, macro, lessons, market_state, loss_streak)
+
+            char_count = len(prompt)
+            token_est  = char_count // 4
+
+            print("=" * 70)
+            print(f"  PROMPT {i}/{len(flags)} — {flag.symbol} [{getattr(flag,'sector','')}]")
+            print(f"  Chars: {char_count} | ~Tokens: {token_est} | "
+                  f"~Cost: ${token_est * 0.000003:.4f}")
+            print("=" * 70)
+            print(prompt)
+            print()
+
+        total_tokens = sum(len(_build_prompt(
+            f, portfolio, geo, macro,
+            _load_lessons(f.symbol, getattr(f, "sector", "")),
+            market_state, loss_streak
+        )) // 4 for f in flags)
+        print("─" * 70)
+        print(f"TOTAL: {len(flags)} prompt(s) | ~{total_tokens} tokens | "
+              f"~${total_tokens * 0.000003:.4f} input cost if sent to Claude")
+        print("[DONE] No API call made. Cost: $0.00")
+        print("=" * 70 + "\n")
+        sys.exit(0)
 
     # ── Dry run with synthetic flag ───────────────────────────────────────────
     if dry_run:

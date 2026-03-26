@@ -560,8 +560,8 @@ def get_latest_geo_score() -> int:
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CLI
-#   python geo_sentiment.py        → full run, write to Neon
-#   python geo_sentiment.py score  → print latest score only
+#   python -m modules.geo_sentiment        → full run, write to Neon
+#   python -m modules.geo_sentiment score  → print latest score only
 # ══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":

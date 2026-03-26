@@ -10,10 +10,10 @@ API returns all indices in one call per date — very efficient.
 No login, no captcha, no Playwright needed.
 
 Usage:
-    python sharehub_index_scraper.py                    # full backfill 2020-08-01 → today
-    python sharehub_index_scraper.py --from 2023-07-15  # custom start date
-    python sharehub_index_scraper.py --dry-run          # parse only, no DB write
-    python sharehub_index_scraper.py --status           # show what's in DB
+    python -m modules.sharehub_scraper                    # full backfill 2020-08-01 → today
+    python -m modules.sharehub_scraper --from 2023-07-15  # custom start date
+    python -m modules.sharehub_scraper --dry-run          # parse only, no DB write
+    python -m modules.sharehub_scraper --status           # show what's in DB
 ─────────────────────────────────────────────────────────────────────────────
 """
 
