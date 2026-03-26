@@ -79,14 +79,19 @@ def build_candidate_urls(fy_start: int, fy_month: int) -> list[tuple[str, str]]:
     fy_full  = fy_label_full(fy_start)   # e.g. "2025.26"
     fy_short = fy_label_short(fy_start)  # e.g. "2025"
 
+    bs_start = fy_start + 57
+    bs_end = str(bs_start + 1)[-2:]
+    bs_label = f"{bs_start}-{bs_end}"
     candidates = []
 
     if fy_month == 12:
-        # Annual report
-        fname = (f"Current-Macroeconomic-and-Financial-Situation-English-"
-                 f"Based-on-Annual-data-of-{fy_full}.pdf")
-        local = f"NRB_Annual_{fy_full}.pdf"
-        candidates.append((f"{BASE_URL}/{yy}/{fname}", local))
+        # Annual report — two variants: with and without "-of-"
+        for fy_str in [fy_full, fy_short]:
+            for sep in ["of-", ""]:
+                fname = (f"Current-Macroeconomic-and-Financial-Situation-English-"
+                         f"Based-on-Annual-data-{sep}{fy_str}.pdf")
+                local = f"NRB_Annual_{fy_full}.pdf"
+                candidates.append((f"{BASE_URL}/{yy}/{fname}", local))
 
     else:
         word = MONTH_WORDS[fy_month]
@@ -104,9 +109,53 @@ def build_candidate_urls(fy_start: int, fy_month: int) -> list[tuple[str, str]]:
         # Variant D: singular "Month" + short year only
         fD = (f"Current-Macroeconomic-and-Financial-Situation-English-"
               f"Based-on-{word}-Month-data-of-{fy_short}.pdf")
+        # Variant E: plural "Months" + full FY, NO "-of-"  (FY 2020/21 pattern)
+        fE = (f"Current-Macroeconomic-and-Financial-Situation-English-"
+              f"Based-on-{word}-Months-data-{fy_full}.pdf")
+        # Variant F: singular "Month" + full FY, NO "-of-"
+        fF = (f"Current-Macroeconomic-and-Financial-Situation-English-"
+              f"Based-on-{word}-Month-data-{fy_full}.pdf")
+        # Variant G: plural "Months" + short year, NO "-of-"
+        fG = (f"Current-Macroeconomic-and-Financial-Situation-English-"
+              f"Based-on-{word}-Months-data-{fy_short}.pdf")
+        # Variant H: singular "Month" + short year, NO "-of-"
+        fH = (f"Current-Macroeconomic-and-Financial-Situation-English-"
+              f"Based-on-{word}-Month-data-{fy_short}.pdf")
+        # Variant I: underscore separators, plural "Months" + full FY
+        fI = (f"Current-Macroeconomic-and-Financial-Situation-English_"
+              f"Based-on_{word}_Months_data_{fy_full}.pdf")
+        # Variant J: underscore separators, singular "Month" + full FY
+        fJ = (f"Current-Macroeconomic-and-Financial-Situation-English_"
+              f"Based-on_{word}_Month_data_{fy_full}.pdf")
+        # Variant K: underscore separators, plural "Months" + short year
+        fK = (f"Current-Macroeconomic-and-Financial-Situation-English_"
+              f"Based-on_{word}_Months_data_{fy_short}.pdf")
+        # Base CMEs variants
+        fL = f"CMEs-{word}-Months-English-{bs_label}.pdf"
+        fM = f"CMEs-{word}-Month-English-{bs_label}.pdf"
 
-        for fname in [fA, fB, fC, fD]:
+        # "Final-Compilation" before BS year (title-case)
+        fN = f"CMEs-{word}-Months-English-Final-Compilation-{bs_label}.pdf"
+        fO = f"CMEs-{word}-Month-English-Final-Compilation-{bs_label}.pdf"
+
+        # "final-compilation" after BS year (lowercase)
+        fP = f"CMEs-{word}-Months-English-{bs_label}-final-compilation.pdf"
+        fQ = f"CMEs-{word}-Month-English-{bs_label}-final-compilation.pdf"
+
+        for fname in [fA, fB, fC, fD, fE, fF, fG, fH, fI, fJ, fK]:
             candidates.append((f"{BASE_URL}/{yy}/{fname}", local))
+        
+        for bs_offset in [0, -1]:
+            bs_s = fy_start + 57 + bs_offset
+            bs_label = f"{bs_s}-{str(bs_s + 1)[-2:]}"
+            fL = f"CMEs-{word}-Months-English-{bs_label}.pdf"
+            fM = f"CMEs-{word}-Month-English-{bs_label}.pdf"
+            fN = f"CMEs-{word}-Months-English-Final-Compilation-{bs_label}.pdf"
+            fO = f"CMEs-{word}-Month-English-Final-Compilation-{bs_label}.pdf"
+            fP = f"CMEs-{word}-Months-English-{bs_label}-final-compilation.pdf"
+            fQ = f"CMEs-{word}-Month-English-{bs_label}-final-compilation.pdf"
+            for fname in [fL, fM, fN, fO, fP, fQ]:
+                candidates.append((f"{BASE_URL}/2019/{fname}", local))
 
     return candidates
 
@@ -119,7 +168,7 @@ def calendar_ym(fy_start: int, fy_month: int) -> tuple[int, int]:
 def generate_entries(from_year: int, from_month: int,
                      to_year: int, to_month: int) -> list[dict]:
     entries = []
-    for fy_start in range(2020, 2027):
+    for fy_start in range(2017, 2027):
         for fy_month in range(1, 13):
             cal_year, cal_month = calendar_ym(fy_start, fy_month)
             if (cal_year, cal_month) < (from_year, from_month):
@@ -140,9 +189,9 @@ def generate_entries(from_year: int, from_month: int,
 
 
 def download_pdfs(output_dir: str = "nrb_pdfs",
-                  from_ym: tuple = (2020, 8),
+                  from_ym: tuple = (2018, 8),
                   to_ym: tuple = (2026, 3),
-                  delay: float = 1.5):
+                  delay: float = 0.01):
     """
     Download all NRB macroeconomic PDFs whose upload date is within the range.
 
@@ -213,7 +262,7 @@ def download_pdfs(output_dir: str = "nrb_pdfs",
 if __name__ == "__main__":
     download_pdfs(
         output_dir="nrb_pdfs",
-        from_ym=(2020, 8),
+        from_ym=(2018, 8),
         to_ym=(2026, 3),
-        delay=1.5,
+        delay=0.01,
     )

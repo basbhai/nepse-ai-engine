@@ -394,7 +394,7 @@ Return ONLY this JSON object with no other text, no markdown, no explanation:
   "remittance_signal": "LOW or MEDIUM or HIGH",
   "remittance_detail": "reason from headlines, or empty string",
   "overall_sentiment": "POSITIVE or NEUTRAL or NEGATIVE",
-  "key_event": "single most important Nepal market event in one sentence, or empty string"
+  "key_event": "single most important news that will directly effect NEPSE"
 }}"""
 
     log.info("Sending %d headlines to Gemini Flash...", len(df))

@@ -427,26 +427,259 @@ model corporate_events {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// LEARNING & SELF-IMPROVEMENT
+// DIVIDEND TRACKING
 // ─────────────────────────────────────────────────────────────────────────────
 
-model learning_hub {
-  id               Serial
-  date             Text
-  symbol           Text
-  sector           Text
-  pattern          Text
-  lesson           Text
-  outcome          Text   // WIN | LOSS | BREAKEVEN
-  pnl_npr          Text
-  confidence       Text
-  applied_count    Text
-  win_when_applied Text
-  source           Text   // user | claude | gpt
-  timestamp        Text
+model dividend_announcements {
+  id                  Serial
+  symbol              Text!
+  company             Text
+  sector              Text
+  announcement_date   Text!          // YYYY-MM-DD — the event day (day 0)
+  fiscal_year         Text           // e.g. "2080/81"
+  dividend_type       Text           // CASH | BONUS | BOTH
+  cash_dividend_pct   Text           // cash % of face value
+  bonus_share_pct     Text           // bonus share %
+  total_dividend_pct  Text           // total effective %
+  book_close_date     Text           // last day to be eligible
+  direction           Text           // INCREASE | DECREASE | UNCHANGED | FIRST_TIME
+  prev_dividend_pct   Text           // previous year for comparison
+  source              Text  @default("sharesansar")
+  scraped_at          Text
+
+  @@unique([symbol, announcement_date])
+  @@index([symbol])
+  @@index([announcement_date])
+  @@index([direction])
+  @@index([sector])
+}
+
+model dividend_pattern_study {
+  // Results of dividend_study.py analysis per announcement
+  // One row per announcement — records what the price/volume
+  // looked like in the days before the announcement
+  id                    Serial
+  symbol                Text!
+  announcement_date     Text!
+  sector                Text
+  direction             Text          // INCREASE | DECREASE | UNCHANGED
+
+  // Price drift before announcement
+  price_drift_d10       Text          // % price change from day -10 to day 0
+  price_drift_d6        Text          // % price change from day -6 to day 0
+  price_drift_d4        Text          // % price change from day -4 to day 0
+  price_drift_d2        Text          // % price change from day -2 to day 0
+
+  // Volume momentum before announcement
+  vol_ratio_d6          Text          // volume at day -6 / avg_volume_20d
+  vol_ratio_d4          Text          // volume at day -4 / avg_volume_20d
+  vol_ratio_d2          Text          // volume at day -2 / avg_volume_20d
+  vol_ratio_d1          Text          // volume at day -1 / avg_volume_20d
+
+  // Technical state before announcement
+  rsi_d6                Text          // RSI at day -6
+  rsi_d4                Text          // RSI at day -4
+  obv_trend_d6_to_d1    Text          // RISING | FALLING | FLAT over -6 to -1
+  atr_ratio_d6          Text          // ATR at -6 / avg_ATR_20d (compression = <1.0)
+  macd_state_d4         Text          // ABOVE | BELOW signal line at day -4
+
+  // Post-announcement outcome (for validating study)
+  return_d0             Text          // % return on announcement day
+  return_d1             Text          // % return on day +1
+  return_d2_d9          Text          // cumulative % return day +2 to +9
+  vs_nepse_d1           Text          // alpha vs NEPSE on day +1
+
+  // Pattern classification
+  pattern_detected      Text          // true | false — did pre-pattern fire?
+  pattern_type          Text          // ACCUMULATION | DISTRIBUTION | NONE
+  pattern_strength      Text          // STRONG | WEAK | NONE
+  entry_feasible        Text          // true | false — was T+3 entry possible?
+  optimal_entry_day     Text          // -6 | -5 | -4 | -3 — best day to enter
+
+  run_date              Text          // when this analysis was run
+
+  @@unique([symbol, announcement_date])
+  @@index([symbol])
+  @@index([direction])
+  @@index([pattern_detected])
+  @@index([sector])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LEARNING & SELF-IMPROVEMENT (REFINED)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// trade_journal: immutable raw record of every trade with full entry + exit context
+// One row per trade. Written by auditor.py at trade close. Never updated.
+model trade_journal {
+  id          Serial
+  created_at  Text           // YYYY-MM-DD HH:MM:SS NST
+
+  // ── Identity ────────────────────────────────────────────────────────────
+  symbol      Text!
+  sector      Text
+  paper_mode  Text           // true | false
+
+  // ── Entry context (snapshot at moment of BUY signal) ────────────────────
+  entry_date             Text
+  entry_price            Text
+  shares                 Text
+  allocation_npr         Text
+
+  primary_signal         Text  // MACD | BB_LOWER | SMA_CROSS | CANDLE | COMBO
+  secondary_signal       Text  // supporting signal or NONE
+  candle_pattern         Text  // pattern name or NONE
+  confidence_at_entry    Text  // claude_analyst confidence 0-100
+
+  // Technical state at entry
+  rsi_entry              Text
+  macd_hist_entry        Text  // histogram value — positive = bullish
+  bb_signal_entry        Text  // LOWER_TOUCH | SQUEEZE | NEUTRAL etc
+  ema_trend_entry        Text  // ABOVE_ALL | BELOW_ALL | MIXED
+  obv_trend_entry        Text  // RISING | FALLING | FLAT
+  conf_score_entry       Text  // ShareSansar conf 0-100
+  volume_ratio_entry     Text  // volume / 20d avg at entry
+  atr_pct_entry          Text  // ATR% for volatility context
+
+  // Market context at entry
+  market_state_entry     Text  // FULL_BULL | CAUTIOUS_BULL | SIDEWAYS | BEAR | CRISIS
+  geo_score_entry        Text  // -5 to +5
+  nepal_score_entry      Text  // -5 to +5
+  combined_geo_entry     Text  // sum -10 to +10
+  nepse_index_entry      Text  // NEPSE index value at entry
+
+  // Planned exit levels
+  stop_loss_planned      Text
+  target_planned         Text
+  hold_days_planned      Text  // signal-based: MACD=17, BB=130, SMA=33
+
+  // ── Exit context (snapshot at close) ────────────────────────────────────
+  exit_date              Text
+  exit_price             Text
+  exit_reason            Text  // STOP_LOSS | TARGET_HIT | TRAILING_STOP
+                               // MANUAL | CIRCUIT_BREAKER | GEO_BLOCK
+
+  // Market context at exit
+  market_state_exit      Text
+  geo_score_exit         Text
+  nepal_score_exit       Text
+  combined_geo_exit      Text
+  nepse_index_exit       Text
+
+  // ── Computed outcomes (all filled by auditor.py) ─────────────────────────
+  hold_days_actual       Text  // actual days held
+  return_pct             Text  // (exit - entry) / entry * 100
+  pnl_npr                Text  // actual NPR profit/loss after fees
+  result                 Text  // WIN | LOSS | BREAKEVEN
+
+  // Deltas — the critical causal layer
+  geo_delta              Text  // geo_score_exit - geo_score_entry
+  nepal_delta            Text  // nepal_score_exit - nepal_score_entry
+  combined_geo_delta     Text  // combined change during hold
+  nepse_return_pct       Text  // NEPSE % move over same hold period
+  alpha_vs_nepse         Text  // our return_pct - nepse_return_pct
+                               // near 0 = macro caused loss, deeply negative = signal failed
+
+  // Loss attribution — computed by auditor.py _attribute_loss()
+  loss_cause             Text  // MACRO_DETERIORATION | SIGNAL_FAILURE
+                               // MARKET_WIDE_SELLOFF | ENTRY_TIMING
+                               // STOP_TOO_TIGHT | SECTOR_EVENT | NULL (wins)
+
+  // Learning link
+  lesson_ids             Text  // comma-separated learning_hub ids this trade updated
 
   @@index([symbol])
-  @@index([pattern])
+  @@index([result])
+  @@index([primary_signal])
+  @@index([entry_date])
+  @@index([sector])
+  @@index([loss_cause])
+  @@index([paper_mode])
+}
+
+// learning_hub: synthesised lessons written by GPT weekly + research paper seeds
+// One row per pattern/finding. Updated and evolved over time.
+// claude_analyst.py reads this — NOT trade_journal directly.
+model learning_hub {
+  id          Serial
+  created_at  Text           // YYYY-MM-DD HH:MM:SS NST — when first written
+
+  // ── What the lesson is about ─────────────────────────────────────────────
+  lesson_type  Text          // SIGNAL_FILTER    — when to trust/distrust a signal
+                             // SECTOR_FILTER    — sector-specific behaviour
+                             // MACRO_FILTER     — geo/nepal context rules
+                             // ENTRY_TIMING     — when in a move to enter
+                             // STOP_CALC        — stop loss refinements
+                             // PORTFOLIO_RULE   — position sizing / exposure
+                             // DIVIDEND_PATTERN — pre-announcement accumulation
+                             // CALENDAR_EFFECT  — day-of-week / seasonal
+                             // FAILURE_MODE     — confirmed loss pattern to avoid
+
+  source       Text          // research_paper | gpt_weekly | claude | user
+  symbol       Text          // specific symbol OR 'MARKET' for universal lessons
+  sector       Text          // BANKING | NON_LIFE_INSURANCE | HYDRO | ALL etc
+  applies_to   Text          // ALL | sector-specific | symbol-specific
+
+  // ── The lesson itself ────────────────────────────────────────────────────
+  condition    Text          // machine-readable trigger condition string
+                             // e.g. "primary_signal=MACD AND nepal_score<=-1
+                             //       AND market_state=SIDEWAYS"
+                             // claude_analyst parses this to decide when to apply
+
+  finding      Text          // human-readable — what was observed
+                             // e.g. "MACD entries in SIDEWAYS with negative
+                             //       nepal_score lose 83% of time (5/6 trades)"
+
+  action       Text          // explicit instruction to claude_analyst
+                             // REDUCE_CONFIDENCE_BY_25
+                             // BLOCK_ENTRY
+                             // REQUIRE_VOLUME_CONFIRM
+                             // REDUCE_ALLOCATION_BY_50
+                             // FLAG_FOR_REVIEW
+                             // ADD_TO_REASONING
+
+  // ── Statistical backing ──────────────────────────────────────────────────
+  trade_count       Text     // how many trades this lesson is based on
+  win_count         Text     // wins when condition was present
+  loss_count        Text     // losses when condition was present
+  win_rate          Text     // computed win_count / trade_count as decimal
+  avg_return_pct    Text     // average % return when condition present
+  avg_pnl_npr       Text     // average NPR outcome when condition present
+
+  confidence_level  Text     // LOW    — < 5 trades, treat as hypothesis
+                             // MEDIUM — 5-15 trades, apply with caution
+                             // HIGH   — 15+ trades, apply firmly
+
+  // ── Causal attribution ───────────────────────────────────────────────────
+  loss_cause_primary  Text   // dominant loss cause across trades for this lesson
+                             // MACRO_DETERIORATION | SIGNAL_FAILURE |
+                             // MARKET_WIDE_SELLOFF | ENTRY_TIMING |
+                             // STOP_TOO_TIGHT | SECTOR_EVENT | MIXED
+
+  geo_delta_avg       Text   // average geo score change during trades
+                             // large negative = macro was deteriorating
+  nepal_delta_avg     Text   // average nepal score change during trades
+  alpha_vs_nepse_avg  Text   // average alpha — near 0 = macro loss
+                             // deeply negative = signal failure
+
+  // ── Lifecycle ────────────────────────────────────────────────────────────
+  active              Text  @default("true")
+                            // false = superseded or market conditions changed
+  superseded_by       Text  // id of newer lesson that replaced this one
+  last_validated      Text  // date GPT last reviewed and confirmed still valid
+  validation_count    Text  // times GPT reviewed and kept this lesson
+                            // high = robust, low = tentative
+
+  // ── Source trades ────────────────────────────────────────────────────────
+  trade_journal_ids   Text  // comma-separated trade_journal ids used to build this
+                            // trace back to raw evidence any time
+
+  @@index([symbol])
+  @@index([sector])
+  @@index([lesson_type])
+  @@index([active])
+  @@index([source])
+  @@index([confidence_level])
 }
 
 model news_sentiment {
@@ -582,6 +815,7 @@ model nepse_indices {
   @@index([index_id])
   @@index([index_name])
 }
+
 // ─────────────────────────────────────────────────────────────────────────────
 // STATISTICAL ANALYSIS RESULTS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -609,7 +843,6 @@ model macro_stat_results {
   @@index([variable])
   @@index([run_date])
 }
-
 
 model fd_rates {
   id               Serial
@@ -648,3 +881,4 @@ model fd_rate_summary {
 
   @@index([fetch_date])
 }
+

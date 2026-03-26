@@ -261,7 +261,7 @@ CANDLE=pattern CSTAR=C*signal HOLD=optimal_days SIG=primary_signal
 SCREENING RULES (apply in order)
 ═══════════════════════════════════════
 1. Don't skip if symbol is already in open positions
-2. Skip all non equity shares like Mutual funds, debentures etc
+2. don't provide recommendations if the shares/scripts belongs to mutual fund or debentures category
 2. SKIP if symbol already analyzed today (avoid duplicate flags)
 3. SKIP if market_state is BEAR and signal is not MACD or BB
    (paper: only MACD/BB profitable in bear markets)
