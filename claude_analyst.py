@@ -911,6 +911,7 @@ def format_buy_signal(result: AnalystResult) -> str:
 #   python claude_analyst.py              → run with live gemini_filter data
 #   python claude_analyst.py --dry-run    → use synthetic flag, no DB write
 #   python claude_analyst.py NABIL        → analyze specific symbol directly
+#   python claude_analyst.py --print-prompt => print prompt 
 # ══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":

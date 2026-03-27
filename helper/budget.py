@@ -33,6 +33,8 @@ CLI:
   python budget.py                       → show current capital status
   python budget.py NABIL 1200 1300 1140  → calc for symbol entry target stop
   python budget.py kelly                 → show kelly output from learning hub
+  python budget.py --prompt              → show DeepSeek prompt for manual testing
+  python budget.py fees 1200 1350 100    → fee breakdown
 ─────────────────────────────────────────────────────────────────────────────
 """
 
@@ -740,7 +742,8 @@ def quick_size(
 # CLI
 #   python -m helper.budget                           → capital status
 #   python -m helper.budget NABIL 1200 1300 1140      → size position
-#   python -m helper.budget kelly                     → show kelly stats
+#   python -m helper.budget kelly                     → show kelly output
+#   python -m helper.budget --prompt                  → show DeepSeek prompt
 #   python -m helper.budget fees 1200 1350 100        → fee breakdown
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -753,6 +756,53 @@ if __name__ == "__main__":
     )
 
     args = sys.argv[1:]
+
+    # ── Help / Prompt ─────────────────────────────────────────────────────────
+    if "--prompt" in args:
+        stats = _load_win_stats()
+        cap = get_capital_status()
+        total_capital = cap["total_capital_npr"]
+        max_pct = MAX_POSITION_PCT
+        prompt = f"""Calculate the Kelly Criterion position size for a NEPSE stock trade.
+
+INPUTS:
+  Win Rate (p):              {stats['win_rate']:.4f}  ({stats['win_rate']*100:.1f}%)
+  Average Win (b × stake):   NPR {stats['avg_win']:.2f}
+  Average Loss (a × stake):  NPR {stats['avg_loss']:.2f}
+  Total Capital:             NPR {total_capital:.2f}
+  Maximum Position:          {max_pct}% of capital
+
+FORMULA:
+  Kelly fraction = p - ((1 - p) / (avg_win / avg_loss))
+  This is the optimal fraction of capital to risk.
+
+NEPAL-SPECIFIC ADJUSTMENTS (apply after Kelly):
+  1. Use Half-Kelly (multiply by 0.5) — reduces variance, essential for retail traders
+  2. Cap at {max_pct}% maximum regardless of Kelly output
+  3. If Kelly fraction is negative → position size = 0 (do not trade)
+  4. Round down to nearest share
+
+CALCULATE:
+  1. Raw Kelly fraction (show working)
+  2. Half-Kelly fraction
+  3. Recommended NPR allocation (capped at {max_pct}% = NPR {total_capital * max_pct / 100:.0f})
+  4. Kelly confidence level (LOW if Kelly < 0.05, MEDIUM if 0.05-0.15, HIGH if > 0.15)
+
+Return ONLY this JSON with no explanation, no markdown:
+{{
+  "raw_kelly_fraction": float,
+  "half_kelly_fraction": float,
+  "recommended_pct": float,
+  "recommended_npr": float,
+  "confidence": "LOW or MEDIUM or HIGH",
+  "calculation_note": "one line showing the key calculation"
+}}"""
+        print("\n" + "="*70)
+        print("  DEEPSEEK KELLY PROMPT (copy this to test manually)")
+        print("="*70)
+        print(prompt)
+        print("\n" + "="*70 + "\n")
+        sys.exit(0)
 
     # ── Capital status ────────────────────────────────────────────────────────
     if not args:

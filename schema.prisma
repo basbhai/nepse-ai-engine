@@ -495,7 +495,12 @@ model dividend_pattern_study {
   pattern_strength      Text          // STRONG | WEAK | NONE
   entry_feasible        Text          // true | false — was T+3 entry possible?
   optimal_entry_day     Text          // -6 | -5 | -4 | -3 — best day to enter
-
+  
+  
+  in_dividend_season    Text
+  event_type            Text   ← you already added this
+  fiscal_year           Text
+  dividend_type         Text
   run_date              Text          // when this analysis was run
 
   @@unique([symbol, announcement_date])
