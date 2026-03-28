@@ -371,7 +371,7 @@ Detect signals relevant to Nepal stock market (NEPSE).
 1. Is there a bandh, strike, chakka jam, or transport/business shutdown IN NEPAL today?
    Only count events physically happening inside Nepal — ignore global news.
 2. Is any IPO, FPO, or right share application open on NEPSE today? must be general public not right, reserved issue.
-3. Is there a political crisis, PM resignation, or government instability IN NEPAL?
+3. Is there a political crisis , PM resignation, or government instability IN NEPAL, only central government related?
 4. What is the Gulf/Middle East stability? (affects Nepal remittance workers abroad)
 5. What is the remittance risk level based on Gulf/foreign employment news?
 6. What is the overall Nepal market sentiment today?

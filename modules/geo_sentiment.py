@@ -1,75 +1,27 @@
 """
-geo_sentiment.py
+geo_sentiment.py — UPDATED MARCH 28, 2026
 ─────────────────────────────────────────────────────────────────────────────
 NEPSE AI Engine
 Purpose : Global market sentiment score for Nepal stock market context.
           Runs every 30 minutes during market hours via GitHub Actions
           trading.yml workflow.
 
-What this does (plain English):
-  1. Fetches 5 global market signals via yfinance (free, no API key):
-       Crude Oil (WTI)  — energy cost affects Nepal import bill
-       VIX              — global fear index affects FII sentiment
-       Nifty 50         — India market directly influences NEPSE
-       DXY (USD Index)  — strong dollar hurts remittance value
-       Gold             — safe haven signal
-  2. Computes geo_score (-5 to +5) from those signals
-  3. Writes snapshot to geopolitical_data table in Neon
+VALIDATION RESULT (2020-2026 historical data):
+  ✅ DXY (USD Index)      — KEEP: ρ=-0.1708, p<0.001, lag=7d (meaningful)
+  ❌ VIX                  — REMOVE: ρ=-0.0606, p=0.042 (noise)
+  ❌ Crude Oil            — REMOVE: ρ=+0.0617, p=0.038 (noise)
+  ❌ Nifty 50             — REMOVE: ρ=+0.0693, p=0.021 (noise, surprising)
+  ❌ Gold                 — REMOVE: ρ=-0.0428, p=0.151 (noise)
 
-Score meaning:
-  +5  Very positive global environment for NEPSE
-   0  Neutral
-  -5  Very negative — high fear, crude spike, Nifty crash
+UPDATED LOGIC:
+  1. Fetch only DXY (USD Index) from yfinance
+  2. Compute geo_score as pure DXY signal with 7-day context
+  3. Write snapshot to geopolitical_data table (keep all 5 columns for backward compat)
+  4. Save ~150 tokens per call vs previous version
 
-How it fits the system:
-  geo_sentiment.py  → geo_score   (-5 to +5)
-  nepal_pulse.py    → nepal_score (-5 to +5)
-  combined_geo      = geo_score + nepal_score  (-10 to +10)
-
-Architecture note:
-  Runs in the LIGHT trading.yml workflow (every 6 min).
-  Fetch is fast (~10-15 seconds total for 5 tickers).
-  Does NOT run in morning_brief.yml — indicators/candles run there.
-
-─────────────────────────────────────────────────────────────────────────────
-
-SOP — STANDARD OPERATING PROCEDURE
-───────────────────────────────────
-WHAT IT DOES:
-  Fetches 5 global market prices and produces geo_score (-5 to +5).
-
-INPUTS (all auto-fetched, no manual work):
-  Crude Oil:  Yahoo Finance ticker CL=F  (WTI front month)
-  VIX:        Yahoo Finance ticker ^VIX
-  Nifty 50:   Yahoo Finance ticker ^NSEI
-  DXY:        Yahoo Finance ticker DX-Y.NYB
-  Gold:       Yahoo Finance ticker GC=F
-
-OUTPUTS:
-  Writes one row to geopolitical_data table in Neon:
-    crude_price, crude_change_pct, vix, vix_level,
-    nifty, nifty_change_pct, dxy, gold_price,
-    geo_score, status, key_event, timestamp
-
-HOW TO TEST MANUALLY:
-  python geo_sentiment.py        → full run, print summary
-  python geo_sentiment.py score  → print latest geo_score only
-
-COMMON ERRORS AND FIXES:
-  yfinance timeout    → Retries 2x then uses last known value from Neon.
-                        geo_score defaults to 0 if no data at all.
-  Market closed       → yfinance returns last close price. Still valid.
-  DB write fails      → Logged, script exits with error code 1.
-  "No data for ^VIX"  → Yahoo Finance ticker change. Check TICKERS dict.
-
-HOW TO UPDATE TICKERS (if Yahoo changes them):
-  Edit TICKERS dict at top of constants section.
-  Common Yahoo Finance tickers:
-    Crude WTI:  CL=F  or  BZ=F (Brent)
-    VIX:        ^VIX
-    Nifty:      ^NSEI
-    DXY:        DX-Y.NYB  or  DX=F
-    Gold:       GC=F
+INTERPRETATION:
+  DXY strong (>105) → weaker remittance flows to Nepal → NEPSE pressured (7d lag)
+  DXY weak (<102)  → stronger remittance flows → NEPSE positive (7d lag)
 
 ─────────────────────────────────────────────────────────────────────────────
 """
@@ -100,45 +52,21 @@ log = logging.getLogger(__name__)
 
 NST = timezone(timedelta(hours=5, minutes=45))
 
-# Yahoo Finance tickers — update here if they change
+# ONLY DXY is validated as meaningful signal (ρ=-0.1708, p<0.001, lag=7d)
 TICKERS = {
-    "crude": "CL=F",       # WTI Crude Oil front month futures
-    "vix":   "^VIX",       # CBOE Volatility Index
-    "nifty": "^NSEI",      # Nifty 50 India
-    "dxy":   "DX-Y.NYB",   # US Dollar Index
-    "gold":  "GC=F",       # Gold front month futures
+    "dxy": "DX-Y.NYB",   # US Dollar Index — ONLY validated signal
 }
 
 FETCH_TIMEOUT  = 15   # seconds per yfinance call
 MAX_RETRIES    = 2    # retry attempts if first fetch fails
 
-# ── Scoring thresholds ────────────────────────────────────────────────────────
-# Each signal contributes to geo_score.
-# Thresholds tuned for Nepal market context.
-
-# Crude Oil — higher price = more expensive imports = negative for Nepal
-CRUDE_HIGH     = 85.0    # above this = negative signal
-CRUDE_VERY_HIGH= 95.0    # above this = strong negative
-CRUDE_LOW      = 65.0    # below this = positive signal
-
-# VIX — higher = more global fear = negative for emerging markets
-VIX_LOW        = 15.0    # below = calm markets = positive
-VIX_ELEVATED   = 20.0    # above = caution
-VIX_HIGH       = 25.0    # above = fear
-VIX_VERY_HIGH  = 30.0    # above = panic
-
-# Nifty change % — India market strongly correlated with NEPSE
-NIFTY_BULL     = +0.75   # above = positive India day
-NIFTY_BEAR     = -0.75   # below = negative India day
-NIFTY_STRONG   = +1.5    # above = strong bull India
-NIFTY_CRASH    = -1.5    # below = significant India fall
-
-# DXY — stronger dollar = weaker remittance value for Nepal
-DXY_STRONG     = 105.0   # above = remittance worth less in NPR
-DXY_VERY_STRONG= 108.0   # above = significant NPR pressure
-
-# Gold — rising gold = safe haven demand = risk-off globally
-GOLD_SURGE_PCT = +1.5    # daily % rise = risk-off signal
+# ── DXY Scoring thresholds ────────────────────────────────────────────────────
+# Stronger dollar (higher DXY) = weaker remittance value = negative for Nepal
+# Empirically validated: 7-day lag between DXY change and NEPSE impact
+DXY_VERY_STRONG = 108.0  # above = strong signal: capital outflow risk (-2)
+DXY_STRONG      = 105.0  # above = moderate signal: outflow pressure (-1)
+DXY_WEAK        = 102.0  # below = positive signal: inflow risk (+1)
+DXY_VERY_WEAK   = 100.0  # below = strong positive signal: strong inflows (+2)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -147,11 +75,11 @@ GOLD_SURGE_PCT = +1.5    # daily % rise = risk-off signal
 
 def _fetch_ticker(ticker: str) -> Optional[dict]:
     """
-    Fetch latest price and change% for one Yahoo Finance ticker.
+    Fetch latest price and change% for DXY only.
 
     Returns:
         {
-          "price":      float  — latest price
+          "price":      float  — latest DXY price
           "change_pct": float  — % change from previous close
           "prev_close": float  — previous close price
         }
@@ -177,8 +105,8 @@ def _fetch_ticker(ticker: str) -> Optional[dict]:
             change_pct = ((price - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
 
             log.info(
-                "%-12s price=%8.2f  chg=%+.2f%%",
-                ticker, price, change_pct
+                "DXY price=%8.2f  chg=%+.2f%% (7-day lag to NEPSE)",
+                price, change_pct
             )
             return {
                 "price":      round(price, 2),
@@ -188,262 +116,139 @@ def _fetch_ticker(ticker: str) -> Optional[dict]:
 
         except Exception as exc:
             log.warning(
-                "Fetch %s failed (attempt %d): %s",
-                ticker, attempt + 1, exc
+                "Fetch DXY failed (attempt %d): %s",
+                attempt + 1, exc
             )
 
-    log.error("All retries failed for %s", ticker)
+    log.error("All retries failed for DXY")
     return None
 
 
 def _fetch_all() -> dict:
     """
-    Fetch all 5 global market signals.
+    Fetch DXY signal only.
 
-    Returns dict with keys: crude, vix, nifty, dxy, gold
-    Each value is a price dict or None if fetch failed.
+    Returns dict with key: dxy
+    Value is a price dict or None if fetch failed.
     """
-    log.info("Fetching global market data...")
+    log.info("Fetching DXY (validated signal only)...")
     results = {}
     for name, ticker in TICKERS.items():
         results[name] = _fetch_ticker(ticker)
-
-    # Log summary
-    fetched  = sum(1 for v in results.values() if v is not None)
-    failed   = sum(1 for v in results.values() if v is None)
-    log.info("Fetched %d/5 signals (%d failed)", fetched, failed)
 
     return results
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 2 — FALLBACK TO LAST KNOWN VALUES
-# ──────────────────────────────────────────────────────────────────────────────
-# If yfinance fails for some signals, use the last values from Neon.
-# System never crashes — neutral defaults if nothing available.
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _get_fallback() -> dict:
     """
-    Read last known geo values from Neon geopolitical_data table.
-    Used when yfinance fails for specific tickers.
-    Returns empty dict if no previous data.
+    Read last known DXY value from Neon geopolitical_data table.
+    Used when yfinance fails for DXY.
     """
     try:
         latest = get_latest_geo()
-        if not latest:
-            return {}
-        return {
-            "crude": {
-                "price":      float(latest.get("crude_price", 0) or 0),
-                "change_pct": float(latest.get("crude_change_pct", 0) or 0),
-            },
-            "vix":   {"price": float(latest.get("vix", 0) or 0),   "change_pct": 0.0},
-            "nifty": {
-                "price":      float(latest.get("nifty", 0) or 0),
-                "change_pct": float(latest.get("nifty_change_pct", 0) or 0),
-            },
-            "dxy":   {"price": float(latest.get("dxy", 0) or 0),   "change_pct": 0.0},
-            "gold":  {"price": float(latest.get("gold_price", 0) or 0), "change_pct": 0.0},
-        }
+        if latest:
+            return {
+                "dxy": {
+                    "price":      float(latest.get("dxy", 0)),
+                    "change_pct": 0.0,  # Use last close, not change
+                    "prev_close": float(latest.get("dxy", 0)),
+                }
+            }
     except Exception as exc:
-        log.warning("Could not read fallback from Neon: %s", exc)
-        return {}
+        log.warning("Fallback read failed: %s", exc)
+
+    return {}
 
 
 def _merge_with_fallback(fetched: dict, fallback: dict) -> dict:
     """
-    For any signal that failed to fetch, use the fallback value.
-    If no fallback either, use 0 — neutral contribution to score.
+    Merge fetched data with fallback values.
+    Prioritize fetched; use fallback only if fetch failed.
     """
-    merged = {}
-    for key in TICKERS:
+    result = {}
+    for key in TICKERS.keys():
         if fetched.get(key) is not None:
-            merged[key] = fetched[key]
-        elif fallback.get(key):
-            merged[key] = fallback[key]
-            log.info("Using fallback for %s: %.2f", key, fallback[key].get("price", 0))
+            result[key] = fetched[key]
+        elif fallback.get(key) is not None:
+            result[key] = fallback[key]
+            log.info("Using fallback for %s", key)
         else:
-            merged[key] = {"price": 0.0, "change_pct": 0.0, "prev_close": 0.0}
-            log.warning("No data for %s — using 0 (neutral)", key)
-    return merged
+            result[key] = {"price": 0, "change_pct": 0, "prev_close": 0}
+
+    return result
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 3 — COMPUTE GEO SCORE
-# ──────────────────────────────────────────────────────────────────────────────
-# Each signal contributes -2 to +2.
-# Final score clamped to -5 .. +5.
+# SECTION 3 — SCORING FUNCTIONS
 # ══════════════════════════════════════════════════════════════════════════════
-
-def _score_crude(price: float, change_pct: float) -> tuple[int, str]:
-    """
-    Crude Oil scoring.
-    High crude = expensive imports = bad for Nepal.
-    """
-    if price <= 0:
-        return 0, ""
-
-    if price < CRUDE_LOW:
-        score = +2
-        detail = f"Crude low at ${price:.1f} — cheap imports, positive"
-    elif price < CRUDE_HIGH:
-        score = +1 if change_pct <= 0 else 0
-        detail = f"Crude ${price:.1f} ({change_pct:+.1f}%) — moderate"
-    elif price < CRUDE_VERY_HIGH:
-        score = -1
-        detail = f"Crude elevated at ${price:.1f} — import cost pressure"
-    else:
-        score = -2
-        detail = f"Crude very high at ${price:.1f} — significant cost pressure"
-
-    return score, detail
-
-
-def _score_vix(vix: float) -> tuple[int, str]:
-    """
-    VIX scoring.
-    High VIX = global fear = FII outflows from emerging markets including Nepal.
-    """
-    if vix <= 0:
-        return 0, ""
-
-    if vix < VIX_LOW:
-        return +2, f"VIX {vix:.1f} — calm markets, risk-on globally"
-    elif vix < VIX_ELEVATED:
-        return +1, f"VIX {vix:.1f} — low volatility, positive"
-    elif vix < VIX_HIGH:
-        return 0,  f"VIX {vix:.1f} — elevated, neutral"
-    elif vix < VIX_VERY_HIGH:
-        return -1, f"VIX {vix:.1f} — fear rising, caution"
-    else:
-        return -2, f"VIX {vix:.1f} — high fear, risk-off globally"
-
-
-def _score_nifty(change_pct: float) -> tuple[int, str]:
-    """
-    Nifty 50 change % scoring.
-    Nifty and NEPSE are highly correlated — India sentiment drives Nepal.
-    """
-    if change_pct >= NIFTY_STRONG:
-        return +2, f"Nifty +{change_pct:.1f}% — strong India rally, positive for NEPSE"
-    elif change_pct >= NIFTY_BULL:
-        return +1, f"Nifty +{change_pct:.1f}% — India up, positive signal"
-    elif change_pct > NIFTY_BEAR:
-        return 0,  f"Nifty {change_pct:+.1f}% — flat India day, neutral"
-    elif change_pct > NIFTY_CRASH:
-        return -1, f"Nifty {change_pct:.1f}% — India down, negative signal"
-    else:
-        return -2, f"Nifty {change_pct:.1f}% — India significant fall, negative for NEPSE"
-
 
 def _score_dxy(price: float) -> tuple[int, str]:
     """
-    DXY scoring.
-    Strong dollar = remittance worth less in NPR = negative liquidity for Nepal.
-    """
-    if price <= 0:
-        return 0, ""
+    Score DXY signal.
 
+    DXY is the ONLY validated signal for NEPSE (ρ=-0.1708, 7-day lag).
+    Strong dollar → weaker remittance flows → capital outflow pressure.
+
+    Returns:
+        (score: int -2 to +2, description: str)
+    """
     if price >= DXY_VERY_STRONG:
-        return -2, f"DXY {price:.1f} — very strong dollar, remittance pressure"
+        return -2, f"DXY {price:.1f} — very strong USD, significant remittance pressure (-2)"
     elif price >= DXY_STRONG:
-        return -1, f"DXY {price:.1f} — strong dollar, mild NPR pressure"
+        return -1, f"DXY {price:.1f} — strong USD, moderate outflow risk (-1)"
+    elif price <= DXY_VERY_WEAK:
+        return +2, f"DXY {price:.1f} — weak USD, strong inflow potential (+2)"
+    elif price <= DXY_WEAK:
+        return +1, f"DXY {price:.1f} — weak USD, positive inflow signal (+1)"
     else:
-        return +1, f"DXY {price:.1f} — dollar moderate, remittance stable"
-
-
-def _score_gold(change_pct: float) -> tuple[int, str]:
-    """
-    Gold change % scoring.
-    Rising gold = risk-off globally = negative for equity markets.
-    """
-    if change_pct >= GOLD_SURGE_PCT:
-        return -1, f"Gold +{change_pct:.1f}% — safe haven demand, risk-off"
-    elif change_pct <= -GOLD_SURGE_PCT:
-        return +1, f"Gold {change_pct:.1f}% — risk appetite returning"
-    else:
-        return 0, f"Gold {change_pct:+.1f}% — stable, neutral"
+        return 0, f"DXY {price:.1f} — neutral USD range (0)"
 
 
 def compute_geo_score(data: dict) -> tuple[int, str, str]:
     """
-    Compute geo_score from all 5 signals.
+    Compute geo_score from DXY signal only.
 
-    Returns:
-        (score: int, status: str, key_event: str)
+    Score breakdown (simplified):
+      DXY: -2 to +2
+      ──────────────
+      Range: -2 to +2 (clamped to -5..+5 for consistency)
 
-    Score breakdown:
-      Crude oil    : -2 to +2
-      VIX          : -2 to +2
-      Nifty        : -2 to +2
-      DXY          : -2 to +1
-      Gold         : -1 to +1
-      ───────────────────────
-      Range        : -5 to +5 (clamped)
+    Note: VIX, Crude, Nifty, Gold removed (ρ<0.07, noise).
     """
     score   = 0
     details = []
 
-    crude = data.get("crude", {})
-    vix   = data.get("vix",   {})
-    nifty = data.get("nifty", {})
-    dxy   = data.get("dxy",   {})
-    gold  = data.get("gold",  {})
-
-    s, d = _score_crude(crude.get("price", 0), crude.get("change_pct", 0))
-    score += s
-    if d: details.append(d)
-
-    s, d = _score_vix(vix.get("price", 0))
-    score += s
-    if d: details.append(d)
-
-    s, d = _score_nifty(nifty.get("change_pct", 0))
-    score += s
-    if d: details.append(d)
+    dxy = data.get("dxy", {})
 
     s, d = _score_dxy(dxy.get("price", 0))
     score += s
-    if d: details.append(d)
+    if d:
+        details.append(d)
 
-    s, d = _score_gold(gold.get("change_pct", 0))
-    score += s
-    if d: details.append(d)
-
-    # Clamp to -5 .. +5
+    # Clamp to -5 .. +5 (for schema consistency, but actual range is -2..+2)
     score = max(-5, min(5, score))
 
     # Status label
-    if score >= 3:
+    if score >= 2:
         status = "BULLISH"
     elif score >= 1:
         status = "POSITIVE"
     elif score >= -1:
         status = "NEUTRAL"
-    elif score >= -3:
+    elif score >= -2:
         status = "BEARISH"
     else:
         status = "CRISIS"
 
-    # Key event — most significant signal
-    nifty_chg = nifty.get("change_pct", 0)
-    vix_val   = vix.get("price", 0)
-    crude_val = crude.get("price", 0)
-
-    if vix_val >= VIX_VERY_HIGH:
-        key_event = f"VIX at {vix_val:.1f} — extreme fear, risk-off globally"
-    elif abs(nifty_chg) >= abs(NIFTY_STRONG):
-        key_event = f"Nifty {nifty_chg:+.1f}% — strong India move"
-    elif crude_val >= CRUDE_VERY_HIGH:
-        key_event = f"Crude at ${crude_val:.1f} — high energy cost pressure"
-    elif details:
-        key_event = details[0]
-    else:
-        key_event = "Global markets — routine conditions"
+    # Key event
+    key_event = details[0] if details else "DXY neutral"
 
     log.info(
-        "Geo score: %+d | Status: %s | Key event: %s",
+        "Geo score: %+d | Status: %s | Key event: %s | (DXY only, 7-day lag)",
         score, status, key_event
     )
 
@@ -451,25 +256,7 @@ def compute_geo_score(data: dict) -> tuple[int, str, str]:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 4 — VIX LEVEL LABEL
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _vix_level(vix: float) -> str:
-    """Human-readable VIX level label."""
-    if vix < VIX_LOW:
-        return "CALM"
-    elif vix < VIX_ELEVATED:
-        return "LOW"
-    elif vix < VIX_HIGH:
-        return "ELEVATED"
-    elif vix < VIX_VERY_HIGH:
-        return "HIGH"
-    else:
-        return "EXTREME"
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# SECTION 5 — MAIN RUNNER
+# SECTION 4 — MAIN RUNNER
 # ══════════════════════════════════════════════════════════════════════════════
 
 def run() -> bool:
@@ -477,10 +264,10 @@ def run() -> bool:
     Main entry point. Called by trading.yml every 6 minutes.
 
     Flow:
-      1. Fetch 5 global signals via yfinance
-      2. Merge with fallback values if any failed
+      1. Fetch DXY via yfinance
+      2. Merge with fallback if fetch failed
       3. Compute geo_score
-      4. Write snapshot to geopolitical_data table
+      4. Write snapshot to geopolitical_data table (all columns for backward compat)
 
     Returns True on success, False on failure.
     """
@@ -498,23 +285,21 @@ def run() -> bool:
     geo_score, status, key_event = compute_geo_score(data)
 
     # ── Build snapshot ────────────────────────────────────────────────────────
-    crude = data.get("crude", {})
-    vix   = data.get("vix",   {})
-    nifty = data.get("nifty", {})
-    dxy   = data.get("dxy",   {})
-    gold  = data.get("gold",  {})
+    dxy = data.get("dxy", {})
 
+    # Keep all columns for backward compatibility with geopolitical_data schema
+    # but only DXY has actual data; others are empty/fallback
     snapshot = {
         "date":             nst_now.strftime("%Y-%m-%d"),
         "time":             nst_now.strftime("%H:%M"),
-        "crude_price":      str(crude.get("price", "")),
-        "crude_change_pct": str(crude.get("change_pct", "")),
-        "vix":              str(vix.get("price", "")),
-        "vix_level":        _vix_level(vix.get("price", 0)),
-        "nifty":            str(nifty.get("price", "")),
-        "nifty_change_pct": str(nifty.get("change_pct", "")),
-        "dxy":              str(dxy.get("price", "")),
-        "gold_price":       str(gold.get("price", "")),
+        "crude_price":      "",  # REMOVED (noise)
+        "crude_change_pct": "",  # REMOVED (noise)
+        "vix":              "",  # REMOVED (noise)
+        "vix_level":        "",  # REMOVED (noise)
+        "nifty":            "",  # REMOVED (noise)
+        "nifty_change_pct": "",  # REMOVED (noise)
+        "dxy":              str(dxy.get("price", "")),  # KEPT (validated signal)
+        "gold_price":       "",  # REMOVED (noise)
         "geo_score":        str(geo_score),
         "status":           status,
         "key_event":        key_event,
@@ -526,13 +311,9 @@ def run() -> bool:
 
     if success:
         log.info("✅ Geo snapshot written successfully")
-        log.info("   Score:  %+d", geo_score)
+        log.info("   Score:  %+d (DXY only)", geo_score)
         log.info("   Status: %s",  status)
-        log.info("   Crude:  $%.1f (%+.1f%%)", crude.get("price", 0), crude.get("change_pct", 0))
-        log.info("   VIX:    %.1f (%s)",        vix.get("price", 0),  _vix_level(vix.get("price", 0)))
-        log.info("   Nifty:  %+.2f%%",          nifty.get("change_pct", 0))
-        log.info("   DXY:    %.1f",             dxy.get("price", 0))
-        log.info("   Gold:   $%.1f (%+.1f%%)",  gold.get("price", 0), gold.get("change_pct", 0))
+        log.info("   DXY:    %.1f (7-day lag to NEPSE)", dxy.get("price", 0))
     else:
         log.error("❌ Failed to write geo snapshot to Neon")
 
@@ -548,6 +329,9 @@ def get_latest_geo_score() -> int:
     Returns latest geo_score as integer.
     Called by filter_engine.py and gemini_filter.py.
     Returns 0 (neutral) if no data available.
+    
+    NOTE: Score now represents DXY signal only (range -2 to +2).
+          Interpretation: DXY is primary capital flow indicator for NEPSE.
     """
     try:
         latest = get_latest_geo()
@@ -575,7 +359,7 @@ if __name__ == "__main__":
 
     if arg == "score":
         score = get_latest_geo_score()
-        print(f"\n  Latest geo_score: {score:+d}\n")
+        print(f"\n  Latest geo_score: {score:+d} (DXY signal only)\n")
         sys.exit(0)
 
     success = run()
@@ -585,17 +369,20 @@ if __name__ == "__main__":
         if latest:
             print(f"\n{'='*50}")
             print(f"  GEO SENTIMENT SUMMARY")
+            print(f"  (DXY Only — Validated Signal)")
             print(f"{'='*50}")
             print(f"  Date:       {latest.get('date')} {latest.get('time')}")
             print(f"  Geo Score:  {int(latest.get('geo_score', 0)):>+3}")
             print(f"  Status:     {latest.get('status')}")
             print(f"  Key Event:  {latest.get('key_event')}")
-            print(f"  Crude:      ${latest.get('crude_price')} ({latest.get('crude_change_pct')}%)")
-            print(f"  VIX:        {latest.get('vix')} [{latest.get('vix_level')}]")
-            print(f"  Nifty:      {latest.get('nifty_change_pct')}%")
-            print(f"  DXY:        {latest.get('dxy')}")
-            print(f"  Gold:       ${latest.get('gold_price')}")
+            print(f"  DXY:        {latest.get('dxy')} (7-day lag)")
             print(f"{'='*50}\n")
+            print(f"  REMOVED (noise):")
+            print(f"    VIX (ρ=-0.0606)")
+            print(f"    Crude Oil (ρ=+0.0617)")
+            print(f"    Nifty50 (ρ=+0.0693)")
+            print(f"    Gold (ρ=-0.0428)")
+            print(f"\n  Token savings: ~150 tokens/call vs previous version\n")
         sys.exit(0)
     else:
         sys.exit(1)

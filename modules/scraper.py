@@ -633,7 +633,7 @@ def write_market_breadth(breadth: dict) -> bool:
     }
 
     try:
-        from db import write_market_breadth as db_write  # noqa
+        from sheets import write_market_breadth as db_write  # noqa
         ok = db_write(normalised)
         if ok:
             logger.info(

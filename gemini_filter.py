@@ -73,6 +73,7 @@ class GeminiFlag:
     A stock flagged by Gemini Flash for Claude deep analysis.
     Contains Gemini's reasoning and urgency assessment.
     """
+  
     symbol:          str
     sector:          str        = ""
     ltp:             float      = 0.0
@@ -86,11 +87,14 @@ class GeminiFlag:
     rsi_14:          float      = 0.0
     macd_cross:      str        = ""
     bb_signal:       str        = ""
+    obv_trend:       str        = ""
+    ema_trend:       str        = "" 
     best_candle:     str        = ""
     candle_tier:     int        = 0
     suggested_hold:  int        = 17
     geo_combined:    int        = 0
     market_state:    str        = ""
+    market_log_id:   int         = None
 
     timestamp: str = field(default_factory=lambda:
                     datetime.now(tz=NST).strftime("%Y-%m-%d %H:%M:%S"))
@@ -261,7 +265,7 @@ CANDLE=pattern CSTAR=C*signal HOLD=optimal_days SIG=primary_signal
 SCREENING RULES (apply in order)
 ═══════════════════════════════════════
 1. Don't skip if symbol is already in open positions
-2. don't provide recommendations if the shares/scripts belongs to mutual fund or debentures category
+2. Filter out if the stock's sector belongs to mutual fund or debentures
 2. SKIP if symbol already analyzed today (avoid duplicate flags)
 3. SKIP if market_state is BEAR and signal is not MACD or BB
    (paper: only MACD/BB profitable in bear markets)
@@ -295,6 +299,7 @@ Return ONLY this JSON — no markdown, no explanation, no extra text:
       "action": "ANALYZE",
       "urgency": "NORMAL or HIGH or URGENT",
       "reason": "one sentence — why this stock is worth deep analysis",
+      
       "risk": "one sentence — key risk to watch",
       "primary_signal": "MACD or BB or SMA or OBV_MOMENTUM"
     }}
@@ -493,6 +498,8 @@ def _assemble_flags(
             primary_signal  = str(f.get("primary_signal", c.primary_signal)),
             composite_score = c.composite_score,
             tech_score      = c.tech_score,
+            obv_trend       = c.obv_trend,
+            ema_trend       = c.ema_trend,
             rsi_14          = c.rsi_14,
             macd_cross      = c.macd_cross,
             bb_signal       = c.bb_signal,
@@ -517,34 +524,53 @@ def _write_log(
 ) -> None:
     """
     Write Gemini screening run to market_log table for audit trail.
-    One row per flagged stock.
+    One row per flagged stock. Reuses existing row if already written today.
     """
     try:
-        from sheets import write_row
+        from sheets import write_row, run_raw_sql
         nst_now = datetime.now(tz=NST)
 
         for flag in flags:
+            # Check if row already exists for this symbol today
+            existing = run_raw_sql(
+                "SELECT id FROM market_log WHERE symbol=%s AND date=%s ORDER BY id DESC LIMIT 1",
+                (flag.symbol, nst_now.strftime("%Y-%m-%d"))
+            )
+            if existing:
+                flag.market_log_id = existing[0]["id"]
+                logger.debug("%s: market_log row already exists (id=%s) — reusing", flag.symbol, flag.market_log_id)
+                continue  # skip insert — Claude will update this row
+
+            # New row — write it
             write_row("market_log", {
-                "date":       nst_now.strftime("%Y-%m-%d"),
-                "time":       nst_now.strftime("%H:%M:%S"),
-                "symbol":     flag.symbol,
-                "sector":     flag.sector,
-                "action":     f"GEMINI_FLAG_{flag.urgency}",
-                "confidence": str(int(flag.composite_score)),
-                "entry_price": str(flag.ltp),
-                "reasoning":  (
+                "date":           nst_now.strftime("%Y-%m-%d"),
+                "time":           nst_now.strftime("%H:%M:%S"),
+                "symbol":         flag.symbol,
+                "sector":         flag.sector,
+                "action":         f"GEMINI_FLAG_{flag.urgency}",
+                "confidence":     str(int(flag.composite_score)),
+                "entry_price":    str(flag.ltp),
+                "reasoning":      (
                     f"[Gemini] {flag.gemini_reason} | "
                     f"Risk: {flag.gemini_risk} | "
                     f"Signal: {flag.primary_signal}"
                 ),
-                "outcome":    "PENDING_CLAUDE",
-                "geo_score":  str(flag.geo_combined),
-                "rsi_14":     str(flag.rsi_14),
+                "outcome":        "PENDING_CLAUDE",
+                "geo_score":      str(flag.geo_combined),
+                "rsi_14":         str(flag.rsi_14),
                 "candle_pattern": flag.best_candle,
-                "timestamp":  flag.timestamp,
+                "timestamp":      flag.timestamp,
             })
 
-        # Log skipped stocks at DEBUG level only (no DB write needed)
+            # Fetch the id of the row just inserted
+            rows = run_raw_sql(
+                "SELECT id FROM market_log WHERE symbol=%s AND date=%s ORDER BY id DESC LIMIT 1",
+                (flag.symbol, nst_now.strftime("%Y-%m-%d"))
+            )
+            flag.market_log_id = rows[0]["id"] if rows else None
+            logger.debug("%s: market_log row written (id=%s)", flag.symbol, flag.market_log_id)
+
+        # Log skipped stocks at DEBUG level only
         skipped = gemini_result.get("skipped", [])
         if skipped:
             logger.debug("Gemini skipped: %s",
@@ -556,7 +582,6 @@ def _write_log(
 
     except Exception as exc:
         logger.warning("_write_log failed: %s", exc)
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 8 — MAIN RUNNER
