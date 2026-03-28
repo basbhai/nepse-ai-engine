@@ -887,3 +887,14 @@ model fd_rate_summary {
   @@index([fetch_date])
 }
 
+
+model international_prices {
+  id            serial
+  date          DateTime @db.Date
+  variable_name String   @db.VarChar(20)
+  close_price   Float?   @db.Decimal
+  source        String?  @default("yfinance") @db.VarChar(50)
+
+  @@index([date, variable_name])
+ 
+}

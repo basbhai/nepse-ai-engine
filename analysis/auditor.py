@@ -5,13 +5,13 @@ EOD WIN/LOSS marking + causal attribution engine.
 Runs at 3:15 PM NST (via eod.yml GitHub Actions).
 
 Responsibilities:
-  1. Scan portfolio table for OPEN positions with exit signals
-  2. Compute all delta fields (geo_delta, nepal_delta, nepse_return_pct, alpha_vs_nepse)
-  3. Call _attribute_loss() for every closed trade → stamp loss_cause
-  4. Write complete trade record to trade_journal (immutable — never updated)
-  5. Update financials KPI table (win_rate, avg_return, streak counters)
-  6. Update market_log outcomes
-  7. Send EOD Telegram summary
+1. Scan portfolio table for OPEN positions with exit signals
+2. Compute all delta fields (geo_delta, nepal_delta, nepse_return_pct, alpha_vs_nepse)
+3. Call _attribute_loss() for every closed trade → stamp loss_cause
+4. Write complete trade record to trade_journal (immutable — never updated)
+5. Update financials KPI table (win_rate, avg_return, streak counters)
+6. Update market_log outcomes
+7. Send EOD Telegram summary
 
 Import rule: from sheets import ... — NEVER from db import ...
 """
@@ -84,7 +84,7 @@ def _attribute_loss(
 
     # 3. MACRO_DETERIORATION
     macro_deteriorated = (geo_delta <= GEO_DELTA_MACRO_THRESHOLD or
-                          nepal_delta <= NEPAL_DELTA_MACRO_THRESHOLD)
+                        nepal_delta <= NEPAL_DELTA_MACRO_THRESHOLD)
     alpha_near_zero = abs(alpha_vs_nepse) <= ALPHA_NEAR_ZERO_BAND
     if macro_deteriorated and alpha_near_zero:
         return "MACRO_DETERIORATION"
@@ -95,7 +95,7 @@ def _attribute_loss(
 
     # 5. SIGNAL_FAILURE
     macro_stable  = (geo_delta > GEO_DELTA_MACRO_THRESHOLD and
-                     nepal_delta > NEPAL_DELTA_MACRO_THRESHOLD)
+                    nepal_delta > NEPAL_DELTA_MACRO_THRESHOLD)
     nepse_stable  = nepse_return_pct > NEPSE_SELLOFF_THRESHOLD
     alpha_bad     = alpha_vs_nepse <= ALPHA_FAILURE_THRESHOLD
     if macro_stable and nepse_stable and alpha_bad:
@@ -159,9 +159,9 @@ def _compute_deltas(position: dict, geo_exit: float, nepal_exit: float) -> dict:
     except Exception as e:
         log.error("Delta computation failed: %s", e)
         return {k: 0.0 for k in ["geo_delta","nepal_delta","combined_geo_delta",
-                                   "nepse_return_pct","alpha_vs_nepse",
-                                   "geo_score_exit","nepal_score_exit",
-                                   "nepse_index_exit","return_pct"]}
+                                "nepse_return_pct","alpha_vs_nepse",
+                                "geo_score_exit","nepal_score_exit",
+                                "nepse_index_exit","return_pct"]}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -266,7 +266,7 @@ def _write_trade_journal(position: dict, deltas: dict, exit_context: dict) -> Op
 
         trade_id = write_row("trade_journal", row)
         log.info("trade_journal written — %s | %s | return=%.2f%% | NPR %.0f | cause=%s",
-                 symbol, result, return_pct, pnl_npr, loss_cause)
+                symbol, result, return_pct, pnl_npr, loss_cause)
         return trade_id
 
     except Exception as e:
@@ -419,13 +419,13 @@ def _update_financials_kpis():
         now = _today()
         kpis = [
             ("overall_win_rate_pct", str(win_rate),  "65.0", "55.0",
-             "ALERT" if win_rate < 55 else "ACTIVE"),
+            "ALERT" if win_rate < 55 else "ACTIVE"),
             ("total_trades",         str(total),      "30",   None,   "ACTIVE"),
             ("wins_total",           str(wins),       None,   None,   "ACTIVE"),
             ("losses_total",         str(losses),     None,   None,   "ACTIVE"),
             ("current_win_streak",   str(win_streak), None,   None,   "ACTIVE"),
             ("current_loss_streak",  str(loss_streak),"7",    "7",
-             "ALERT" if loss_streak >= 7 else "ACTIVE"),
+            "ALERT" if loss_streak >= 7 else "ACTIVE"),
             ("avg_return_pct",       str(avg_ret),    None,   None,   "ACTIVE"),
             ("avg_pnl_npr",          str(avg_pnl),    None,   None,   "ACTIVE"),
             ("total_pnl_npr",        str(total_pnl),  None,   None,   "ACTIVE"),
@@ -443,7 +443,7 @@ def _update_financials_kpis():
             })
 
         log.info("KPIs — trades=%d | win_rate=%.1f%% | pnl=NPR %.0f | loss_streak=%d",
-                 total, win_rate, total_pnl, loss_streak)
+                total, win_rate, total_pnl, loss_streak)
 
         # Circuit breaker
         if loss_streak >= 7:
@@ -509,56 +509,46 @@ def _update_market_state() -> str:
         sma200 = sum(closes[-sma_period:]) / sma_period
         pct_from_sma = ((nepse_today - sma200) / sma200) * 100
 
+   
         # ------------------------------------------------------------------
-        # 2. Load breadth data – find the most recent row with date ≤ today's NEPSE date
+        # 2. Load breadth data - pick most recent <= NEPSE date
         # ------------------------------------------------------------------
-        latest_nepse_date = rows[-1].get("date")
-        if not latest_nepse_date:
-            log.warning("No date in latest NEPSE row, cannot align breadth.")
-            return get_setting("MARKET_STATE", "SIDEWAYS")
+       
+        # if not latest_nepse_date:
+        #     log.warning("No date in latest NEPSE row...")
+        #     return get_setting("MARKET_STATE", "SIDEWAYS")
 
         breadth_rows = sorted(
-            [r for r in read_tab("market_breadth") if r.get("advancing") and r.get("declining")],
+            [r for r in read_tab("market_breadth") 
+             if r.get("date") 
+             and str(r.get("advancing", "")).strip() 
+             and str(r.get("declining", "")).strip()],
             key=lambda x: x.get("date", ""),
             reverse=True
         )
+        latest_nepse_date = breadth_rows[0].get('date')
 
-        adv_ratio = 0.5      # neutral default
-        use_breadth = False
-
-        # Find the first breadth row with date <= latest NEPSE date
         recent_breadth = None
         for br in breadth_rows:
-            br_date = br.get("date")
+            br_date = str(br.get("date", "")).strip()
             if br_date and br_date <= latest_nepse_date:
                 recent_breadth = br
+                log.info("Selected breadth date: %s (NEPSE date: %s)", br_date, latest_nepse_date)
                 break
 
-        if recent_breadth:
-            try:
-                # Clean and convert advancing/declining
-                adv_str = str(recent_breadth.get("advancing", "0")).replace(",", "").strip()
-                dec_str = str(recent_breadth.get("declining", "0")).replace(",", "").strip()
-                adv = float(adv_str) if adv_str else 0.0
-                dec = float(dec_str) if dec_str else 0.0
-                adv = max(0.0, adv)   # clamp negative values to 0
-                dec = max(0.0, dec)
-
-                total = adv + dec
-                if total > 0:
-                    adv_ratio = adv / total
-                    use_breadth = True
-                    log.info("MARKET_STATE: breadth adv_ratio=%.2f (date=%s)",
-                             adv_ratio, recent_breadth.get("date"))
-                else:
-                    log.warning("Breadth total is zero (adv=%.2f, dec=%.2f). Using neutral ratio 0.5.", adv, dec)
-            except (ValueError, TypeError) as e:
-                log.warning("Failed to parse breadth values: %s. Using neutral ratio.", e)
+        if not recent_breadth:
+            log.warning("No matching breadth row found")
+            adv_ratio = 0.5
         else:
-            log.warning("No breadth data found with date <= %s. Using last known market state.",
-                        latest_nepse_date)
-            # Fall back to previously stored state without updating
-            return get_setting("MARKET_STATE", "SIDEWAYS")
+            try:
+                adv = float(str(recent_breadth.get("advancing", "0")).replace(",", "").strip())
+                dec = float(str(recent_breadth.get("declining", "0")).replace(",", "").strip())
+                total = adv + dec
+                adv_ratio = adv / total if total > 0 else 0.5
+                log.info("MARKET_STATE: breadth adv_ratio=%.2f (date=%s)", adv_ratio, recent_breadth.get("date"))
+            except Exception as e:
+                log.warning("Breadth parse failed: %s", e)
+                adv_ratio = 0.5
 
         # ------------------------------------------------------------------
         # 3. Decision tree (only if we have recent breadth)
@@ -577,7 +567,7 @@ def _update_market_state() -> str:
             state = "SIDEWAYS"
 
         log.info("MARKET_STATE: NEPSE=%.1f | SMA%d=%.1f | pct=%.2f%% | adv_ratio=%.2f → %s",
-                 nepse_today, sma_period, sma200, pct_from_sma, adv_ratio, state)
+                nepse_today, sma_period, sma200, pct_from_sma, adv_ratio, state)
 
         # ------------------------------------------------------------------
         # 4. Persist results (two separate upserts, no transaction)
@@ -586,7 +576,7 @@ def _update_market_state() -> str:
             "key":          "MARKET_STATE",
             "value":        state,
             "description":  (f"Auto: NEPSE={nepse_today:.1f} SMA{sma_period}={sma200:.1f} "
-                             f"pct={pct_from_sma:+.2f}% adv={adv_ratio:.2f}"),
+                            f"pct={pct_from_sma:+.2f}% adv={adv_ratio:.2f}"),
             "last_updated": _today(),
             "set_by":       "auditor.py",
         }, ["key"])
@@ -604,6 +594,7 @@ def _update_market_state() -> str:
         # Catch‑all for truly unexpected errors, but log the full traceback
         log.exception("_update_market_state failed: %s", e)
         return get_setting("MARKET_STATE", "SIDEWAYS")
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 8. EOD TELEGRAM
 # ─────────────────────────────────────────────────────────────────────────────
@@ -639,7 +630,7 @@ def _build_eod_summary(closed_trades: list, open_positions: list) -> str:
         tot = [r for r in read_tab("financials") if r.get("kpi_name") == "total_trades"]
         if fin and tot:
             lines.append(f"*Win rate: {fin[0].get('current_value')}% "
-                         f"({tot[0].get('current_value')} trades)*")
+                        f"({tot[0].get('current_value')} trades)*")
     except Exception:
         pass
 
@@ -779,14 +770,14 @@ def run_eod_audit(dry_run: bool = False) -> dict:
             deltas = _compute_deltas(position, geo_score, nepal_score)
 
             log.info("%s: Close — %s | return=%.2f%% | geo_d=%.2f | nepal_d=%.2f | alpha=%.2f%%",
-                     symbol, exit_context["exit_reason"],
-                     deltas["return_pct"], deltas["geo_delta"],
-                     deltas["nepal_delta"], deltas["alpha_vs_nepse"])
+                    symbol, exit_context["exit_reason"],
+                    deltas["return_pct"], deltas["geo_delta"],
+                    deltas["nepal_delta"], deltas["alpha_vs_nepse"])
 
             if not dry_run:
                 
                 trade_id = _write_trade_journal(position, deltas, exit_context)
-                 
+                
 
                 final_pnl = _compute_pnl_npr(
                     float(position.get("entry_price") or 0), current_price,
@@ -849,7 +840,7 @@ def run_eod_audit(dry_run: bool = False) -> dict:
             log.warning("Telegram failed: %s", e)
 
     log.info("EOD done — closed=%d | held=%d | errors=%d",
-             summary["closed"], summary["held"], summary["errors"])
+            summary["closed"], summary["held"], summary["errors"])
     return summary
 
 
@@ -902,7 +893,7 @@ if __name__ == "__main__":
             print(f"\nLast 5 trades:")
             for t in recent:
                 print(f"  {t.get('symbol')} | {t.get('result')} | "
-                      f"{t.get('return_pct')}% | cause={t.get('loss_cause')}")
+                    f"{t.get('return_pct')}% | cause={t.get('loss_cause')}")
         except Exception as e:
             print(f"Status check failed: {e}")
 

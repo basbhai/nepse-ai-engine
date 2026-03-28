@@ -182,10 +182,8 @@ def _load_geo_context() -> dict:
             "combined":       int(geo.get("geo_score", 0) or 0) + int(pulse.get("nepal_score", 0) or 0),
             "geo_status":     geo.get("status",        "NEUTRAL"),
             "nepal_status":   pulse.get("nepal_status", "NEUTRAL"),
-            "vix":            geo.get("vix",           "?"),
-            "vix_level":      geo.get("vix_level",     "?"),
-            "nifty_chg":      geo.get("nifty_change_pct", "?"),
-            "crude":          geo.get("crude_price",   "?"),
+            "dxy":            geo.get("dxy",           "?"),
+
             "bandh":          pulse.get("bandh_today", "NO"),
             "ipo_drain":      pulse.get("ipo_fpo_active", "NO"),
             "crisis":         pulse.get("crisis_detected", "NO"),
@@ -479,10 +477,8 @@ MARKET CONTEXT
 Geo Score:       {geo.get('geo_score', 0):+d}/5  ({geo.get('geo_status', '?')})
 Nepal Score:     {geo.get('nepal_score', 0):+d}/5  ({geo.get('nepal_status', '?')})
 Combined:        {geo.get('combined', 0):+d}/10
-VIX:             {geo.get('vix', '?')} [{geo.get('vix_level', '?')}]
-Nifty Change:    {geo.get('nifty_chg', '?')}%
-Crude:           ${geo.get('crude', '?')}
 Bandh Today:     {geo.get('bandh', 'NO')}
+DIY:             {geo.get('dxy','99')}
 IPO Drain:       {geo.get('ipo_drain', 'NO')}
 Key Geo Event:   {geo.get('key_geo_event', 'None')}
 Key Nepal Event: {geo.get('key_nepal_event', 'None')}

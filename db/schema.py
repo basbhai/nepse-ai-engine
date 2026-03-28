@@ -35,6 +35,7 @@ TABS: dict[str, str] = {
     "macro_stat_results": "macro_stat_results",
     "fd_rates": "fd_rates",
     "fd_rate_summary": "fd_rate_summary",
+    "international_prices": "international_prices",
 }
 
 TABLE_DDL: dict[str, str] = {
@@ -892,6 +893,19 @@ TABLE_DDL: dict[str, str] = {
     CREATE INDEX IF NOT EXISTS ix_fd_rate_summary_fetch_date
         ON "fd_rate_summary" (fetch_date);
     """,
+
+    "international_prices": """
+    CREATE TABLE IF NOT EXISTS "international_prices" (
+        id TEXT,
+        date TEXT,
+        variable_name TEXT,
+        close_price TEXT,
+        source TEXT DEFAULT 'yfinance',
+        inserted_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS ix_international_prices_date_variable_name
+        ON "international_prices" (date, variable_name);
+    """,
 }
 
 TABLE_COLUMNS: dict[str, list[str]] = {
@@ -925,4 +939,5 @@ TABLE_COLUMNS: dict[str, list[str]] = {
     "macro_stat_results": ["variable", "variable_label", "lag_months", "spearman_rho", "p_value", "p_corrected", "significant", "effect_size", "n_pairs", "rho_3m_forward", "p_3m_forward", "n_pairs_3m", "n_total_tests", "alpha_corrected", "run_date", "notes"],
     "fd_rates": ["fetch_date", "institute_code", "institute_name", "product_name", "interest_rate", "interest_pct", "tenure_label", "tenure_months", "tenure_category", "minimum_balance", "institute_type", "source"],
     "fd_rate_summary": ["fetch_date", "avg_rate_pct", "max_rate_pct", "min_rate_pct", "best_bank_name", "best_bank_rate", "best_tenure", "rate_vs_prev_pct", "rate_direction", "fd_score_signal", "total_products"],
+    "international_prices": ["id", "date", "variable_name", "close_price", "source"],
 }
