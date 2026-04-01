@@ -576,12 +576,12 @@ def _load_candle_signals(symbols: list[str], date: str) -> dict[str, list]:
     candles: dict[str, list] = {sym: [] for sym in symbols}
     try:
         from sheets import run_raw_sql
-        rows = run_raw_sql(
+        rows = run_raw_sql(# AND signal IN ('BULLISH', 'NEUTRAL')
             """
             SELECT symbol, pattern_name, signal, tier, confidence, volume_confirmed
             FROM candle_signals
             WHERE date = %s
-              AND signal IN ('BULLISH', 'NEUTRAL')
+             
             ORDER BY symbol, tier::int ASC, confidence::int DESC
             """,
             (date,)
@@ -596,6 +596,8 @@ def _load_candle_signals(symbols: list[str], date: str) -> dict[str, list]:
                     "confidence":       int(r.get("confidence", 0) or 0),
                     "volume_confirmed": str(r.get("volume_confirmed", "false")).lower() == "true",
                 })
+            # print(r)
+        
         logger.info("Candle signals loaded: %d symbols on %s", len(symbols), date)
     except Exception as exc:
         logger.warning("_load_candle_signals failed: %s", exc)

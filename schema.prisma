@@ -714,7 +714,23 @@ model backtest_results {
   confidence          Text
   date_run            Text
   notes               Text
-}
+
+  sim_mode          Text   // constrained | free
+  period_start      Text
+  period_end        Text
+  total_trades      Text
+  wins              Text
+  losses            Text
+  win_rate_pct      Text
+  profit_factor     Text
+  annual_ret_pct    Text
+  total_pnl_npr     Text
+  total_fees_npr    Text
+  sharpe_ratio      Text
+  max_drawdown_pct  Text
+  alpha_vs_nepse    Text
+  signal_breakdown  Text 
+  }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CAPITAL MANAGEMENT
@@ -897,4 +913,27 @@ model international_prices {
 
   @@index([date, variable_name])
  
+}
+
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Share_sectors
+// ─────────────────────────────────────────────────────────────────────────────
+
+model share_sectors {
+  id            Serial
+  externalid     Int      @unique
+  companyname    String
+  symbol         String
+  securityname   String
+  status         String?
+  companyemail   String?
+  website        String?
+  sectorname     String
+  regulatorybody String
+  instrumenttype String
+
+
+  @@map("share_sectors")
 }
