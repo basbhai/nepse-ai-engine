@@ -36,6 +36,7 @@ TABS: dict[str, str] = {
     "fd_rates": "fd_rates",
     "fd_rate_summary": "fd_rate_summary",
     "international_prices": "international_prices",
+    "share_sectors": "share_sectors",
 }
 
 TABLE_DDL: dict[str, str] = {
@@ -700,6 +701,21 @@ TABLE_DDL: dict[str, str] = {
         confidence TEXT,
         date_run TEXT,
         notes TEXT,
+        sim_mode TEXT,
+        period_start TEXT,
+        period_end TEXT,
+        total_trades TEXT,
+        wins TEXT,
+        losses TEXT,
+        win_rate_pct TEXT,
+        profit_factor TEXT,
+        annual_ret_pct TEXT,
+        total_pnl_npr TEXT,
+        total_fees_npr TEXT,
+        sharpe_ratio TEXT,
+        max_drawdown_pct TEXT,
+        alpha_vs_nepse TEXT,
+        signal_breakdown TEXT,
         inserted_at TIMESTAMPTZ DEFAULT NOW()
     );
     """,
@@ -906,6 +922,24 @@ TABLE_DDL: dict[str, str] = {
     CREATE INDEX IF NOT EXISTS ix_international_prices_date_variable_name
         ON "international_prices" (date, variable_name);
     """,
+
+    "share_sectors": """
+    CREATE TABLE IF NOT EXISTS "share_sectors" (
+        id SERIAL PRIMARY KEY,
+        externalid TEXT,
+        companyname TEXT,
+        symbol TEXT,
+        securityname TEXT,
+        status TEXT,
+        companyemail TEXT,
+        website TEXT,
+        sectorname TEXT,
+        regulatorybody TEXT,
+        instrumenttype TEXT,
+        inserted_at TIMESTAMPTZ DEFAULT NOW(),
+        CONSTRAINT ux_share_sectors_externalid UNIQUE (externalid)
+    );
+    """,
 }
 
 TABLE_COLUMNS: dict[str, list[str]] = {
@@ -929,7 +963,7 @@ TABLE_COLUMNS: dict[str, list[str]] = {
     "trade_journal": ["created_at", "symbol", "sector", "paper_mode", "entry_date", "entry_price", "shares", "allocation_npr", "primary_signal", "secondary_signal", "candle_pattern", "confidence_at_entry", "rsi_entry", "macd_hist_entry", "bb_signal_entry", "ema_trend_entry", "obv_trend_entry", "conf_score_entry", "volume_ratio_entry", "atr_pct_entry", "market_state_entry", "geo_score_entry", "nepal_score_entry", "combined_geo_entry", "nepse_index_entry", "stop_loss_planned", "target_planned", "hold_days_planned", "exit_date", "exit_price", "exit_reason", "market_state_exit", "geo_score_exit", "nepal_score_exit", "combined_geo_exit", "nepse_index_exit", "hold_days_actual", "return_pct", "pnl_npr", "result", "geo_delta", "nepal_delta", "combined_geo_delta", "nepse_return_pct", "alpha_vs_nepse", "loss_cause", "lesson_ids"],
     "learning_hub": ["created_at", "lesson_type", "source", "symbol", "sector", "applies_to", "condition", "finding", "action", "trade_count", "win_count", "loss_count", "win_rate", "avg_return_pct", "avg_pnl_npr", "confidence_level", "loss_cause_primary", "geo_delta_avg", "nepal_delta_avg", "alpha_vs_nepse_avg", "active", "superseded_by", "last_validated", "validation_count", "trade_journal_ids"],
     "news_sentiment": ["date", "overall_score", "banking_score", "hydro_score", "insurance_score", "microfinance_score", "top_positive_news", "top_negative_news", "key_stock_mentions", "source_count", "timestamp"],
-    "backtest_results": ["test_name", "parameter_tested", "optimal_value", "win_rate_at_optimal", "sample_size", "confidence", "date_run", "notes"],
+    "backtest_results": ["test_name", "parameter_tested", "optimal_value", "win_rate_at_optimal", "sample_size", "confidence", "date_run", "notes", "sim_mode", "period_start", "period_end", "total_trades", "wins", "losses", "win_rate_pct", "profit_factor", "annual_ret_pct", "total_pnl_npr", "total_fees_npr", "sharpe_ratio", "max_drawdown_pct", "alpha_vs_nepse", "signal_breakdown"],
     "capital_allocation": ["date", "market_state", "nepse_vs_200dma", "stocks_pct", "fd_pct", "savings_pct", "od_pct", "fd_rate_used", "expected_return", "reasoning", "review_date", "status"],
     "financial_advisor": ["date", "recommendation_type", "market_phase", "confidence_pct", "capital_in_stocks_pct", "capital_in_fd_pct", "capital_in_savings_pct", "capital_in_od_pct", "three_month_outlook", "expected_return_pct", "fd_rate_used", "trigger_to_change", "review_date", "actual_outcome", "was_forecast_correct"],
     "financials": ["kpi_name", "current_value", "target_value", "alert_level", "status", "last_updated", "notes"],
@@ -940,4 +974,5 @@ TABLE_COLUMNS: dict[str, list[str]] = {
     "fd_rates": ["fetch_date", "institute_code", "institute_name", "product_name", "interest_rate", "interest_pct", "tenure_label", "tenure_months", "tenure_category", "minimum_balance", "institute_type", "source"],
     "fd_rate_summary": ["fetch_date", "avg_rate_pct", "max_rate_pct", "min_rate_pct", "best_bank_name", "best_bank_rate", "best_tenure", "rate_vs_prev_pct", "rate_direction", "fd_score_signal", "total_products"],
     "international_prices": ["id", "date", "variable_name", "close_price", "source"],
+    "share_sectors": ["externalid", "companyname", "symbol", "securityname", "status", "companyemail", "website", "sectorname", "regulatorybody", "instrumenttype"],
 }
