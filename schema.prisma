@@ -937,3 +937,82 @@ model share_sectors {
 
   @@map("share_sectors")
 }
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PAPER TRADING — add these 3 models to the END of schema.prisma
+// Then run: python -m db.codegen  →  python -m db.migrations
+// ─────────────────────────────────────────────────────────────────────────────
+
+model paper_portfolio {
+  id              Serial
+  symbol          Text!
+  status          Text   @default("OPEN")   // OPEN | CLOSED
+
+  // Position state — updated on every buy / average / partial sell
+  total_shares    Text                       // stored as numeric string
+  wacc            Text                       // WACC includes all buy fees
+  total_cost      Text                       // wacc * total_shares
+
+  // Entry tracking
+  first_buy_date  Text
+  last_buy_date   Text
+  buy_count       Text   @default("1")       // number of times averaged in
+
+  // Exit tracking (filled on close)
+  exit_date       Text
+  exit_price      Text
+  exit_shares     Text
+  gross_pnl       Text                       // exit gross - cost basis
+  sell_fees       Text
+  cgt_paid        Text                       // 7.5% on profit only
+  net_pnl         Text                       // after fees + CGT
+  result          Text                       // WIN | LOSS | BREAKEVEN
+
+  created_at      Text
+  updated_at      Text
+
+  @@index([symbol])
+  @@index([status])
+}
+
+model paper_trade_log {
+  id             Serial
+  symbol         Text!
+  action         Text!          // BUY | SELL
+  shares         Text
+  price          Text
+  gross_amount   Text
+  brokerage      Text
+  sebon          Text
+  dp_fee         Text
+  cgt            Text           // 0 for BUY, computed for SELL
+  total_fees     Text
+  net_amount     Text           // negative for BUY (money out), positive for SELL (money in)
+  capital_before Text
+  capital_after  Text
+  wacc_before    Text
+  wacc_after     Text
+  note           Text
+  created_at     Text
+
+  @@index([symbol])
+  @@index([action])
+  @@index([created_at])
+}
+
+model paper_capital {
+  id                  Serial
+  capital_id          Text!  @unique   // always "1" — single row
+  starting_capital    Text             // NPR 100000 — never changes
+  current_capital     Text             // available cash
+  total_realised_pnl  Text             // cumulative net P&L after CGT
+  total_fees_paid     Text
+  total_cgt_paid      Text
+  total_trades        Text             // closed trades count
+  total_wins          Text
+  total_losses        Text
+  last_updated        Text
+
+  @@index([capital_id])
+}

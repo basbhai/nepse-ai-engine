@@ -1,393 +1,596 @@
 """
-telegram_bot.py
-───────────────
-Nepal stock market journal bot — paper & live trading via Telegram.
+modules/telegram_bot.py
+───────────────────────
+Nepal paper trading journal bot via Telegram.
+
+Architecture rules (project-wide):
+  - from sheets import ...        ← all DB reads/writes
+  - from db.connection import _db ← ONLY for multi-table atomic transactions
+  - Never raw psycopg2 outside _db()
+
+Paper trading tables (add to schema.prisma, run codegen + migrations):
+  paper_portfolio   — open/closed positions with WACC averaging
+  paper_capital     — single row (id=1) capital state
+  paper_trade_log   — immutable log of every BUY/SELL event
 
 Commands
 ────────
-Trading:
-  /buy  SYMBOL SHARES PRICE   — open position (natural language OK)
-  /sell SYMBOL PRICE          — close position
-  /cancel                     — cancel any pending confirmation
+  /buy  SYMBOL SHARES PRICE   — open or average into position
+  /sell SYMBOL SHARES PRICE   — close or partial sell
+  /cancel                     — cancel pending confirmation
+  /status                     — open positions
+  /pnl                        — closed trades + win rate
+  /capital                    — paper capital state
+  /signal                     — latest AI signals from market_log
+  /mode                       — PAPER or LIVE mode
+  /pause  /resume             — circuit breaker
+  /reset                      — ⚠ wipe paper tables, restart NPR 1,00,000
+  /help
 
-Status:
-  /status                     — open positions + unrealised P&L
-  /pnl                        — closed trades, win rate, fees paid
-  /mode                       — show PAPER or LIVE mode
-  /signal                     — latest market_log recommendations
+Natural language works: "bought nabil 10 at 380", "sell nabil 20 at 400"
+Gemini parses and corrects input — typos and mixed language handled.
 
-Control:
-  /pause                      — activate circuit breaker
-  /resume                     — deactivate circuit breaker
-  /help                       — show all commands
+Market gate: /buy and /sell are blocked outside NEPSE trading hours
+  (Sun–Thu 10:45 AM – 3:00 PM NST, non-holiday days only).
+  Uses calendar_guard.is_open() + get_status() for reason + next open time.
 
-Auto-alerts (push):
-  • Daily EOD summary at 3:15 PM NST
-  • BUY signal detected by claude_analyst
-
-Architecture:
-  • OpenRouter (free model) parses & corrects messy input
-  • Always confirms before writing to DB
-  • Writes to: portfolio, trade_journal
-  • Reads from:  portfolio, trade_journal, market_log
-  • Never touches: learning_hub (owned by auditor.py + ChatGPT)
-
-ENV vars required:
-  TELEGRAM_BOT_TOKEN
-  TELEGRAM_CHAT_ID          — your personal chat id for push alerts
-  DATABASE_URL              — Neon PostgreSQL connection string
-  OPENROUTER_API_KEY
-  PAPER_MODE                — "true" or "false"
-  CIRCUIT_BREAKER           — "false" by default, bot can flip to "true"
+ENV vars:
+  TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, DATABASE_URL,
+  GEMINI_API_KEY, GEMINI_MODEL, PAPER_MODE
 """
 
 import os
 import json
-import asyncio
 import logging
-import httpx
-from datetime import datetime, date, timedelta
+from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
+from datetime import datetime, date
 from zoneinfo import ZoneInfo
-from decimal import Decimal, ROUND_HALF_UP
-from AI.gemini import ask_ai_text
+from typing import Optional
 
-import psycopg2
-from psycopg2.extras import RealDictCursor
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram import Update, ReplyKeyboardRemove
 from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
-    ConversationHandler,
+    Application, CommandHandler, MessageHandler,
+    ContextTypes, filters, ConversationHandler,
 )
+
+from sheets import (
+    read_tab, read_tab_where, write_row, upsert_row,
+    update_row, run_raw_sql, get_setting,
+)
+from db.connection import _db
+from calendar_guard import is_open as market_is_open, get_status as market_status
 
 # ─── Logging ────────────────────────────────────────────────────────────────
-logging.basicConfig(
-    format="%(asctime)s | %(levelname)s | %(message)s",
-    level=logging.INFO,
-)
+logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s",
+                    level=logging.INFO)
 log = logging.getLogger(__name__)
 
 # ─── Constants ───────────────────────────────────────────────────────────────
-NST = ZoneInfo("Asia/Kathmandu")
-
-
-# Nepal broker fee structure (approximate — adjust to your broker)
-def _calc_brokerage(amount: float) -> float:
-    """NEPSE tiered brokerage commission."""
-    if amount <= 2_500:
-        return 10.0
-    elif amount <= 50_000:
-        return amount * 0.0036
-    elif amount <= 500_000:
-        return amount * 0.0033
-    elif amount <= 2_000_000:
-        return amount * 0.0031
-    elif amount <= 10_000_000:
-        return amount * 0.0027
-    else:
-        return amount * 0.0024
-
-FEE_BUY_PCT   = Decimal("0.004")    # 0.40% brokerage on buy
-FEE_SELL_PCT  = Decimal("0.004")    # 0.40% brokerage on sell
-SEBON_PCT     = Decimal("0.00015")  # 0.015% SEBON levy
-DP_FEE        = Decimal("25")       # Rs 25 flat DP fee per trade
-
-# OpenRouter — free model (change model slug as needed)
-OPENROUTER_URL   = "https://openrouter.ai/api/v1/chat/completions"
-OPENROUTER_MODEL = "mistralai/mistral-7b-instruct:free"   # free tier
+NST              = ZoneInfo("Asia/Kathmandu")
+STARTING_CAPITAL = Decimal("100000.00")
+MAX_POSITIONS    = 15
+CGT_RATE         = Decimal("0.075")   # 7.5% on profit only
+SEBON_PCT        = Decimal("0.00015") # 0.015%
+DP_FEE           = Decimal("25")      # flat per trade
 
 # Conversation states
-CONFIRM_BUY  = 1
-CONFIRM_SELL = 2
+CONFIRM_BUY   = 1
+CONFIRM_SELL  = 2
+CONFIRM_RESET = 3
 
 # ─── ENV ─────────────────────────────────────────────────────────────────────
-TOKEN        = os.environ["TELEGRAM_BOT_TOKEN"]
-CHAT_ID      = int(os.environ.get("TELEGRAM_CHAT_ID", "0"))
-DATABASE_URL = os.environ["DATABASE_URL"]
-OR_KEY       = os.environ["OPENROUTER_API_KEY"]
-PAPER_MODE   = os.environ.get("PAPER_MODE", "true").lower() == "true"
+TOKEN          = os.environ["TELEGRAM_BOT_TOKEN"]
+CHAT_ID        = int(os.environ.get("TELEGRAM_CHAT_ID", "0"))
+PAPER_MODE     = os.environ.get("PAPER_MODE", "true").lower() == "true"
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GEMINI_MODEL   = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
-# Runtime mutable state (persisted via simple env-style file for restarts)
 _circuit_breaker = os.environ.get("CIRCUIT_BREAKER", "false").lower() == "true"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# DATABASE HELPERS
-# ═══════════════════════════════════════════════════════════════════════════
-
-def get_conn():
-    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
-
-
-def nst_now() -> str:
-    return datetime.now(NST).strftime("%Y-%m-%d %H:%M:%S")
-
-
-def nst_today() -> str:
-    return datetime.now(NST).strftime("%Y-%m-%d")
-
-
-def execute_one(sql: str, params: tuple = ()):
-    """Run INSERT/UPDATE, return nothing."""
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, params)
-        conn.commit()
-
-
-def fetch_all(sql: str, params: tuple = ()) -> list:
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, params)
-            return cur.fetchall()
-
-
-def fetch_one(sql: str, params: tuple = ()):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, params)
-            return cur.fetchone()
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# FEE CALCULATIONS  (Nepal)
-# ═══════════════════════════════════════════════════════════════════════════
-
-def calc_buy_fees(price: Decimal, shares: int) -> Decimal:
-    """Total extra cost on top of share price when buying."""
-    gross = price * shares
-    brokerage = (gross * _calc_brokerage(gross)).quantize(Decimal("0.01"), ROUND_HALF_UP)
-    sebon     = (gross * SEBON_PCT).quantize(Decimal("0.01"), ROUND_HALF_UP)
-    return brokerage + sebon + DP_FEE
-
-
-def calc_sell_fees(price: Decimal, shares: int) -> Decimal:
-    """Total cost deducted from proceeds when selling."""
-    gross = price * shares
-    brokerage = (gross * FEE_SELL_PCT).quantize(Decimal("0.01"), ROUND_HALF_UP)
-    sebon     = (gross * SEBON_PCT).quantize(Decimal("0.01"), ROUND_HALF_UP)
-    return brokerage + sebon + DP_FEE
-
-
-def calc_pnl(entry_price: Decimal, exit_price: Decimal, shares: int) -> dict:
-    """
-    Returns dict with:
-      gross_pnl, buy_fees, sell_fees, total_fees, net_pnl, return_pct
-    """
-    buy_fees  = calc_buy_fees(entry_price, shares)
-    sell_fees = calc_sell_fees(exit_price, shares)
-    gross     = (exit_price - entry_price) * shares
-    net       = gross - buy_fees - sell_fees
-    total_cost = entry_price * shares + buy_fees
-    ret_pct   = (net / total_cost * 100).quantize(Decimal("0.01"), ROUND_HALF_UP)
-    return {
-        "gross_pnl":  float(gross),
-        "buy_fees":   float(buy_fees),
-        "sell_fees":  float(sell_fees),
-        "total_fees": float(buy_fees + sell_fees),
-        "net_pnl":    float(net),
-        "return_pct": float(ret_pct),
-    }
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# OPENROUTER — NLP CORRECTION LAYER
+# GEMINI NLP PARSER
+# Parses natural language → structured trade dict
 # ═══════════════════════════════════════════════════════════════════════════
 
 PARSE_SYSTEM = """
 You are a parser for a Nepal stock market Telegram trading bot.
-The user will send a raw message that is a buy or sell command — possibly with
-typos, mixed Nepali-English, abbreviations, or wrong order.
+The user sends a raw message — a buy or sell command — possibly with
+typos, mixed Nepali-English, abbreviations, or wrong word order.
 
-Your job: extract the fields and return ONLY valid JSON, no markdown, no explanation.
+Extract fields and return ONLY valid JSON. No markdown. No backticks. No explanation.
 
-For BUY commands return:
-{"action":"BUY","symbol":"NABIL","shares":10,"price":1240.0,"error":null}
-
-For SELL commands return:
-{"action":"SELL","symbol":"NABIL","price":1290.0,"error":null}
+For BUY:  {"action":"BUY","symbol":"NABIL","shares":10,"price":380.0,"error":null}
+For SELL: {"action":"SELL","symbol":"NABIL","shares":10,"price":400.0,"error":null}
 
 Rules:
-- symbol: uppercase, 2-8 chars (Nepal stock symbols)
+- symbol: uppercase 2-8 chars. Fix obvious typos: "nabl"→"NABIL", "nbl"→"NABIL"
 - shares: positive integer
-- price: positive float, NPR
-- If you cannot parse confidently, return {"error":"Cannot parse — what did you mean?"}
-- Never guess a price from nothing. If price is missing, set error.
-- Common shorthand: "nabil" → "NABIL", "ten" → 10, "k" = 1000 (e.g. "1.2k" = 1200)
+- price: positive float, NPR per share
+- "k" = ×1000  e.g. "1.2k" = 1200
+- word numbers: "ten"→10, "five"→5, "twenty"→20
+- Missing price → set error. Missing shares → set error. Never guess.
+- If unclear: {"error":"Cannot parse: <reason>"}
 """
 
-
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# PORTFOLIO DB OPERATIONS
-# ═══════════════════════════════════════════════════════════════════════════
-
-def get_open_positions() -> list:
-    return fetch_all(
-        "SELECT * FROM portfolio WHERE status = 'OPEN' ORDER BY entry_date DESC"
-    )
-
-
-def get_open_position(symbol: str):
-    return fetch_one(
-        "SELECT * FROM portfolio WHERE symbol = %s AND status = 'OPEN' LIMIT 1",
-        (symbol.upper(),),
-    )
-
-
-def insert_portfolio(data: dict) -> int:
-    """Insert new open position. Returns new row id."""
-    sql = """
-        INSERT INTO portfolio (
-            symbol, entry_date, entry_price, shares, total_cost,
-            current_price, current_value, pnl_npr, pnl_pct,
-            peak_price, stop_type, stop_level, trail_active,
-            trail_stop, status, exit_date, exit_price, exit_reason
-        ) VALUES (
-            %s, %s, %s, %s, %s,
-            %s, %s, %s, %s,
-            %s, %s, %s, %s,
-            %s, 'OPEN', NULL, NULL, NULL
-        ) RETURNING id
-    """
-    ep    = Decimal(str(data["price"]))
-    sh    = int(data["shares"])
-    fees  = calc_buy_fees(ep, sh)
-    total = ep * sh + fees
-
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, (
-                data["symbol"],
-                nst_today(),
-                str(ep),
-                str(sh),
-                str(total.quantize(Decimal("0.01"))),
-                str(ep),                          # current_price = entry at open
-                str((ep * sh).quantize(Decimal("0.01"))),
-                "0.00",                           # pnl_npr at open
-                "0.00",                           # pnl_pct at open
-                str(ep),                          # peak_price
-                "FIXED",                          # stop_type default
-                str((ep * Decimal("0.95")).quantize(Decimal("0.01"))),  # 5% stop default
-                "false",
-                "0",
-            ))
-            new_id = cur.fetchone()["id"]
-        conn.commit()
-    return new_id
-
-
-def close_portfolio(portfolio_id: int, exit_price: Decimal, exit_reason: str):
-    sql = """
-        UPDATE portfolio
-        SET status      = 'CLOSED',
-            exit_date   = %s,
-            exit_price  = %s,
-            exit_reason = %s
-        WHERE id = %s
-    """
-    execute_one(sql, (nst_today(), str(exit_price), exit_reason, portfolio_id))
-
-
-def insert_trade_journal(data: dict):
-    """Write a closed trade to trade_journal (filled by bot, auditor enriches later)."""
-    sql = """
-        INSERT INTO trade_journal (
-            created_at, symbol, sector, paper_mode,
-            entry_date, entry_price, shares, allocation_npr,
-            primary_signal, secondary_signal, candle_pattern, confidence_at_entry,
-            rsi_entry, macd_hist_entry, bb_signal_entry, ema_trend_entry,
-            obv_trend_entry, conf_score_entry, volume_ratio_entry, atr_pct_entry,
-            market_state_entry, geo_score_entry, nepal_score_entry,
-            combined_geo_entry, nepse_index_entry,
-            stop_loss_planned, target_planned, hold_days_planned,
-            exit_date, exit_price, exit_reason,
-            market_state_exit, geo_score_exit, nepal_score_exit,
-            combined_geo_exit, nepse_index_exit,
-            hold_days_actual, return_pct, pnl_npr, result,
-            geo_delta, nepal_delta, combined_geo_delta,
-            nepse_return_pct, alpha_vs_nepse,
-            loss_cause, lesson_ids
-        ) VALUES (
-            %s,%s,%s,%s,
-            %s,%s,%s,%s,
-            %s,%s,%s,%s,
-            %s,%s,%s,%s,
-            %s,%s,%s,%s,
-            %s,%s,%s,%s,%s,
-            %s,%s,%s,
-            %s,%s,%s,
-            %s,%s,%s,%s,%s,
-            %s,%s,%s,%s,
-            %s,%s,%s,%s,%s,
-            %s,%s
+def parse_trade_command(raw: str) -> dict:
+    """Call Gemini to parse a natural language trade command. Returns dict."""
+    if not GEMINI_API_KEY:
+        return {"error": "GEMINI_API_KEY not set"}
+    try:
+        import google.genai as genai
+        from google.genai import types
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=raw,
+            config=types.GenerateContentConfig(
+                system_instruction=PARSE_SYSTEM,
+                temperature=0.1,
+            ),
         )
-    """
-    p = data
-    execute_one(sql, (
-        nst_now(),
-        p["symbol"], p.get("sector","UNKNOWN"), p["paper_mode"],
-        p["entry_date"], p["entry_price"], p["shares"], p.get("allocation_npr",""),
-        p.get("primary_signal","MANUAL"), p.get("secondary_signal","NONE"),
-        p.get("candle_pattern","NONE"), p.get("confidence_at_entry",""),
-        # technical fields — blank at this stage, auditor enriches
-        "","","","",
-        "","","","",
-        p.get("market_state_entry",""), p.get("geo_score_entry",""),
-        p.get("nepal_score_entry",""), p.get("combined_geo_entry",""),
-        p.get("nepse_index_entry",""),
-        p.get("stop_loss_planned",""), p.get("target_planned",""),
-        p.get("hold_days_planned",""),
-        p["exit_date"], p["exit_price"], p["exit_reason"],
-        # exit context — blank, auditor fills
-        "","","","","",
-        p["hold_days_actual"], p["return_pct"], p["pnl_npr"], p["result"],
-        # deltas — blank, auditor fills
-        "","","","","",
-        p.get("loss_cause",""), "",
-    ))
+        text = response.text.strip().replace("```json", "").replace("```", "").strip()
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return {"error": "AI returned invalid response. Please rephrase."}
+    except Exception as e:
+        log.error("Gemini parse error: %s", e)
+        return {"error": f"AI error: {str(e)[:80]}"}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# HELPERS
+# TIME HELPERS
+# ═══════════════════════════════════════════════════════════════════════════
+
+def nst_now() -> str:
+    return datetime.now(NST).strftime("%Y-%m-%d %H:%M:%S")
+
+def nst_today() -> str:
+    return datetime.now(NST).strftime("%Y-%m-%d")
+
+def hold_days(date_str: str) -> int:
+    try:
+        return (date.today() - date.fromisoformat(date_str)).days
+    except Exception:
+        return 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FEE CALCULATIONS  (Nepal NEPSE)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _brokerage(gross: Decimal) -> Decimal:
+    """NEPSE tiered brokerage commission."""
+    if gross <= Decimal("2500"):
+        return Decimal("10")
+    elif gross <= Decimal("50000"):
+        rate = Decimal("0.0036")
+    elif gross <= Decimal("500000"):
+        rate = Decimal("0.0033")
+    elif gross <= Decimal("2000000"):
+        rate = Decimal("0.0031")
+    elif gross <= Decimal("10000000"):
+        rate = Decimal("0.0027")
+    else:
+        rate = Decimal("0.0024")
+    return (gross * rate).quantize(Decimal("0.01"), ROUND_HALF_UP)
+
+def calc_buy_fees(price: Decimal, shares: Decimal) -> dict:
+    gross      = (price * shares).quantize(Decimal("0.01"), ROUND_HALF_UP)
+    brokerage  = _brokerage(gross)
+    sebon      = (gross * SEBON_PCT).quantize(Decimal("0.01"), ROUND_HALF_UP)
+    total_fees = brokerage + sebon + DP_FEE
+    return {
+        "gross":       gross,
+        "brokerage":   brokerage,
+        "sebon":       sebon,
+        "dp_fee":      DP_FEE,
+        "total_fees":  total_fees,
+        "total_cost":  gross + total_fees,   # what leaves capital
+    }
+
+def calc_sell_fees(price: Decimal, shares: Decimal, wacc: Decimal) -> dict:
+    gross        = (price * shares).quantize(Decimal("0.01"), ROUND_HALF_UP)
+    brokerage    = _brokerage(gross)
+    sebon        = (gross * SEBON_PCT).quantize(Decimal("0.01"), ROUND_HALF_UP)
+    total_fees   = brokerage + sebon + DP_FEE
+    cost_basis   = (wacc * shares).quantize(Decimal("0.01"), ROUND_HALF_UP)
+    gross_profit = gross - cost_basis
+    cgt = (gross_profit * CGT_RATE).quantize(Decimal("0.01"), ROUND_HALF_UP) \
+          if gross_profit > 0 else Decimal("0")
+    net_proceeds = gross - total_fees - cgt
+    net_pnl      = net_proceeds - cost_basis
+    return {
+        "gross":        gross,
+        "brokerage":    brokerage,
+        "sebon":        sebon,
+        "dp_fee":       DP_FEE,
+        "total_fees":   total_fees,
+        "gross_profit": gross_profit,
+        "cgt":          cgt,
+        "net_proceeds": net_proceeds,
+        "net_pnl":      net_pnl,
+        "cost_basis":   cost_basis,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PAPER TABLE READ HELPERS  (via sheets.py)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def get_paper_capital() -> dict:
+    """Return the single paper_capital row (id=1)."""
+    rows = read_tab_where("paper_capital", {"id": "1"})
+    if not rows:
+        _seed_capital_row()
+        rows = read_tab_where("paper_capital", {"id": "1"})
+    return rows[0] if rows else {}
+
+def get_paper_position(symbol: str) -> Optional[dict]:
+    rows = read_tab_where("paper_portfolio", {"symbol": symbol.upper(), "status": "OPEN"})
+    return rows[0] if rows else None
+
+def get_all_open_positions() -> list[dict]:
+    return read_tab_where("paper_portfolio", {"status": "OPEN"},
+                          order_by="id", desc=False)
+
+def count_open_positions() -> int:
+    rows = run_raw_sql(
+        "SELECT COUNT(*) AS cnt FROM paper_portfolio WHERE status = 'OPEN'"
+    )
+    return int(rows[0]["cnt"]) if rows else 0
+
+def _seed_capital_row():
+    """Insert id=1 capital row if missing. Called on first use."""
+    now = nst_now()
+    # Use _db directly — upsert_row needs TABLE_COLUMNS which requires codegen first
+    with _db() as cur:
+        cur.execute("""
+            INSERT INTO paper_capital
+                (id, starting_capital, current_capital, total_realised_pnl,
+                 total_fees_paid, total_cgt_paid, total_trades,
+                 total_wins, total_losses, last_updated)
+            VALUES (1,%s,%s,'0','0','0','0','0','0',%s)
+            ON CONFLICT (id) DO NOTHING
+        """, (str(STARTING_CAPITAL), str(STARTING_CAPITAL), now))
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# RESET HELPER
+# ═══════════════════════════════════════════════════════════════════════════
+
+def reset_paper_tables():
+    """
+    DROP and recreate paper_portfolio, paper_capital, paper_trade_log.
+    Uses _db() directly because schema.prisma manages these tables via migrations —
+    this is a destructive admin operation, not a normal write.
+    """
+    with _db() as cur:
+        cur.execute("DROP TABLE IF EXISTS paper_trade_log")
+        cur.execute("DROP TABLE IF EXISTS paper_portfolio")
+        cur.execute("DROP TABLE IF EXISTS paper_capital")
+        cur.execute("""
+            CREATE TABLE paper_capital (
+                id                  SERIAL PRIMARY KEY,
+                starting_capital    TEXT DEFAULT '100000',
+                current_capital     TEXT DEFAULT '100000',
+                total_realised_pnl  TEXT DEFAULT '0',
+                total_fees_paid     TEXT DEFAULT '0',
+                total_cgt_paid      TEXT DEFAULT '0',
+                total_trades        TEXT DEFAULT '0',
+                total_wins          TEXT DEFAULT '0',
+                total_losses        TEXT DEFAULT '0',
+                last_updated        TEXT
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE paper_portfolio (
+                id              SERIAL PRIMARY KEY,
+                symbol          TEXT NOT NULL,
+                status          TEXT DEFAULT 'OPEN',
+                total_shares    TEXT,
+                wacc            TEXT,
+                total_cost      TEXT,
+                first_buy_date  TEXT,
+                last_buy_date   TEXT,
+                buy_count       TEXT DEFAULT '1',
+                exit_date       TEXT,
+                exit_price      TEXT,
+                exit_shares     TEXT,
+                gross_pnl       TEXT,
+                sell_fees       TEXT,
+                cgt_paid        TEXT,
+                net_pnl         TEXT,
+                result          TEXT,
+                created_at      TEXT,
+                updated_at      TEXT
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE paper_trade_log (
+                id             SERIAL PRIMARY KEY,
+                symbol         TEXT NOT NULL,
+                action         TEXT NOT NULL,
+                shares         TEXT,
+                price          TEXT,
+                gross_amount   TEXT,
+                brokerage      TEXT,
+                sebon          TEXT,
+                dp_fee         TEXT,
+                cgt            TEXT,
+                total_fees     TEXT,
+                net_amount     TEXT,
+                capital_before TEXT,
+                capital_after  TEXT,
+                wacc_before    TEXT,
+                wacc_after     TEXT,
+                note           TEXT,
+                created_at     TEXT
+            )
+        """)
+        # Seed capital row
+        cur.execute("""
+            INSERT INTO paper_capital
+                (id, starting_capital, current_capital, total_realised_pnl,
+                 total_fees_paid, total_cgt_paid, total_trades,
+                 total_wins, total_losses, last_updated)
+            VALUES (1,%s,%s,'0','0','0','0','0','0',%s)
+        """, (str(STARTING_CAPITAL), str(STARTING_CAPITAL), nst_now()))
+    log.info("Paper tables reset. Capital = NPR 100,000.")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ATOMIC BUY TRANSACTION
+# Uses _db() to keep 3-table update in one commit.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def execute_buy(symbol: str, shares: Decimal, price: Decimal) -> dict:
+    """
+    Opens new position or averages into existing.
+    All three table updates (paper_portfolio, paper_capital, paper_trade_log)
+    happen in one _db() transaction — atomic.
+    Raises ValueError on insufficient capital or position limit.
+    """
+    fees      = calc_buy_fees(price, shares)
+    total_out = fees["total_cost"]
+
+    cap       = get_paper_capital()
+    available = Decimal(str(cap.get("current_capital", "0")))
+
+    if total_out > available:
+        raise ValueError(
+            f"Insufficient capital.\n"
+            f"Required:  NPR {total_out:,.2f}\n"
+            f"Available: NPR {available:,.2f}"
+        )
+
+    existing = get_paper_position(symbol)
+    now      = nst_now()
+    today    = nst_today()
+
+    with _db() as cur:
+        if existing:
+            old_shares = Decimal(str(existing["total_shares"]))
+            old_cost   = Decimal(str(existing["total_cost"]))
+            new_shares = old_shares + shares
+            new_cost   = old_cost + total_out
+            new_wacc   = (new_cost / new_shares).quantize(Decimal("0.0001"), ROUND_HALF_UP)
+            old_wacc   = Decimal(str(existing["wacc"]))
+
+            cur.execute("""
+                UPDATE paper_portfolio SET
+                    total_shares  = %s,
+                    wacc          = %s,
+                    total_cost    = %s,
+                    last_buy_date = %s,
+                    buy_count     = (buy_count::int + 1)::text,
+                    updated_at    = %s
+                WHERE id = %s
+            """, (str(new_shares), str(new_wacc), str(new_cost),
+                  today, now, existing["id"]))
+            wacc_after = new_wacc
+        else:
+            if count_open_positions() >= MAX_POSITIONS:
+                raise ValueError(
+                    f"Max {MAX_POSITIONS} open positions reached. Close one first."
+                )
+            new_shares = shares
+            new_cost   = total_out
+            new_wacc   = (total_out / shares).quantize(Decimal("0.0001"), ROUND_HALF_UP)
+            old_wacc   = Decimal("0")
+            wacc_after = new_wacc
+
+            cur.execute("""
+                INSERT INTO paper_portfolio
+                    (symbol, status, total_shares, wacc, total_cost,
+                     first_buy_date, last_buy_date, buy_count, created_at, updated_at)
+                VALUES (%s,'OPEN',%s,%s,%s,%s,%s,'1',%s,%s)
+            """, (symbol, str(new_shares), str(new_wacc), str(new_cost),
+                  today, today, now, now))
+
+        new_capital = available - total_out
+        cur.execute("""
+            UPDATE paper_capital SET
+                current_capital  = %s,
+                total_fees_paid  = (total_fees_paid::numeric + %s)::text,
+                last_updated     = %s
+            WHERE id = 1
+        """, (str(new_capital), str(fees["total_fees"]), now))
+
+        cur.execute("""
+            INSERT INTO paper_trade_log
+                (symbol, action, shares, price, gross_amount,
+                 brokerage, sebon, dp_fee, cgt, total_fees, net_amount,
+                 capital_before, capital_after, wacc_before, wacc_after,
+                 note, created_at)
+            VALUES (%s,'BUY',%s,%s,%s,%s,%s,%s,'0',%s,%s,%s,%s,%s,%s,%s,%s)
+        """, (symbol, str(shares), str(price), str(fees["gross"]),
+              str(fees["brokerage"]), str(fees["sebon"]), str(DP_FEE),
+              str(fees["total_fees"]), str(-total_out),
+              str(available), str(new_capital),
+              str(old_wacc), str(wacc_after),
+              f"BUY {shares:.0f} @ {price}", now))
+
+    return {
+        "symbol":    symbol,
+        "shares":    shares,
+        "price":     price,
+        "fees":      fees,
+        "total_out": total_out,
+        "new_wacc":  wacc_after,
+        "averaged":  existing is not None,
+        "cap_after": new_capital,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ATOMIC SELL TRANSACTION
+# ═══════════════════════════════════════════════════════════════════════════
+
+def execute_sell(symbol: str, shares: Decimal, price: Decimal) -> dict:
+    """
+    Full or partial close. CGT deducted immediately on profit.
+    All three table updates in one _db() transaction — atomic.
+    Raises ValueError if no position or insufficient shares.
+    """
+    pos = get_paper_position(symbol)
+    if not pos:
+        raise ValueError(f"No open position for {symbol}.")
+
+    held = Decimal(str(pos["total_shares"]))
+    if shares > held:
+        raise ValueError(
+            f"You hold {held:.0f} shares of {symbol}. Cannot sell {shares:.0f}."
+        )
+
+    wacc       = Decimal(str(pos["wacc"]))
+    fees       = calc_sell_fees(price, shares, wacc)
+    cap        = get_paper_capital()
+    available  = Decimal(str(cap.get("current_capital", "0")))
+    now        = nst_now()
+    today      = nst_today()
+    remaining  = held - shares
+    result_str = ("WIN" if fees["net_pnl"] > 0
+                  else "LOSS" if fees["net_pnl"] < 0
+                  else "BREAKEVEN")
+
+    with _db() as cur:
+        if remaining <= 0:
+            # Full close
+            cur.execute("""
+                UPDATE paper_portfolio SET
+                    status      = 'CLOSED',
+                    exit_date   = %s,
+                    exit_price  = %s,
+                    exit_shares = %s,
+                    gross_pnl   = %s,
+                    sell_fees   = %s,
+                    cgt_paid    = %s,
+                    net_pnl     = %s,
+                    result      = %s,
+                    updated_at  = %s
+                WHERE id = %s
+            """, (today, str(price), str(shares),
+                  str(fees["gross_profit"]), str(fees["total_fees"]),
+                  str(fees["cgt"]), str(fees["net_pnl"]),
+                  result_str, now, pos["id"]))
+        else:
+            # Partial close — reduce shares, keep WACC
+            new_cost = (wacc * remaining).quantize(Decimal("0.01"), ROUND_HALF_UP)
+            cur.execute("""
+                UPDATE paper_portfolio SET
+                    total_shares = %s,
+                    total_cost   = %s,
+                    updated_at   = %s
+                WHERE id = %s
+            """, (str(remaining), str(new_cost), now, pos["id"]))
+
+        new_capital = available + fees["net_proceeds"]
+        is_win  = fees["net_pnl"] > 0
+        is_loss = fees["net_pnl"] < 0
+
+        cur.execute("""
+            UPDATE paper_capital SET
+                current_capital    = %s,
+                total_realised_pnl = (total_realised_pnl::numeric + %s)::text,
+                total_fees_paid    = (total_fees_paid::numeric + %s)::text,
+                total_cgt_paid     = (total_cgt_paid::numeric + %s)::text,
+                total_trades       = (total_trades::int + 1)::text,
+                total_wins         = (total_wins::int + %s)::text,
+                total_losses       = (total_losses::int + %s)::text,
+                last_updated       = %s
+            WHERE id = 1
+        """, (str(new_capital),
+              str(fees["net_pnl"]),
+              str(fees["total_fees"]),
+              str(fees["cgt"]),
+              1 if is_win else 0,
+              1 if is_loss else 0,
+              now))
+
+        cur.execute("""
+            INSERT INTO paper_trade_log
+                (symbol, action, shares, price, gross_amount,
+                 brokerage, sebon, dp_fee, cgt, total_fees, net_amount,
+                 capital_before, capital_after, wacc_before, wacc_after,
+                 note, created_at)
+            VALUES (%s,'SELL',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """, (symbol, str(shares), str(price), str(fees["gross"]),
+              str(fees["brokerage"]), str(fees["sebon"]), str(DP_FEE),
+              str(fees["cgt"]), str(fees["total_fees"]),
+              str(fees["net_proceeds"]),
+              str(available), str(new_capital),
+              str(wacc), str(wacc),
+              f"SELL {shares:.0f} @ {price} | {result_str}", now))
+
+    return {
+        "symbol":    symbol,
+        "shares":    shares,
+        "price":     price,
+        "wacc":      wacc,
+        "fees":      fees,
+        "result":    result_str,
+        "remaining": remaining,
+        "cap_after": new_capital,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DISPLAY HELPERS
 # ═══════════════════════════════════════════════════════════════════════════
 
 def mode_label() -> str:
     return "📄 PAPER" if PAPER_MODE else "🔴 LIVE"
 
-
 def circuit_label() -> str:
     return "🔴 PAUSED" if _circuit_breaker else "🟢 ACTIVE"
 
+def fmt_npr(val, sign=False) -> str:
+    v = float(val)
+    prefix = ("+" if v >= 0 else "") if sign else ""
+    return f"NPR {prefix}{v:,.2f}"
 
-def calc_unrealised(pos, current_price: float) -> dict:
-    ep = Decimal(str(pos["entry_price"]))
-    cp = Decimal(str(current_price))
-    sh = int(pos["shares"])
-    pnl = calc_pnl(ep, cp, sh)
-    return pnl
+def win_rate_str(cap: dict) -> str:
+    total = int(cap.get("total_trades", "0"))
+    wins  = int(cap.get("total_wins", "0"))
+    if total == 0:
+        return "No trades yet"
+    return f"{wins}/{total} ({wins/total*100:.1f}%)"
 
-
-def hold_days(entry_date_str: str) -> int:
-    try:
-        ed = date.fromisoformat(entry_date_str)
-        return (date.today() - ed).days
-    except Exception:
-        return 0
-
-
-def format_npr(val: float) -> str:
-    prefix = "+" if val >= 0 else ""
-    return f"{prefix}NPR {val:,.2f}"
-
-
-def result_emoji(pnl: float) -> str:
-    return "🟢" if pnl >= 0 else "🔴"
+def market_gate_message() -> Optional[str]:
+    """
+    Returns a human-readable block message if market is closed, else None.
+    Uses calendar_guard.get_status() for reason + next open time.
+    """
+    if market_is_open():
+        return None
+    s = market_status()
+    return (
+        f"🔒 *Market is closed* — trading blocked.\n\n"
+        f"{s['message']}\n\n"
+        f"Next open: *{s['next_open']}*\n"
+        f"Use /status or /capital anytime."
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -395,258 +598,277 @@ def result_emoji(pnl: float) -> str:
 # ═══════════════════════════════════════════════════════════════════════════
 
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    text = (
-        f"*Nepal Stock Bot* | {mode_label()} | {circuit_label()}\n\n"
-        "*Trading*\n"
-        "`/buy SYMBOL SHARES PRICE` — open position\n"
-        "`/sell SYMBOL PRICE` — close position\n"
-        "`/cancel` — cancel pending confirmation\n\n"
-        "*Status*\n"
-        "`/status` — open positions + unrealised P&L\n"
-        "`/pnl` — closed trades summary + win rate\n"
-        "`/signal` — latest claude_analyst signals\n"
-        "`/mode` — current mode\n\n"
+    await update.message.reply_text(
+        f"*Nepal Paper Trading Bot* | {mode_label()} | {circuit_label()}\n\n"
+        "*Trading* _(market hours only: Sun–Thu 10:45AM–3:00PM NST)_\n"
+        "`/buy SYMBOL SHARES PRICE`\n"
+        "`/sell SYMBOL SHARES PRICE`\n"
+        "`/cancel`\n\n"
+        "*Status* _(available anytime)_\n"
+        "`/status` — open positions\n"
+        "`/pnl` — closed trades + win rate\n"
+        "`/capital` — paper capital state\n"
+        "`/signal` — latest AI signals\n\n"
         "*Control*\n"
-        "`/pause` — activate circuit breaker\n"
-        "`/resume` — deactivate circuit breaker\n\n"
-        "_Natural language works too:_\n"
-        "`bought nabil 10 shars at 124O`\n"
-        "`sold nabil at 1290`"
+        "`/pause` `/resume` — circuit breaker\n"
+        "`/reset` ⚠️ — wipe paper data, restart NPR 1,00,000\n\n"
+        "_Natural language works:_\n"
+        "`bought nabil 10 at 380`\n"
+        "`sell nabil 20 at 400`",
+        parse_mode="Markdown",
     )
-    await update.message.reply_text(text, parse_mode="Markdown")
+
+
+async def cmd_capital(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    cap    = get_paper_capital()
+    start  = Decimal(str(cap.get("starting_capital", "100000")))
+    curr   = Decimal(str(cap.get("current_capital", "100000")))
+    pnl    = Decimal(str(cap.get("total_realised_pnl", "0")))
+    fees   = Decimal(str(cap.get("total_fees_paid", "0")))
+    cgt    = Decimal(str(cap.get("total_cgt_paid", "0")))
+    growth = ((curr - start) / start * 100).quantize(Decimal("0.01")) if start else Decimal("0")
+
+    locked_rows = run_raw_sql(
+        "SELECT COALESCE(SUM(total_cost::numeric),0) AS lk FROM paper_portfolio WHERE status='OPEN'"
+    )
+    locked = Decimal(str(locked_rows[0]["lk"])) if locked_rows else Decimal("0")
+
+    await update.message.reply_text(
+        f"*Paper Capital* | {mode_label()}\n\n"
+        f"Starting:      {fmt_npr(start)}\n"
+        f"Current cash:  {fmt_npr(curr)}\n"
+        f"Locked trades: {fmt_npr(locked)}\n\n"
+        f"Realised P&L:  {fmt_npr(pnl, sign=True)}\n"
+        f"Fees paid:     {fmt_npr(fees)}\n"
+        f"CGT paid:      {fmt_npr(cgt)}\n\n"
+        f"Overall growth: {growth:+.2f}%\n"
+        f"Win rate:       {win_rate_str(cap)}\n"
+        f"Total trades:   {cap.get('total_trades','0')}",
+        parse_mode="Markdown",
+    )
+
+
+async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    positions = get_all_open_positions()
+    cap       = get_paper_capital()
+    curr      = Decimal(str(cap.get("current_capital", "0")))
+
+    if not positions:
+        await update.message.reply_text(
+            f"No open positions | {mode_label()}\n"
+            f"Available cash: {fmt_npr(curr)}"
+        )
+        return
+
+    lines = [f"*Open Positions* ({len(positions)}/{MAX_POSITIONS}) | {mode_label()}\n"]
+    for pos in positions:
+        sym    = pos["symbol"]
+        shares = pos.get("total_shares", "0")
+        wacc   = pos.get("wacc", "0")
+        cost   = pos.get("total_cost", "0")
+        days   = hold_days(pos.get("first_buy_date") or nst_today())
+        buys   = pos.get("buy_count", "1")
+        lines.append(
+            f"📌 *{sym}*\n"
+            f"  Shares: {float(shares):.0f} | WACC: {fmt_npr(wacc)}\n"
+            f"  Cost basis: {fmt_npr(cost)} | Held: {days}d | Avg: {buys}×\n"
+        )
+    lines.append(f"\nAvailable cash: {fmt_npr(curr)}")
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+async def cmd_pnl(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    cap    = get_paper_capital()
+    trades = read_tab_where("paper_portfolio", {"status": "CLOSED"},
+                            order_by="id", desc=True, limit=20)
+
+    lines = [
+        f"*Closed Trades* | {mode_label()}\n",
+        f"Win rate:      {win_rate_str(cap)}",
+        f"Realised P&L:  {fmt_npr(cap.get('total_realised_pnl','0'), sign=True)}",
+        f"Total fees:    {fmt_npr(cap.get('total_fees_paid','0'))}",
+        f"Total CGT:     {fmt_npr(cap.get('total_cgt_paid','0'))}\n",
+    ]
+    if not trades:
+        lines.append("No closed trades yet.")
+    else:
+        lines.append("*Recent (last 20):*")
+        for t in trades:
+            em  = "🟢" if t.get("result") == "WIN" else ("🔴" if t.get("result") == "LOSS" else "⚪")
+            pnl = float(t.get("net_pnl") or 0)
+            cgt = float(t.get("cgt_paid") or 0)
+            lines.append(
+                f"{em} *{t['symbol']}* | {t.get('exit_date','?')}\n"
+                f"  {float(t.get('exit_shares') or 0):.0f}sh @ "
+                f"{fmt_npr(t.get('exit_price','0'))} | "
+                f"Net: {fmt_npr(pnl, sign=True)} | CGT: {fmt_npr(cgt)}"
+            )
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+async def cmd_signal(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    signals = read_tab_where("market_log", {"outcome": "PENDING"},
+                             order_by="id", desc=True, limit=5)
+    if not signals:
+        await update.message.reply_text("No pending signals in market_log.")
+        return
+    lines = ["*Latest AI Signals*\n"]
+    for s in signals:
+        em = "🟢" if s.get("action") == "BUY" else ("🔴" if s.get("action") == "AVOID" else "⚪")
+        lines.append(
+            f"{em} *{s['symbol']}* — {s.get('action')} | {s.get('date')}\n"
+            f"  Conf: {s.get('confidence')}% | Entry: {s.get('entry_price')}\n"
+            f"  _{str(s.get('reasoning',''))[:100]}..._\n"
+        )
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
 async def cmd_mode(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        f"{mode_label()} | {circuit_label()}\n\n"
-        f"PAPER_MODE = `{'true' if PAPER_MODE else 'false'}`\n"
-        f"CIRCUIT_BREAKER = `{'true' if _circuit_breaker else 'false'}`",
-        parse_mode="Markdown",
-    )
+    await update.message.reply_text(f"{mode_label()} | {circuit_label()}")
 
 
 async def cmd_pause(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     global _circuit_breaker
     _circuit_breaker = True
     await update.message.reply_text(
-        "🔴 *Circuit breaker ACTIVATED*\n"
-        "No new positions will be opened.\n"
-        "Use /resume to deactivate.",
-        parse_mode="Markdown",
+        "🔴 *Circuit breaker ACTIVATED*\nUse /resume to deactivate.",
+        parse_mode="Markdown"
     )
 
 
 async def cmd_resume(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     global _circuit_breaker
     _circuit_breaker = False
-    await update.message.reply_text(
-        "🟢 *Circuit breaker DEACTIVATED*\n"
-        "System is active.",
-        parse_mode="Markdown",
-    )
-
-
-async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    positions = get_open_positions()
-    if not positions:
-        await update.message.reply_text(
-            f"No open positions. | {mode_label()}"
-        )
-        return
-
-    lines = [f"*Open Positions* | {mode_label()}\n"]
-    for pos in positions:
-        ep  = float(pos["entry_price"])
-        cp  = float(pos.get("current_price") or ep)  # fallback to entry if not updated
-        sh  = int(pos["shares"])
-        pnl = calc_pnl(Decimal(str(ep)), Decimal(str(cp)), sh)
-        days = hold_days(pos["entry_date"] or "")
-        em  = result_emoji(pnl["net_pnl"])
-        lines.append(
-            f"{em} *{pos['symbol']}*\n"
-            f"  Entry: NPR {ep:,.2f} × {sh} shares\n"
-            f"  Current: NPR {cp:,.2f} ({days}d held)\n"
-            f"  Unrealised: {format_npr(pnl['net_pnl'])} ({pnl['return_pct']:+.2f}%)\n"
-            f"  Fees paid: NPR {pnl['buy_fees']:,.2f}\n"
-        )
-    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
-
-
-async def cmd_pnl(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    paper_val = "true" if PAPER_MODE else "false"
-    trades = fetch_all(
-        """
-        SELECT symbol, entry_date, exit_date, entry_price, exit_price,
-               shares, pnl_npr, return_pct, result
-        FROM trade_journal
-        WHERE paper_mode = %s
-        ORDER BY exit_date DESC
-        LIMIT 20
-        """,
-        (paper_val,),
-    )
-    if not trades:
-        await update.message.reply_text(
-            f"No closed trades yet. | {mode_label()}"
-        )
-        return
-
-    wins   = sum(1 for t in trades if t["result"] == "WIN")
-    losses = sum(1 for t in trades if t["result"] == "LOSS")
-    total  = len(trades)
-    win_rate = (wins / total * 100) if total else 0
-    total_pnl = sum(float(t["pnl_npr"] or 0) for t in trades)
-
-    lines = [
-        f"*P&L Summary* | {mode_label()}\n",
-        f"Trades: {total} | Wins: {wins} | Losses: {losses}",
-        f"Win rate: {win_rate:.1f}%",
-        f"Total P&L: {format_npr(total_pnl)}\n",
-        "*Recent trades:*",
-    ]
-    for t in trades[:10]:
-        em  = "🟢" if t["result"] == "WIN" else ("🔴" if t["result"] == "LOSS" else "⚪")
-        pnl = float(t["pnl_npr"] or 0)
-        ret = float(t["return_pct"] or 0)
-        lines.append(
-            f"{em} {t['symbol']} | {t['entry_date']} → {t['exit_date']} | "
-            f"{format_npr(pnl)} ({ret:+.2f}%)"
-        )
-    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
-
-
-async def cmd_signal(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    signals = fetch_all(
-        """
-        SELECT symbol, date, time, action, confidence, entry_price,
-               stop_loss, target, reasoning
-        FROM market_log
-        WHERE outcome = 'PENDING'
-        ORDER BY date DESC, time DESC
-        LIMIT 5
-        """,
-    )
-    if not signals:
-        await update.message.reply_text("No pending signals in market_log.")
-        return
-
-    lines = ["*Latest Signals* (from claude_analyst)\n"]
-    for s in signals:
-        em = "🟢" if s["action"] == "BUY" else ("🔴" if s["action"] == "AVOID" else "⚪")
-        lines.append(
-            f"{em} *{s['symbol']}* — {s['action']} | {s['date']} {s['time']}\n"
-            f"  Confidence: {s['confidence']}%\n"
-            f"  Entry: NPR {s['entry_price']} | SL: {s['stop_loss']} | Target: {s['target']}\n"
-            f"  Reason: {str(s['reasoning'])[:120]}...\n"
-        )
-    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+    await update.message.reply_text("🟢 *Circuit breaker DEACTIVATED*", parse_mode="Markdown")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# BUY FLOW  (with NLP + confirmation)
+# RESET FLOW
+# ═══════════════════════════════════════════════════════════════════════════
+
+async def cmd_reset(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text(
+        "⚠️ *This will DELETE all paper trades and reset capital to NPR 1,00,000.*\n\n"
+        "Type /yes to confirm or /no to cancel.",
+        parse_mode="Markdown"
+    )
+    return CONFIRM_RESET
+
+async def confirm_reset_yes(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    try:
+        reset_paper_tables()
+        await update.message.reply_text(
+            "✅ Paper tables reset.\nCapital: NPR 1,00,000\nAll positions cleared."
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ Reset failed: {e}")
+    return ConversationHandler.END
+
+async def confirm_reset_no(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text("Reset cancelled. Nothing changed.")
+    return ConversationHandler.END
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# BUY FLOW
 # ═══════════════════════════════════════════════════════════════════════════
 
 async def cmd_buy(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if _circuit_breaker:
-        await update.message.reply_text(
-            "🔴 Circuit breaker is ACTIVE. Use /resume first."
-        )
+        await update.message.reply_text("🔴 Circuit breaker ACTIVE. Use /resume first.")
         return ConversationHandler.END
 
-    # Check position limit (max 3)
-    open_pos = get_open_positions()
-    if len(open_pos) >= 3:
-        await update.message.reply_text(
-            f"⚠️ Already at max 3 open positions.\n"
-            f"Close an existing position before opening a new one.\n"
-            f"Use /status to see open positions."
-        )
+    gate = market_gate_message()
+    if gate:
+        await update.message.reply_text(gate, parse_mode="Markdown")
         return ConversationHandler.END
 
-    # Extract text after /buy
-    raw = " ".join(ctx.args) if ctx.args else ""
+    raw = " ".join(ctx.args) if ctx.args else update.message.text.strip()
     if not raw:
         await update.message.reply_text(
-            "Usage: `/buy SYMBOL SHARES PRICE`\n"
-            "Example: `/buy NABIL 10 1240`\n"
-            "Or natural language: `bought nabil ten shares at 1240`",
-            parse_mode="Markdown",
+            "Usage: `/buy SYMBOL SHARES PRICE`\nExample: `/buy NABIL 10 380`",
+            parse_mode="Markdown"
         )
         return ConversationHandler.END
 
-    await update.message.reply_text("⏳ Parsing your command...")
-    parsed = await ask_ai_text(f"BUY: {raw}")
+    await update.message.reply_text("⏳ Parsing...")
+    parsed = parse_trade_command(f"BUY: {raw}")
 
     if parsed.get("error"):
-        await update.message.reply_text(f"❌ {parsed['error']}\nPlease try again.")
+        await update.message.reply_text(f"❌ {parsed['error']}")
         return ConversationHandler.END
-
     if parsed.get("action") != "BUY":
-        await update.message.reply_text(
-            "❌ That didn't look like a BUY. Use /sell for selling."
-        )
+        await update.message.reply_text("❌ That looks like a SELL. Use /sell.")
         return ConversationHandler.END
 
-    symbol = parsed["symbol"].upper()
-    shares = int(parsed["shares"])
-    price  = Decimal(str(parsed["price"]))
-    fees   = calc_buy_fees(price, shares)
-    total  = price * shares + fees
+    try:
+        symbol = parsed["symbol"].upper()
+        shares = Decimal(str(int(parsed["shares"])))
+        price  = Decimal(str(parsed["price"]))
+    except (KeyError, InvalidOperation, ValueError) as e:
+        await update.message.reply_text(f"❌ Parse error: {e}")
+        return ConversationHandler.END
 
-    # Check for existing open position in same symbol
-    existing = get_open_position(symbol)
+    fees      = calc_buy_fees(price, shares)
+    total_out = fees["total_cost"]
+    available = Decimal(str(get_paper_capital().get("current_capital", "0")))
+    existing  = get_paper_position(symbol)
+
+    avg_note = ""
     if existing:
-        await update.message.reply_text(
-            f"⚠️ You already have an open position in *{symbol}*.\n"
-            f"Close it first with `/sell {symbol} <price>`.",
-            parse_mode="Markdown",
+        old_shares = Decimal(str(existing["total_shares"]))
+        old_cost   = Decimal(str(existing["total_cost"]))
+        new_shares = old_shares + shares
+        new_wacc   = ((old_cost + total_out) / new_shares).quantize(Decimal("0.0001"), ROUND_HALF_UP)
+        avg_note   = (
+            f"\n_Averaging: hold {old_shares:.0f}sh @ WACC {fmt_npr(existing['wacc'])}_\n"
+            f"_New WACC after: {fmt_npr(new_wacc)}_"
         )
-        return ConversationHandler.END
 
-    # Store parsed data for confirmation step
     ctx.user_data["pending_buy"] = {
-        "symbol": symbol,
-        "shares": shares,
-        "price":  str(price),
-        "fees":   str(fees),
-        "total":  str(total),
+        "symbol": symbol, "shares": str(shares), "price": str(price)
     }
 
-    confirm_text = (
+    await update.message.reply_text(
         f"*Confirm BUY* | {mode_label()}\n\n"
-        f"Symbol: *{symbol}*\n"
-        f"Shares: *{shares}*\n"
-        f"Price:  NPR *{price:,.2f}*\n"
-        f"────────────────\n"
-        f"Gross:  NPR {(price * shares):,.2f}\n"
-        f"Fees:   NPR {fees:,.2f}\n"
-        f"*Total: NPR {total:,.2f}*\n\n"
-        f"Type /yes to confirm or /no to cancel."
+        f"*{symbol}* | {shares:.0f} shares @ {fmt_npr(price)}\n"
+        f"────────────────────\n"
+        f"Gross:      {fmt_npr(fees['gross'])}\n"
+        f"Brokerage:  {fmt_npr(fees['brokerage'])}\n"
+        f"SEBON:      {fmt_npr(fees['sebon'])}\n"
+        f"DP fee:     {fmt_npr(DP_FEE)}\n"
+        f"Total fees: {fmt_npr(fees['total_fees'])}\n"
+        f"────────────────────\n"
+        f"*Total out: {fmt_npr(total_out)}*\n"
+        f"Available:  {fmt_npr(available)}\n"
+        f"After buy:  {fmt_npr(available - total_out)}"
+        f"{avg_note}\n\n"
+        f"Type /yes to confirm or /no to cancel.",
+        parse_mode="Markdown"
     )
-    await update.message.reply_text(confirm_text, parse_mode="Markdown")
     return CONFIRM_BUY
 
 
 async def confirm_buy_yes(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     pending = ctx.user_data.get("pending_buy")
     if not pending:
-        await update.message.reply_text("No pending BUY. Use /buy to start.")
+        await update.message.reply_text("No pending BUY.")
         return ConversationHandler.END
-
     try:
-        new_id = insert_portfolio(pending)
+        r = execute_buy(pending["symbol"], Decimal(pending["shares"]), Decimal(pending["price"]))
+        avg_txt = "_(averaged)_" if r["averaged"] else "_(new position)_"
         await update.message.reply_text(
-            f"✅ *BUY recorded* | {mode_label()}\n\n"
-            f"*{pending['symbol']}* — {pending['shares']} shares @ NPR {float(pending['price']):,.2f}\n"
-            f"Portfolio ID: `{new_id}`\n\n"
-            f"Use /status to see your open positions.",
-            parse_mode="Markdown",
+            f"✅ *BUY recorded* {avg_txt}\n\n"
+            f"*{r['symbol']}* — {r['shares']:.0f}sh @ {fmt_npr(r['price'])}\n"
+            f"WACC: {fmt_npr(r['new_wacc'])}\n"
+            f"Capital remaining: {fmt_npr(r['cap_after'])}",
+            parse_mode="Markdown"
         )
-        log.info(f"BUY recorded: {pending} | paper={PAPER_MODE}")
+    except ValueError as e:
+        await update.message.reply_text(f"❌ {e}")
     except Exception as e:
-        log.error(f"DB error on BUY: {e}")
+        log.error("BUY error: %s", e)
         await update.message.reply_text(f"❌ DB error: {e}")
-
     ctx.user_data.pop("pending_buy", None)
     return ConversationHandler.END
 
@@ -658,121 +880,110 @@ async def confirm_buy_no(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# SELL FLOW  (with NLP + confirmation)
+# SELL FLOW
 # ═══════════════════════════════════════════════════════════════════════════
 
 async def cmd_sell(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    raw = " ".join(ctx.args) if ctx.args else ""
+    gate = market_gate_message()
+    if gate:
+        await update.message.reply_text(gate, parse_mode="Markdown")
+        return ConversationHandler.END
+
+    raw = " ".join(ctx.args) if ctx.args else update.message.text.strip()
     if not raw:
         await update.message.reply_text(
-            "Usage: `/sell SYMBOL PRICE`\n"
-            "Example: `/sell NABIL 1290`",
-            parse_mode="Markdown",
+            "Usage: `/sell SYMBOL SHARES PRICE`\nExample: `/sell NABIL 20 400`",
+            parse_mode="Markdown"
         )
         return ConversationHandler.END
 
-    await update.message.reply_text("⏳ Parsing your command...")
-    parsed = await ask_ai_text(f"SELL: {raw}")
+    await update.message.reply_text("⏳ Parsing...")
+    parsed = parse_trade_command(f"SELL: {raw}")
 
     if parsed.get("error"):
-        await update.message.reply_text(f"❌ {parsed['error']}\nPlease try again.")
+        await update.message.reply_text(f"❌ {parsed['error']}")
+        return ConversationHandler.END
+    if parsed.get("action") != "SELL":
+        await update.message.reply_text("❌ That looks like a BUY. Use /buy.")
         return ConversationHandler.END
 
-    symbol     = parsed["symbol"].upper()
-    exit_price = Decimal(str(parsed["price"]))
+    try:
+        symbol = parsed["symbol"].upper()
+        shares = Decimal(str(int(parsed["shares"])))
+        price  = Decimal(str(parsed["price"]))
+    except (KeyError, InvalidOperation, ValueError) as e:
+        await update.message.reply_text(f"❌ Parse error: {e}")
+        return ConversationHandler.END
 
-    # Find open position
-    pos = get_open_position(symbol)
+    pos = get_paper_position(symbol)
     if not pos:
         await update.message.reply_text(
-            f"❌ No open position found for *{symbol}*.\n"
-            f"Use /status to see your open positions.",
-            parse_mode="Markdown",
+            f"❌ No open position for *{symbol}*. Use /status.",
+            parse_mode="Markdown"
         )
         return ConversationHandler.END
 
-    ep    = Decimal(str(pos["entry_price"]))
-    sh    = int(pos["shares"])
-    pnl   = calc_pnl(ep, exit_price, sh)
-    days  = hold_days(pos["entry_date"] or "")
-    result_str = "WIN" if pnl["net_pnl"] >= 0 else "LOSS"
+    held = Decimal(str(pos["total_shares"]))
+    if shares > held:
+        await update.message.reply_text(
+            f"❌ You hold {held:.0f} shares of {symbol}. Cannot sell {shares:.0f}."
+        )
+        return ConversationHandler.END
+
+    wacc      = Decimal(str(pos["wacc"]))
+    fees      = calc_sell_fees(price, shares, wacc)
+    remaining = held - shares
+    em        = "🟢" if fees["net_pnl"] > 0 else "🔴"
+    partial   = f"\n_{remaining:.0f} shares remain at WACC {fmt_npr(wacc)}_" if remaining > 0 else ""
 
     ctx.user_data["pending_sell"] = {
-        "portfolio_id": pos["id"],
-        "symbol":       symbol,
-        "entry_price":  str(ep),
-        "exit_price":   str(exit_price),
-        "shares":       sh,
-        "pnl":          pnl,
-        "hold_days":    days,
-        "result":       result_str,
-        "entry_date":   pos["entry_date"],
+        "symbol": symbol, "shares": str(shares), "price": str(price)
     }
 
-    em = result_emoji(pnl["net_pnl"])
-    confirm_text = (
+    await update.message.reply_text(
         f"*Confirm SELL* | {mode_label()}\n\n"
-        f"Symbol: *{symbol}*\n"
-        f"Shares: *{sh}*\n"
-        f"Entry:  NPR {ep:,.2f}\n"
-        f"Exit:   NPR {exit_price:,.2f}\n"
-        f"────────────────\n"
-        f"Held: {days} days\n"
-        f"Gross P&L: {format_npr(pnl['gross_pnl'])}\n"
-        f"Total fees: NPR {pnl['total_fees']:,.2f}\n"
-        f"{em} *Net P&L: {format_npr(pnl['net_pnl'])} ({pnl['return_pct']:+.2f}%)*\n"
-        f"Result: *{result_str}*\n\n"
-        f"Type /yes to confirm or /no to cancel."
+        f"*{symbol}* | {shares:.0f} shares @ {fmt_npr(price)}\n"
+        f"Entry WACC: {fmt_npr(wacc)}\n"
+        f"────────────────────\n"
+        f"Gross sale:  {fmt_npr(fees['gross'])}\n"
+        f"Brokerage:   {fmt_npr(fees['brokerage'])}\n"
+        f"SEBON:       {fmt_npr(fees['sebon'])}\n"
+        f"DP fee:      {fmt_npr(DP_FEE)}\n"
+        f"CGT (7.5%):  {fmt_npr(fees['cgt'])}\n"
+        f"Total fees:  {fmt_npr(fees['total_fees'])}\n"
+        f"────────────────────\n"
+        f"{em} *Net P&L: {fmt_npr(fees['net_pnl'], sign=True)}*\n"
+        f"Proceeds back to capital: {fmt_npr(fees['net_proceeds'])}"
+        f"{partial}\n\n"
+        f"Type /yes to confirm or /no to cancel.",
+        parse_mode="Markdown"
     )
-    await update.message.reply_text(confirm_text, parse_mode="Markdown")
     return CONFIRM_SELL
 
 
 async def confirm_sell_yes(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     pending = ctx.user_data.get("pending_sell")
     if not pending:
-        await update.message.reply_text("No pending SELL. Use /sell to start.")
+        await update.message.reply_text("No pending SELL.")
         return ConversationHandler.END
-
     try:
-        exit_price = Decimal(pending["exit_price"])
-        close_portfolio(pending["portfolio_id"], exit_price, "MANUAL")
-
-        # Write to trade_journal
-        pnl = pending["pnl"]
-        paper_val = "true" if PAPER_MODE else "false"
-        insert_trade_journal({
-            "symbol":       pending["symbol"],
-            "paper_mode":   paper_val,
-            "entry_date":   pending["entry_date"],
-            "entry_price":  pending["entry_price"],
-            "shares":       str(pending["shares"]),
-            "exit_date":    nst_today(),
-            "exit_price":   pending["exit_price"],
-            "exit_reason":  "MANUAL",
-            "hold_days_actual": str(pending["hold_days"]),
-            "return_pct":   str(pnl["return_pct"]),
-            "pnl_npr":      str(round(pnl["net_pnl"], 2)),
-            "result":       pending["result"],
-            # auditor.py will backfill all other fields from market_log context
-        })
-
-        em = result_emoji(pnl["net_pnl"])
+        r  = execute_sell(pending["symbol"], Decimal(pending["shares"]), Decimal(pending["price"]))
+        em = "🟢" if r["result"] == "WIN" else "🔴"
+        partial = f"\n_{r['remaining']:.0f} shares still open_" if r["remaining"] > 0 else ""
         await update.message.reply_text(
-            f"✅ *SELL recorded* | {mode_label()}\n\n"
-            f"{em} *{pending['symbol']}* closed\n"
-            f"Net P&L: {format_npr(pnl['net_pnl'])} ({pnl['return_pct']:+.2f}%)\n"
-            f"Result: *{pending['result']}*\n\n"
-            f"trade_journal updated ✓\n"
-            f"auditor.py will enrich with full context at EOD.",
-            parse_mode="Markdown",
+            f"✅ *SELL recorded*\n\n"
+            f"{em} *{r['symbol']}* — {r['result']}\n"
+            f"Net P&L:   {fmt_npr(r['fees']['net_pnl'], sign=True)}\n"
+            f"CGT paid:  {fmt_npr(r['fees']['cgt'])}\n"
+            f"Capital now: {fmt_npr(r['cap_after'])}"
+            f"{partial}",
+            parse_mode="Markdown"
         )
-        log.info(f"SELL recorded: {pending['symbol']} | pnl={pnl['net_pnl']} | paper={PAPER_MODE}")
-
+    except ValueError as e:
+        await update.message.reply_text(f"❌ {e}")
     except Exception as e:
-        log.error(f"DB error on SELL: {e}")
+        log.error("SELL error: %s", e)
         await update.message.reply_text(f"❌ DB error: {e}")
-
     ctx.user_data.pop("pending_sell", None)
     return ConversationHandler.END
 
@@ -786,98 +997,47 @@ async def confirm_sell_no(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
 async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     ctx.user_data.pop("pending_buy", None)
     ctx.user_data.pop("pending_sell", None)
-    await update.message.reply_text(
-        "❌ Cancelled. No changes made.",
-        reply_markup=ReplyKeyboardRemove(),
-    )
+    await update.message.reply_text("❌ Cancelled.", reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# NATURAL LANGUAGE FALLBACK
-# (catches "bought nabil ten shares at 1240" without a command prefix)
+# NLP FALLBACK
 # ═══════════════════════════════════════════════════════════════════════════
 
 async def nlp_fallback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip().lower()
-    buy_keywords  = ["buy", "bought", "purchase", "kineko", "kine"]
-    sell_keywords = ["sell", "sold", "becho", "becheko", "close"]
-
-    if any(k in text for k in buy_keywords):
+    buy_kw  = ["buy", "bought", "purchase", "kineko", "kine"]
+    sell_kw = ["sell", "sold", "becho", "becheko"]
+    if any(k in text for k in buy_kw):
         ctx.args = text.split()
         return await cmd_buy(update, ctx)
-    elif any(k in text for k in sell_keywords):
+    elif any(k in text for k in sell_kw):
         ctx.args = text.split()
         return await cmd_sell(update, ctx)
     else:
-        await update.message.reply_text(
-            "I didn't understand that. Use /help to see available commands."
-        )
+        await update.message.reply_text("Use /help to see available commands.")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# PUSH ALERTS  (called externally or via scheduler)
+# PUSH ALERTS  (called externally by claude_analyst)
 # ═══════════════════════════════════════════════════════════════════════════
-
-async def push_eod_summary(app: Application):
-    """
-    Send daily EOD summary at 3:15 PM NST.
-    Call this from a scheduler (APScheduler or cron).
-    """
-    if CHAT_ID == 0:
-        log.warning("TELEGRAM_CHAT_ID not set — cannot push EOD summary.")
-        return
-
-    positions = get_open_positions()
-    paper_val = "true" if PAPER_MODE else "false"
-    today_trades = fetch_all(
-        "SELECT * FROM trade_journal WHERE exit_date = %s AND paper_mode = %s",
-        (nst_today(), paper_val),
-    )
-
-    lines = [
-        f"📊 *EOD Summary* — {nst_today()} | {mode_label()}\n",
-        f"Open positions: {len(positions)}/3",
-    ]
-
-    if today_trades:
-        lines.append(f"\n*Today's closed trades:*")
-        for t in today_trades:
-            em  = "🟢" if t["result"] == "WIN" else "🔴"
-            pnl = float(t["pnl_npr"] or 0)
-            lines.append(f"{em} {t['symbol']} → {format_npr(pnl)}")
-
-    if positions:
-        lines.append(f"\n*Still open:*")
-        for p in positions:
-            days = hold_days(p["entry_date"] or "")
-            lines.append(f"• {p['symbol']} | {days}d | Entry NPR {float(p['entry_price']):,.2f}")
-
-    await app.bot.send_message(
-        chat_id=CHAT_ID,
-        text="\n".join(lines),
-        parse_mode="Markdown",
-    )
-
 
 async def push_buy_signal(app: Application, symbol: str, confidence: int,
                            entry: float, stop: float, target: float, reason: str):
-    """
-    Called by claude_analyst.py (or a watcher script) when a BUY signal fires.
-    """
     if CHAT_ID == 0:
         return
-    text = (
-        f"🚨 *BUY Signal* | {mode_label()}\n\n"
-        f"Symbol: *{symbol}*\n"
-        f"Confidence: {confidence}%\n"
-        f"Entry: NPR {entry:,.2f}\n"
-        f"Stop Loss: NPR {stop:,.2f}\n"
-        f"Target: NPR {target:,.2f}\n\n"
-        f"_{reason[:200]}_\n\n"
-        f"Use `/buy {symbol} <shares> {entry}` to log your trade."
+    await app.bot.send_message(
+        chat_id=CHAT_ID,
+        text=(
+            f"🚨 *BUY Signal* | {mode_label()}\n\n"
+            f"*{symbol}* | Conf: {confidence}%\n"
+            f"Entry: {fmt_npr(entry)} | SL: {fmt_npr(stop)} | Target: {fmt_npr(target)}\n\n"
+            f"_{reason[:200]}_\n\n"
+            f"Use `/buy {symbol} <shares> {entry}` to log."
+        ),
+        parse_mode="Markdown"
     )
-    await app.bot.send_message(chat_id=CHAT_ID, text=text, parse_mode="Markdown")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -885,47 +1045,53 @@ async def push_buy_signal(app: Application, symbol: str, confidence: int,
 # ═══════════════════════════════════════════════════════════════════════════
 
 def main():
-    log.info(f"Starting bot | mode={mode_label()} | circuit={circuit_label()}")
+    # Ensure capital row exists on startup
+    try:
+        _seed_capital_row()
+    except Exception as e:
+        log.warning("Could not seed capital row (tables may not exist yet): %s", e)
 
+    log.info("Starting bot | %s | %s", mode_label(), circuit_label())
     app = Application.builder().token(TOKEN).build()
 
-    # BUY conversation
     buy_conv = ConversationHandler(
         entry_points=[CommandHandler("buy", cmd_buy)],
-        states={
-            CONFIRM_BUY: [
-                CommandHandler("yes", confirm_buy_yes),
-                CommandHandler("no",  confirm_buy_no),
-            ],
-        },
+        states={CONFIRM_BUY: [
+            CommandHandler("yes", confirm_buy_yes),
+            CommandHandler("no",  confirm_buy_no),
+        ]},
         fallbacks=[CommandHandler("cancel", cmd_cancel)],
     )
-
-    # SELL conversation
     sell_conv = ConversationHandler(
         entry_points=[CommandHandler("sell", cmd_sell)],
-        states={
-            CONFIRM_SELL: [
-                CommandHandler("yes", confirm_sell_yes),
-                CommandHandler("no",  confirm_sell_no),
-            ],
-        },
+        states={CONFIRM_SELL: [
+            CommandHandler("yes", confirm_sell_yes),
+            CommandHandler("no",  confirm_sell_no),
+        ]},
+        fallbacks=[CommandHandler("cancel", cmd_cancel)],
+    )
+    reset_conv = ConversationHandler(
+        entry_points=[CommandHandler("reset", cmd_reset)],
+        states={CONFIRM_RESET: [
+            CommandHandler("yes", confirm_reset_yes),
+            CommandHandler("no",  confirm_reset_no),
+        ]},
         fallbacks=[CommandHandler("cancel", cmd_cancel)],
     )
 
     app.add_handler(buy_conv)
     app.add_handler(sell_conv)
-    app.add_handler(CommandHandler("cancel", cmd_cancel))
-    app.add_handler(CommandHandler("status", cmd_status))
-    app.add_handler(CommandHandler("pnl",    cmd_pnl))
-    app.add_handler(CommandHandler("signal", cmd_signal))
-    app.add_handler(CommandHandler("mode",   cmd_mode))
-    app.add_handler(CommandHandler("pause",  cmd_pause))
-    app.add_handler(CommandHandler("resume", cmd_resume))
-    app.add_handler(CommandHandler("help",   cmd_help))
-    app.add_handler(CommandHandler("start",  cmd_help))
-
-    # Natural language fallback for plain text messages
+    app.add_handler(reset_conv)
+    app.add_handler(CommandHandler("cancel",  cmd_cancel))
+    app.add_handler(CommandHandler("status",  cmd_status))
+    app.add_handler(CommandHandler("pnl",     cmd_pnl))
+    app.add_handler(CommandHandler("capital", cmd_capital))
+    app.add_handler(CommandHandler("signal",  cmd_signal))
+    app.add_handler(CommandHandler("mode",    cmd_mode))
+    app.add_handler(CommandHandler("pause",   cmd_pause))
+    app.add_handler(CommandHandler("resume",  cmd_resume))
+    app.add_handler(CommandHandler("help",    cmd_help))
+    app.add_handler(CommandHandler("start",   cmd_help))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, nlp_fallback))
 
     log.info("Bot polling started...")
