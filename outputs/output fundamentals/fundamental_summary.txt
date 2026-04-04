@@ -1,0 +1,358 @@
+NEPSE FUNDAMENTAL STUDY — STATISTICAL RESULTS (ENHANCED VERSION)
+Generated: 2026-04-05 00:09:03
+Total correlation tests run: 360
+Bonferroni threshold: 0.00013889
+NOTE: Lag=0 results are for research only. Live trading should use lag≥1.
+
+======================================================================
+  1. VALIDATED SIGNALS (pass Benjamini-Hochberg FDR, q<0.05)
+======================================================================
+  92 signals validated.
+
+  Fundamental               Return     Lag         Rho      q-value      n
+  ------------------------- ---------- ------ -------- ------------ ------
+  dps                       ret_6m     Q1      -0.1826     0.000000   1183
+  dps                       ret_1m     Q3       0.1788     0.000000    946
+  dps                       ret_6m     Q0      -0.1369     0.000000   1380
+  dps                       ret_6m     Q3       0.1365     0.001204    812
+  dps                       ret_3m     Q1      -0.1338     0.000026   1369
+  dps                       ret_3m     Q3       0.1337     0.000634    946
+  dps                       ret_1m     Q1      -0.1332     0.000026   1371
+  capital_fund_to_rwa       ret_6m     Q3       0.1309     0.000000   1607
+  promoter_shares           ret_6m     Q2      -0.1283     0.000000   2514
+  promoter_shares           ret_6m     Q3      -0.1248     0.000000   2301
+  promoter_shares           ret_6m     Q1      -0.1225     0.000000   2731
+  npl                       ret_1m     Q0      -0.1135     0.000000   2079
+  base_rate                 ret_6m     Q3      -0.1127     0.001548   1149
+  base_rate                 ret_6m     Q2      -0.1114     0.001040   1252
+  operating_profit          ret_3m     Q2      -0.1041     0.000127   1879
+  gram_value                ret_6m     Q1      -0.1025     0.000000   2663
+  cost_of_fund              ret_6m     Q3       0.1020     0.000657   1604
+  promoter_shares           ret_6m     Q0      -0.1013     0.000000   2958
+  operating_profit          ret_6m     Q2      -0.0961     0.000840   1755
+  net_worth                 ret_6m     Q1      -0.0929     0.000000   3231
+  base_rate                 ret_3m     Q3      -0.0929     0.006888   1252
+  roa                       ret_6m     Q1      -0.0911     0.000180   2374
+  net_worth                 ret_6m     Q3      -0.0888     0.000090   2707
+  net_worth                 ret_6m     Q2      -0.0878     0.000048   2968
+  net_worth                 ret_6m     Q0      -0.0869     0.000000   3503
+  roa                       ret_6m     Q0      -0.0858     0.000246   2584
+  total_assets              ret_6m     Q2       0.0853     0.001964   1925
+  roa                       ret_3m     Q1      -0.0845     0.000324   2573
+  cd_ratio                  ret_6m     Q3       0.0845     0.006257   1550
+  total_assets              ret_3m     Q3       0.0844     0.002150   1924
+  cost_of_fund              ret_3m     Q3       0.0841     0.003840   1722
+  capital_fund_to_rwa       ret_6m     Q2       0.0834     0.003998   1725
+  npl                       ret_1m     Q1      -0.0833     0.002218   1953
+  capital_fund_to_rwa       ret_6m     Q1       0.0829     0.003129   1846
+  total_liabilities         ret_6m     Q3       0.0828     0.006466   1600
+  cd_ratio                  ret_6m     Q2       0.0794     0.007973   1664
+  base_rate                 ret_6m     Q0      -0.0780     0.014541   1466
+  total_assets              ret_6m     Q3       0.0774     0.007580   1770
+  gram_value                ret_6m     Q2      -0.0769     0.001603   2451
+  capital_fund_to_rwa       ret_3m     Q3       0.0757     0.010031   1725
+  total_liabilities         ret_3m     Q3       0.0756     0.010031   1740
+  net_worth                 ret_1m     Q3      -0.0754     0.000638   2971
+  gram_value                ret_1m     Q3      -0.0740     0.002283   2457
+  gram_value                ret_6m     Q0      -0.0737     0.001038   2879
+  roa                       ret_3m     Q2      -0.0717     0.003840   2370
+  net_worth                 ret_3m     Q3      -0.0686     0.001969   2963
+  interest_spread           ret_1m     Q0       0.0681     0.035221   1501
+  gram_value                ret_6m     Q3      -0.0675     0.008686   2258
+  eps                       ret_6m     Q1      -0.0667     0.001642   3235
+  pe_ratio                  ret_1m     Q3       0.0661     0.002748   2972
+  gram_value                ret_3m     Q1      -0.0657     0.003633   2868
+  total_assets              ret_6m     Q1       0.0648     0.013879   2159
+  net_worth                 ret_1m     Q0      -0.0647     0.001008   3776
+  dps                       ret_1m     Q0       0.0646     0.045858   1526
+  cd_ratio                  ret_6m     Q1       0.0645     0.030069   1780
+  prev_quarter_profit       ret_3m     Q0       0.0642     0.002218   3304
+  cost_of_fund              ret_1m     Q3      -0.0631     0.036360   1729
+  public_shares             ret_1m     Q0       0.0629     0.001204   3833
+  prev_quarter_profit       ret_1m     Q0       0.0628     0.002664   3315
+  total_assets              ret_6m     Q0       0.0627     0.013604   2324
+  npl                       ret_1m     Q2      -0.0619     0.034881   1830
+  loan                      ret_3m     Q3       0.0618     0.041857   1722
+  operating_profit          ret_6m     Q1      -0.0617     0.032703   1879
+  peg_value                 ret_1m     Q3      -0.0616     0.010704   2570
+  promoter_shares           ret_3m     Q3      -0.0615     0.011771   2511
+  net_worth                 ret_3m     Q2      -0.0610     0.003998   3225
+  public_shares             ret_1m     Q2       0.0604     0.003998   3288
+  net_worth                 ret_3m     Q0      -0.0592     0.002575   3765
+  growth_rate               ret_6m     Q1      -0.0591     0.010031   2843
+  public_shares             ret_1m     Q3       0.0575     0.010031   3024
+  net_worth                 ret_3m     Q1      -0.0567     0.005863   3491
+  prev_quarter_profit       ret_1m     Q2       0.0567     0.013604   2851
+  promoter_shares           ret_3m     Q2      -0.0558     0.017314   2727
+  promoter_shares           ret_3m     Q1      -0.0558     0.013604   2946
+  gram_value                ret_3m     Q2      -0.0523     0.030982   2660
+  promoter_shares           ret_3m     Q0      -0.0523     0.016154   3176
+  net_profit                ret_1m     Q3       0.0518     0.021544   2992
+  net_profit                ret_6m     Q1      -0.0518     0.015933   3253
+  peg_value                 ret_1m     Q0       0.0510     0.016836   3289
+  pe_ratio                  ret_1m     Q0       0.0507     0.010824   3778
+  net_worth                 ret_1m     Q1      -0.0505     0.014541   3503
+  net_profit                ret_1m     Q0       0.0501     0.011537   3803
+  net_worth                 ret_1m     Q2      -0.0500     0.021122   3234
+  eps                       ret_6m     Q0      -0.0495     0.016750   3508
+  paidup_capital            ret_6m     Q2       0.0494     0.030368   3011
+  public_shares             ret_1m     Q1       0.0487     0.017683   3556
+  growth_rate               ret_6m     Q0      -0.0473     0.036596   3067
+  net_profit                ret_3m     Q3       0.0472     0.040774   2983
+  public_shares             ret_6m     Q0      -0.0453     0.030902   3559
+  paidup_capital            ret_6m     Q0       0.0444     0.034881   3551
+  public_shares             ret_6m     Q1      -0.0441     0.045858   3285
+  paidup_capital            ret_1m     Q0       0.0407     0.046417   3827
+
+======================================================================
+  2. NOMINAL SIGNALS (p<0.05, NOT FDR — treat as exploratory)
+======================================================================
+  38 nominal signals (use with caution).
+
+  Fundamental               Return     Lag         Rho      p-value
+  ------------------------- ---------- ------ -------- ------------
+  dps                       ret_1m     Q2      -0.0660     0.023246
+  base_rate                 ret_6m     Q1      -0.0659     0.015157
+  dps                       ret_3m     Q2      -0.0630     0.030442
+  interest_spread           ret_1m     Q1       0.0555     0.037844
+  dps                       ret_3m     Q0       0.0553     0.030866
+  npl                       ret_3m     Q2       0.0537     0.021921
+  cost_of_fund              ret_3m     Q2      -0.0537     0.021023
+  capital_fund_to_rwa       ret_3m     Q1       0.0527     0.019396
+  capital_fund_to_rwa       ret_6m     Q0       0.0522     0.020492
+  total_assets              ret_1m     Q3       0.0501     0.027585
+  roe                       ret_1m     Q3       0.0498     0.027871
+  base_rate                 ret_3m     Q0      -0.0498     0.048056
+  total_liabilities         ret_6m     Q2       0.0493     0.039595
+  deposit                   ret_3m     Q3       0.0484     0.035527
+  total_assets              ret_3m     Q1       0.0482     0.020252
+  capital_fund_to_rwa       ret_3m     Q2       0.0462     0.047001
+  peg_value                 ret_6m     Q1      -0.0456     0.015280
+  eps                       ret_1m     Q3       0.0448     0.014541
+  net_profit                ret_6m     Q3       0.0448     0.019331
+  total_assets              ret_3m     Q0       0.0444     0.026711
+
+======================================================================
+  3. BEST LAG PER FUNDAMENTAL (strongest Spearman rho across all lags)
+======================================================================
+
+--- Based on ret_3m ---
+  Fundamental               Best Lag        Rho      p-value      n
+  ------------------------- ---------- -------- ------------ ------
+  dps                       Q1          -0.1338     0.000001   1369 *
+  operating_profit          Q2          -0.1041     0.000006   1879 *
+  base_rate                 Q3          -0.0929     0.000995   1252 *
+  roa                       Q1          -0.0845     0.000018   2573 *
+  total_assets              Q3           0.0844     0.000209   1924 *
+  cost_of_fund              Q3           0.0841     0.000475   1722 *
+  capital_fund_to_rwa       Q3           0.0757     0.001644   1725 *
+  total_liabilities         Q3           0.0756     0.001598   1740 *
+  net_worth                 Q3          -0.0686     0.000186   2963 *
+  gram_value                Q1          -0.0657     0.000434   2868 *
+  prev_quarter_profit       Q0           0.0642     0.000223   3304 *
+  loan                      Q3           0.0618     0.010348   1722 *
+  promoter_shares           Q3          -0.0615     0.002060   2511 *
+  npl                       Q2           0.0537     0.021921   1822 *
+  deposit                   Q3           0.0484     0.035527   1890 *
+  net_profit                Q3           0.0472     0.009967   2983 *
+  cd_ratio                  Q2           0.0455     0.054788   1780
+  interest_spread           Q0           0.0432     0.094588   1496
+  eps                       Q3           0.0429     0.019448   2965 *
+  roe                       Q2          -0.0419     0.049601   2195 *
+  pe_ratio                  Q3           0.0408     0.026169   2964 *
+  reserve                   Q3          -0.0387     0.170919   1252
+  net_interest_income       Q0           0.0386     0.077557   2092
+  growth_rate               Q1          -0.0343     0.057351   3064
+  public_shares             Q3           0.0313     0.085866   3016
+  paidup_capital            Q0           0.0303     0.060886   3815
+  peg_value                 Q1          -0.0294     0.104875   3044
+  discount_rate             Q1           0.0238     0.202390   2867
+  close                     Q1           0.0220     0.189637   3545
+  core_capital              Q2           0.0130     0.455033   3281
+  (* = p<0.05 nominal)
+
+======================================================================
+  4. BETA VS NEPSE INDEX (business month-end returns)
+======================================================================
+  Symbols analysed: 431
+  Median beta:      0.8145
+  Mean beta:        0.7173
+  Beta > 1 (aggressive): 135 symbols
+  Beta < 1 (defensive):  296 symbols
+  Beta < 0 (inverse):    66 symbols
+
+--- Top 10 highest beta (most volatile vs NEPSE) ---
+    PLI          beta= 3.2076  market_corr= 0.9201
+    HATHY        beta= 2.2583  market_corr= 0.7537
+    PHCL         beta= 1.9523  market_corr= 0.6476
+    NSLB         beta= 1.8299  market_corr= 0.9373
+    GLICL        beta= 1.7690  market_corr= 0.7790
+    NFS          beta= 1.6957  market_corr= 0.6223
+    CLBSL        beta= 1.6755  market_corr= 0.7757
+    NRIC         beta= 1.6353  market_corr= 0.6891
+    CHDC         beta= 1.5990  market_corr= 0.8308
+    RULB         beta= 1.5699  market_corr= 0.9056
+
+--- Top 10 lowest beta (most defensive) ---
+    GMLI         beta=-1.8208  market_corr=-0.2493
+    BNL          beta=-0.4784  market_corr=-0.0835
+    ICFCD88      beta=-0.4301  market_corr=-0.7011
+    EBLEB89      beta=-0.4079  market_corr=-0.6789
+    NICAD85/86   beta=-0.3276  market_corr=-0.6673
+    JBBD87       beta=-0.2430  market_corr=-0.5333
+    SBID83       beta=-0.2022  market_corr=-0.4717
+    NABILD87     beta=-0.1943  market_corr=-0.5174
+    EBLD86       beta=-0.1827  market_corr=-0.3190
+    PBLD87       beta=-0.1762  market_corr=-0.3855
+
+======================================================================
+  5. SECTOR-WISE CORRELATION (ret_3m, lag=0)
+======================================================================
+  32 sector-level significant signals.
+
+  Sector                    Fundamental                    Rho          p      n
+  ------------------------- ------------------------- -------- ---------- ------
+  Non Life Insurance        peg_value                   0.6294   0.028320     12
+  Others                    growth_rate                -0.4173   0.019497     31
+  Unknown                   prev_quarter_profit         0.3412   0.013320     52
+  Life Insurance            gram_value                  0.3243   0.011463     60
+  Non Life Insurance        discount_rate              -0.2570   0.049433     59
+  Manufacturing And Processing growth_rate                 0.2475   0.023213     84
+  Finance                   interest_spread             0.2270   0.000060    307
+  Development Banks         interest_spread             0.2138   0.000097    327
+  Hotels And Tourism        eps                        -0.2036   0.044336     98
+  Commercial Banks          net_interest_income         0.1980   0.000029    439
+  Development Banks         net_interest_income        -0.1935   0.000367    335
+  Hydro Power               roa                         0.1897   0.000027    483
+  Finance                   capital_fund_to_rwa         0.1574   0.004576    323
+  Hydro Power               roe                         0.1558   0.001085    437
+  Microfinance              roa                        -0.1445   0.000021    860
+  Hydro Power               dps                         0.1419   0.002039    470
+  Finance                   cd_ratio                   -0.1299   0.019712    322
+  Microfinance              interest_spread            -0.1288   0.007166    435
+  Development Banks         net_worth                  -0.1286   0.018692    334
+  Development Banks         loan                       -0.1253   0.021589    336
+  Development Banks         capital_fund_to_rwa         0.1181   0.030641    335
+  Finance                   net_worth                  -0.1168   0.036155    322
+  Commercial Banks          growth_rate                -0.1158   0.015531    436
+  Finance                   prev_quarter_profit         0.1119   0.045518    320
+  Development Banks         deposit                    -0.1113   0.041684    335
+  Hydro Power               promoter_shares            -0.1079   0.005360    664
+  Hydro Power               prev_quarter_profit         0.0985   0.002721    925
+  Hydro Power               net_profit                  0.0816   0.004860   1191
+  Hydro Power               growth_rate                 0.0779   0.017847    925
+  Hydro Power               eps                         0.0774   0.007556   1189
+
+======================================================================
+  6. OLS REGRESSION (validated fundamentals + sector dummies → ret_3m)
+======================================================================
+  R²:     0.0858
+  Adj R²: 0.0412
+  N:      560
+
+--- VIF Scores (>5 = multicollinearity concern, >10 = severe) ---
+    promoter_shares           VIF=242692.84 ⚠ HIGH
+    public_shares             VIF=242663.90 ⚠ HIGH
+    total_assets              VIF=56.85 ⚠ HIGH
+    gram_value                VIF=53.15 ⚠ HIGH
+    loan                      VIF=41.62 ⚠ HIGH
+    total_liabilities         VIF=40.15 ⚠ HIGH
+    eps                       VIF=34.74 ⚠ HIGH
+    paidup_capital            VIF=21.95 ⚠ HIGH
+    net_profit                VIF=10.81 ⚠ HIGH
+    prev_quarter_profit       VIF=8.36 ⚠ HIGH
+    operating_profit          VIF=7.84 ⚠ HIGH
+    base_rate                 VIF=7.14 ⚠ HIGH
+    net_worth                 VIF=6.20 ⚠ HIGH
+    cost_of_fund              VIF=5.31 ⚠ HIGH
+    pe_ratio                  VIF=3.06
+    roa                       VIF=3.04
+    peg_value                 VIF=2.03
+    dps                       VIF=2.00
+    interest_spread           VIF=1.79
+    cd_ratio                  VIF=1.58
+    npl                       VIF=1.54
+    capital_fund_to_rwa       VIF=1.54
+    growth_rate               VIF=1.30
+
+  Full OLS Summary:
+                            OLS Regression Results                            
+==============================================================================
+Dep. Variable:                 ret_3m   R-squared:                       0.086
+Model:                            OLS   Adj. R-squared:                  0.041
+Method:                 Least Squares   F-statistic:                     1.924
+Date:                Sun, 05 Apr 2026   Prob (F-statistic):            0.00427
+Time:                        00:09:03   Log-Likelihood:                -2233.1
+No. Observations:                 560   AIC:                             4520.
+Df Residuals:                     533   BIC:                             4637.
+Df Model:                          26                                         
+Covariance Type:            nonrobust                                         
+==================================================================================================
+                                     coef    std err          t      P>|t|      [0.025      0.975]
+--------------------------------------------------------------------------------------------------
+Intercept                          0.0016      0.001      1.293      0.196      -0.001       0.004
+C(sector)[T.Development Banks]    -0.5065      3.105     -0.163      0.870      -6.605       5.592
+C(sector)[T.Finance]              -8.4579      3.741     -2.261      0.024     -15.807      -1.108
+C(sector)[T.Microfinance]          2.6078      3.630      0.718      0.473      -4.523       9.738
+C(sector)[T.Unknown]              -6.5691      7.472     -0.879      0.380     -21.247       8.109
+eps                               -0.0395      0.316     -0.125      0.901      -0.661       0.582
+net_worth                          0.0118      0.028      0.423      0.673      -0.043       0.067
+roa                               -2.0412      1.498     -1.362      0.174      -4.984       0.902
+paidup_capital                  1.897e-10   3.28e-10      0.578      0.563   -4.55e-10    8.34e-10
+total_assets                    7.022e-12   3.01e-11      0.233      0.816   -5.22e-11    6.62e-11
+net_profit                     -2.166e-09   1.56e-09     -1.388      0.166   -5.23e-09       9e-10
+npl                                0.0459      0.228      0.201      0.841      -0.402       0.494
+base_rate                         -0.4571      0.479     -0.954      0.341      -1.399       0.485
+interest_spread                   -0.6659      0.674     -0.988      0.323      -1.989       0.657
+dps                               -0.0320      0.045     -0.714      0.475      -0.120       0.056
+promoter_shares                    0.0889      0.076      1.177      0.240      -0.059       0.237
+public_shares                      0.0736      0.077      0.956      0.340      -0.078       0.225
+gram_value                         0.0016      0.037      0.043      0.966      -0.071       0.074
+prev_quarter_profit             1.052e-09   1.57e-09      0.672      0.502   -2.02e-09    4.13e-09
+growth_rate                        0.0069      0.004      1.636      0.102      -0.001       0.015
+pe_ratio                          -0.0008      0.002     -0.479      0.632      -0.004       0.003
+peg_value                         -0.0837      0.062     -1.360      0.174      -0.205       0.037
+operating_profit               -3.697e-11   9.75e-10     -0.038      0.970   -1.95e-09    1.88e-09
+capital_fund_to_rwa                0.0864      0.134      0.647      0.518      -0.176       0.349
+cd_ratio                          -0.0150      0.009     -1.626      0.105      -0.033       0.003
+total_liabilities               2.114e-12   2.76e-11      0.077      0.939   -5.21e-11    5.63e-11
+loan                           -3.081e-11   3.94e-11     -0.781      0.435   -1.08e-10    4.66e-11
+cost_of_fund                      -0.3007      0.713     -0.422      0.673      -1.701       1.099
+==============================================================================
+Omnibus:                      122.980   Durbin-Watson:                   2.021
+Prob(Omnibus):                  0.000   Jarque-Bera (JB):              251.535
+Skew:                           1.202   Prob(JB):                     2.40e-55
+Kurtosis:                       5.237   Cond. No.                     1.54e+15
+==============================================================================
+
+Notes:
+[1] Standard Errors assume that the covariance matrix of the errors is correctly specified.
+[2] The condition number is large, 1.54e+15. This might indicate that there are
+strong multicollinearity or other numerical problems.
+
+======================================================================
+  7. SYSTEM INTEGRATION RECOMMENDATIONS
+======================================================================
+
+  RULE: Only include fundamentals that pass FDR (q<0.05) in filter_engine scoring.
+  Nominal signals (p<0.05 only) can be tracked in learning_hub but NOT used as hard gates.
+
+  PROCESS:
+  1. Take validated signals from Section 1 (FDR).
+  2. Check sector breakdown (Section 5) — does the signal hold in your
+     target sectors (Hydro, Dev Banks, Finance, Life Insurance)?
+  3. Check VIF (Section 6) — if two validated signals have VIF>5,
+     they are redundant. Keep the one with stronger Spearman rho.
+  4. Use lag=1 or higher for live trading (fundamentals are released weeks after quarter end).
+  5. Re-run this study every quarter as new fundamental data arrives.
+
+  NEPSE-SPECIFIC CAVEATS:
+  - Fiscal year starts Shrawan 1 (mid-July). Quarter ends: Ashoj (Oct), Poush (Jan), Chaitra (Apr), Ashadh (Jul).
+  - Q4 reports often delayed 1-2 months. Use lag=1 results for live trading.
+  - Banking sector: NPL, CD ratio, capital_fund_to_rwa are key.
+  - Small sample sizes per sector — treat sector results as directional.
+  - Corporate actions (bonus, rights) not adjusted in price_history — may affect returns.
+
+======================================================================
+END OF REPORT
+======================================================================

@@ -195,6 +195,10 @@ class FilterCandidate:
     tech_signal:      str   = ""
     history_days:     int   = 0
 
+    # Support / Resistance (20-day high/low from indicators.py)
+    support_level:    float = 0.0   # lowest low over last 20 trading days
+    resistance_level: float = 0.0   # highest high over last 20 trading days
+
     # ShareSansar conf score (live from scraper)
     conf_score:       float = 0.0
     conf_signal:      str   = ""
@@ -818,6 +822,9 @@ def run_filter(
             tech_score       = int(ind.get("tech_score",         0)   or 0),
             tech_signal      = str(ind.get("tech_signal",        "")  or ""),
             history_days     = int(ind.get("history_days",       0)   or 0),
+
+            support_level    = float(ind.get("support_level",    0)   or 0),
+            resistance_level = float(ind.get("resistance_level", 0)   or 0),
 
             conf_score       = float(getattr(price_row, "conf_score",  0)        or 0),
             conf_signal      = str(getattr(price_row,  "conf_signal",  "NEUTRAL") or "NEUTRAL"),

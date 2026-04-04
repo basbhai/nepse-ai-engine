@@ -376,6 +376,10 @@ Detect signals relevant to Nepal stock market (NEPSE).
 5. What is the remittance risk level based on Gulf/foreign employment news?
 6. What is the overall Nepal market sentiment today?
 7. Crisis details should be only that effect share market.
+8 india_nepal_relations: "STABLE" | "TENSE" | "HOSTILE" 
+  (based on any India-Nepal border, trade, treaty, political news recent only)
+9 nrb_rate_decision: "CUT" | "RAISED" | "UNCHANGED"
+  (based on any NRB monetary policy announcement)
 
 
 Headlines:
@@ -395,6 +399,9 @@ Return ONLY this JSON object with no other text, no markdown, no explanation:
   "remittance_detail": "reason from headlines, or empty string",
   "overall_sentiment": "POSITIVE or NEUTRAL or NEGATIVE",
   "key_event": "single most important news that will directly effect NEPSE"
+  "headlines_politics": "title 1: lorem ipsum |title: 2: lorem_ipum[only related to Nepal]",
+  "headlines_economy":  "title 1: lorem ipsum |title: 2: lorem_ipum [only related to Nepal]",
+  "headlines_stock":    "title 1: lorem ipsum |title: 2: lorem_ipum [only related to NEPSE]"
 }}"""
 
     log.info("Sending %d headlines to Gemini Flash...", len(df))
@@ -504,35 +511,42 @@ def _keyword_detect(df: pd.DataFrame) -> dict:
             break
 
     return {
-        "bandh_today":       bandh_today,
-        "bandh_detail":      bandh_detail,
-        "ipo_fpo_active":    ipo_active,
-        "ipo_fpo_detail":    ipo_detail,
-        "crisis_detected":   crisis_detected,
-        "crisis_detail":     crisis_detail,
-        "gulf_signal":       "",
-        "gulf_detail":       "",
-        "remittance_signal": "",
-        "remittance_detail": "",
-        "overall_sentiment": "NEUTRAL",
-        "key_event":         "",
+        "bandh_today":        bandh_today,
+        "bandh_detail":       bandh_detail,
+        "ipo_fpo_active":     ipo_active,
+        "ipo_fpo_detail":     ipo_detail,
+        "crisis_detected":    crisis_detected,
+        "crisis_detail":      crisis_detail,
+        "gulf_signal":        "",
+        "gulf_detail":        "",
+        "remittance_signal":  "",
+        "remittance_detail":  "",
+        "overall_sentiment":  "NEUTRAL",
+        "key_event":          "",
+        # Headlines not available in keyword fallback — Gemini only
+        "headlines_politics": "",
+        "headlines_economy":  "",
+        "headlines_stock":    "",
     }
 
 
 def _empty_result() -> dict:
     return {
-        "bandh_today":       "NO",
-        "bandh_detail":      "",
-        "ipo_fpo_active":    "NO",
-        "ipo_fpo_detail":    "",
-        "crisis_detected":   "NO",
-        "crisis_detail":     "",
-        "gulf_signal":       "",
-        "gulf_detail":       "",
-        "remittance_signal": "",
-        "remittance_detail": "",
-        "overall_sentiment": "NEUTRAL",
-        "key_event":         "No headlines available",
+        "bandh_today":        "NO",
+        "bandh_detail":       "",
+        "ipo_fpo_active":     "NO",
+        "ipo_fpo_detail":     "",
+        "crisis_detected":    "NO",
+        "crisis_detail":      "",
+        "gulf_signal":        "",
+        "gulf_detail":        "",
+        "remittance_signal":  "",
+        "remittance_detail":  "",
+        "overall_sentiment":  "NEUTRAL",
+        "key_event":          "No headlines available",
+        "headlines_politics": "",
+        "headlines_economy":  "",
+        "headlines_stock":    "",
     }
 
 
@@ -569,6 +583,14 @@ def _scrape_and_analyze(force_keywords: bool = False) -> dict:
     if gulf_ai in ("STABLE", "TENSE", "CRISIS"):
         update_setting("GULF_STABILITY", gulf_ai, set_by="gemini_flash")
         log.info("Auto-updated GULF_STABILITY → %s", gulf_ai)
+    
+    india_ai = result.get("india_nepal_relations", "").upper().strip()
+    if india_ai in ("STABLE", "TENSE", "HOSTILE"):
+        update_setting("INDIA_NEPAL_RELATIONS", india_ai, set_by="gemini_flash")
+
+    nrb_ai = result.get("nrb_rate_decision", "").upper().strip()
+    if nrb_ai in ("CUT", "RAISED", "UNCHANGED"):
+        update_setting("NRB_RATE_DECISION", nrb_ai, set_by="gemini_flash")
 
     # Flag bandh to calendar_guard
     if result.get("bandh_today") == "YES":
@@ -854,11 +876,16 @@ def run(force_keywords: bool = False) -> bool:
         "load_shedding_hrs": get_setting("LOAD_SHEDDING_HRS", default="0"),
 
         # Composite
-        "nepal_score":  str(nepal_score),
-        "nepal_status": nepal_status,
-        "key_event":    key_event,
-        "source":       "nepal_pulse.py",
-        "timestamp":    nst_now.strftime("%Y-%m-%d %H:%M:%S"),
+        "nepal_score":        str(nepal_score),
+        "nepal_status":       nepal_status,
+        "key_event":          key_event,
+        "source":             "nepal_pulse.py",
+        "timestamp":          nst_now.strftime("%Y-%m-%d %H:%M:%S"),
+
+        # Headlines — written by Gemini Flash, empty string on keyword fallback
+        "headlines_politics": scraped.get("headlines_politics", ""),
+        "headlines_economy":  scraped.get("headlines_economy",  ""),
+        "headlines_stock":    scraped.get("headlines_stock",    ""),
     }
 
     success = write_nepal_pulse(pulse)
@@ -872,6 +899,12 @@ def run(force_keywords: bool = False) -> bool:
         log.info("   IPO:       %s",  scraped.get("ipo_fpo_active", "NO"))
         log.info("   Gulf:      %s",  scraped.get("gulf_signal", "manual"))
         log.info("   Headlines: %d",  scraped.get("headlines_checked", 0))
+        if scraped.get("headlines_politics"):
+            log.info("   POL:       %s", scraped["headlines_politics"][:120])
+        if scraped.get("headlines_economy"):
+            log.info("   ECON:      %s", scraped["headlines_economy"][:120])
+        if scraped.get("headlines_stock"):
+            log.info("   STK:       %s", scraped["headlines_stock"][:120])
     else:
         log.error("❌ Failed to write nepal pulse to Neon")
 

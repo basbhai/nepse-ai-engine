@@ -182,6 +182,9 @@ model market_log {
   eval_price_change_pct  Text   // % price move from signal date to eval date
   eval_nepse_change_pct  Text   // NEPSE % move over same period
   eval_alpha             Text   // stock move vs NEPSE — same logic as trade_journal
+  headlines_politics  Text   // 1-2 political headlines affecting NEPSE
+  headlines_economy   Text   // 1-2 economic/macro headlines  
+  headlines_stock     Text   // 1-2 stock market specific headlines
 
   @@index([symbol])
   @@index([date])
@@ -222,6 +225,8 @@ model indicators {
   atr_pct          Text
   obv              Text
   obv_trend        Text   // RISING | FALLING | FLAT
+  support_level    Text   // lowest low over last 20 trading days
+  resistance_level Text   // highest high over last 20 trading days
   tech_score       Text   // 0–100
   tech_signal      Text   // STRONG_BULL | BULL | NEUTRAL | BEAR | STRONG_BEAR
   timestamp        Text
@@ -900,22 +905,23 @@ model fd_rates {
 }
 
 model fd_rate_summary {
-  id               Serial
-  fetch_date       Text!  @unique  // one summary per fetch date
-  avg_rate_pct     Text            // average across all products
-  max_rate_pct     Text            // highest rate available
-  min_rate_pct     Text            // lowest rate available
-  best_bank_name   Text            // institution with best rate
-  best_bank_rate   Text            // their rate %
-  best_tenure      Text            // their tenure
-  rate_vs_prev_pct Text            // change from previous month (+ = rising)
-  rate_direction   Text            // RISING / FALLING / UNCHANGED
-  fd_score_signal  Text            // STRONG_BUY_STOCKS / BUY_STOCKS / NEUTRAL / PREFER_FD / STRONG_FD
-  total_products   Text            // how many products fetched
+  id                 Serial
+  fetch_date         Text!  @unique
+  avg_rate_pct       Text            // full average — all products
+  max_rate_pct       Text
+  min_rate_pct       Text
+  benchmark_rate_pct Text            // NEW — avg of 1Y+ FDs only — drives signal
+  benchmark_products Text            // NEW — count of 1Y+ products used
+  best_bank_name     Text
+  best_bank_rate     Text
+  best_tenure        Text
+  rate_vs_prev_pct   Text
+  rate_direction     Text
+  fd_score_signal    Text
+  total_products     Text
 
   @@index([fetch_date])
 }
-
 
 model international_prices {
   id            serial
@@ -1006,6 +1012,7 @@ model share_sectors {
    created_at      Text
    updated_at      Text
    test_mode       Text  @default("false")  // "true" = written during --sandbox run
+   audited         Text  @default("false")
    @@index([telegram_id])
    @@index([telegram_id, status])
    @@index([symbol])
@@ -1037,3 +1044,54 @@ model share_sectors {
    @@index([symbol])
    @@index([test_mode])
  }
+// ═══════════════════════════════════════════════════════════════════════════
+// for fundamentals
+// ═══════════════════════════════════════════════════════════════════════════
+
+
+ model fundamentals {
+  id                   Int      @id @default(autoincrement())
+  symbol               String
+  stock_id             Int?
+  fiscal_year          String
+  quarter              String
+  eps                  Float?
+  net_worth            Float?
+  roe                  Float?
+  roa                  Float?
+  paidup_capital       Float?
+  reserve              Float?
+  total_assets         Float?
+  total_liabilities    Float?
+  deposit              Float?
+  loan                 Float?
+  net_interest_income  Float?
+  operating_profit     Float?
+  net_profit           Float?
+  npl                  Float?
+  capital_fund_to_rwa  Float?
+  cost_of_fund         Float?
+  base_rate            Float?
+  interest_spread      Float?
+  cd_ratio             Float?
+  dps                  Float?
+  sector_id            Int?
+  promoter_shares      Float?
+  public_shares        Float?
+  share_registar       String?
+  is_delisted          Boolean?
+  is_merged            Boolean?
+  core_capital         Float?
+  gram_value           Float?
+  prev_quarter_profit  Float?
+  growth_rate          Float?
+  close                Float?
+  discount_rate        Float?
+  pe_ratio             Float?
+  peg_value            Float?
+  scraped_at           DateTime @default(now())
+
+  @@unique([symbol, fiscal_year, quarter])
+  @@index([symbol])
+  @@index([fiscal_year, quarter])
+}

@@ -166,6 +166,10 @@ class IndicatorResult:
     obv:             str = ""
     obv_trend:       str = ""        # RISING / FALLING / FLAT
 
+    # Support / Resistance (20-day high/low)
+    support_level:   str = ""        # lowest low over last 20 trading days
+    resistance_level:str = ""        # highest high over last 20 trading days
+
     # Composite
     tech_score:      str = ""        # 0–100
     tech_signal:     str = ""        # STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR
@@ -436,6 +440,53 @@ def _calc_obv(closes: list[float], volumes: list[float]) -> Optional[dict]:
     }
 
 
+def _calc_support_resistance(
+    highs:   list[float],
+    lows:    list[float],
+    period:  int = 20,
+) -> Optional[dict]:
+    """
+    Compute support and resistance levels from recent price history.
+ 
+    Method: 20-day high/low range.
+      support_level    = lowest low  over last `period` trading days
+      resistance_level = highest high over last `period` trading days
+ 
+    Why 20 days:
+      - Covers ~1 month of NEPSE trading (Sun-Thu)
+      - Meaningful floor/ceiling for MACD (17d hold) and SMA (33d hold) signals
+      - BB signals (130d hold) use 52W high/low from price_history for
+        longer-term context — this captures recent momentum levels
+ 
+    Used by:
+      - claude_analyst _build_prompt() — Claude sees actual NPR levels
+        for stop loss and target validation
+      - market_log.support_level / resistance_level — stored for GPT review
+ 
+    Returns dict or None if insufficient data.
+    """
+    if len(highs) < period or len(lows) < period:
+        return None
+ 
+    recent_highs = highs[-period:]
+    recent_lows  = lows[-period:]
+ 
+    support    = round(min(recent_lows),   2)
+    resistance = round(max(recent_highs),  2)
+ 
+    # Sanity check — support must be below resistance
+    if support >= resistance:
+        return None
+ 
+    return {
+        "support_level":    support,
+        "resistance_level": resistance,
+    }
+ 
+ 
+
+
+
 def _ema_trend_signal(
     close: float,
     ema20: Optional[float],
@@ -654,6 +705,12 @@ def compute_indicators(
     if obv:
         result.obv      = str(obv["obv"])
         result.obv_trend = obv["obv_trend"]
+        
+    # ── Support / Resistance ──────────────────────────────────────────────
+    sr = _calc_support_resistance(highs, lows, period=20)
+    if sr:
+        result.support_level    = str(sr["support_level"])
+        result.resistance_level = str(sr["resistance_level"])
 
     # ── Tech Score ────────────────────────────────────────────────────────
     tech_score = _calc_tech_score(

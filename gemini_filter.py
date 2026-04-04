@@ -94,6 +94,8 @@ class GeminiFlag:
     suggested_hold:  int        = 17
     geo_combined:    int        = 0
     market_state:    str        = ""
+    support_level:   float      = 0.0   # lowest low over last 20 trading days
+    resistance_level:float      = 0.0   # highest high over last 20 trading days
     market_log_id:   int         = None
 
     timestamp: str = field(default_factory=lambda:
@@ -488,26 +490,28 @@ def _assemble_flags(
             continue
 
         flags.append(GeminiFlag(
-            symbol          = sym,
-            sector          = c.sector,
-            ltp             = c.ltp,
-            action          = action,
-            urgency         = str(f.get("urgency", "NORMAL")).upper(),
-            gemini_reason   = str(f.get("reason", ""))[:200],
-            gemini_risk     = str(f.get("risk", ""))[:200],
-            primary_signal  = str(f.get("primary_signal", c.primary_signal)),
-            composite_score = c.composite_score,
-            tech_score      = c.tech_score,
-            obv_trend       = c.obv_trend,
-            ema_trend       = c.ema_trend,
-            rsi_14          = c.rsi_14,
-            macd_cross      = c.macd_cross,
-            bb_signal       = c.bb_signal,
-            best_candle     = c.best_candle,
-            candle_tier     = c.candle_tier,
-            suggested_hold  = c.suggested_hold,
-            geo_combined    = c.combined_geo,
-            market_state    = c.market_state,
+            symbol           = sym,
+            sector           = c.sector,
+            ltp              = c.ltp,
+            action           = action,
+            urgency          = str(f.get("urgency", "NORMAL")).upper(),
+            gemini_reason    = str(f.get("reason", ""))[:200],
+            gemini_risk      = str(f.get("risk", ""))[:200],
+            primary_signal   = str(f.get("primary_signal", c.primary_signal)),
+            composite_score  = c.composite_score,
+            tech_score       = c.tech_score,
+            obv_trend        = c.obv_trend,
+            ema_trend        = c.ema_trend,
+            rsi_14           = c.rsi_14,
+            macd_cross       = c.macd_cross,
+            bb_signal        = c.bb_signal,
+            best_candle      = c.best_candle,
+            candle_tier      = c.candle_tier,
+            suggested_hold   = c.suggested_hold,
+            geo_combined     = c.combined_geo,
+            market_state     = c.market_state,
+            support_level    = c.support_level,
+            resistance_level = c.resistance_level,
         ))
 
     return flags
@@ -524,26 +528,43 @@ def _write_log(
 ) -> None:
     """
     Write Gemini screening run to market_log table for audit trail.
-    One row per flagged stock. Reuses existing row if already written today.
+    One row per flagged stock. Reuses existing GEMINI_FLAG row if already
+    written today — never reuses Claude BUY/WAIT/AVOID rows.
+ 
+    FIX: existing check now filters to action LIKE 'GEMINI_FLAG%' only.
+    Old code used symbol+date only — accidentally matched Claude rows written
+    earlier today, causing claude_analyst to overwrite a real signal.
     """
     try:
         from sheets import write_row, run_raw_sql
         nst_now = datetime.now(tz=NST)
-
+        today   = nst_now.strftime("%Y-%m-%d")
+ 
         for flag in flags:
-            # Check if row already exists for this symbol today
+            # FIX: only match GEMINI_FLAG rows — never match Claude rows
             existing = run_raw_sql(
-                "SELECT id FROM market_log WHERE symbol=%s AND date=%s ORDER BY id DESC LIMIT 1",
-                (flag.symbol, nst_now.strftime("%Y-%m-%d"))
+                """
+                SELECT id FROM market_log
+                WHERE symbol = %s
+                  AND date   = %s
+                  AND action LIKE 'GEMINI_FLAG%%'
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (flag.symbol, today)
             )
+ 
             if existing:
                 flag.market_log_id = existing[0]["id"]
-                logger.debug("%s: market_log row already exists (id=%s) — reusing", flag.symbol, flag.market_log_id)
-                continue  # skip insert — Claude will update this row
-
-            # New row — write it
+                logger.debug(
+                    "%s: GEMINI_FLAG row already exists today (id=%s) — reusing",
+                    flag.symbol, flag.market_log_id,
+                )
+                continue  # skip insert — Claude will UPDATE this row
+ 
+            # No existing GEMINI_FLAG row — write a new one
             write_row("market_log", {
-                "date":           nst_now.strftime("%Y-%m-%d"),
+                "date":           today,
                 "time":           nst_now.strftime("%H:%M:%S"),
                 "symbol":         flag.symbol,
                 "sector":         flag.sector,
@@ -561,28 +582,39 @@ def _write_log(
                 "candle_pattern": flag.best_candle,
                 "timestamp":      flag.timestamp,
             })
-
-            # Fetch the id of the row just inserted
+ 
+            # Fetch id of the row just inserted — filter to GEMINI_FLAG
             rows = run_raw_sql(
-                "SELECT id FROM market_log WHERE symbol=%s AND date=%s ORDER BY id DESC LIMIT 1",
-                (flag.symbol, nst_now.strftime("%Y-%m-%d"))
+                """
+                SELECT id FROM market_log
+                WHERE symbol = %s
+                  AND date   = %s
+                  AND action LIKE 'GEMINI_FLAG%%'
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (flag.symbol, today)
             )
             flag.market_log_id = rows[0]["id"] if rows else None
-            logger.debug("%s: market_log row written (id=%s)", flag.symbol, flag.market_log_id)
-
-        # Log skipped stocks at DEBUG level only
+            logger.debug(
+                "%s: GEMINI_FLAG row written (id=%s)",
+                flag.symbol, flag.market_log_id,
+            )
+ 
         skipped = gemini_result.get("skipped", [])
         if skipped:
-            logger.debug("Gemini skipped: %s",
-                         ", ".join(s["symbol"] for s in skipped if s.get("symbol")))
-
+            logger.debug(
+                "Gemini skipped: %s",
+                ", ".join(s["symbol"] for s in skipped if s.get("symbol")),
+            )
+ 
         market_comment = gemini_result.get("market_comment", "")
         if market_comment:
             logger.info("Gemini market comment: %s", market_comment)
-
+ 
     except Exception as exc:
         logger.warning("_write_log failed: %s", exc)
-
+ 
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 8 — MAIN RUNNER
 # ══════════════════════════════════════════════════════════════════════════════
