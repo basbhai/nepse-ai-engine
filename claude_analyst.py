@@ -17,6 +17,7 @@ What Claude does here:
     - Checks herding bubble / capitulation conditions
     - Applies insurance political sensitivity rule
     - Checks trading day effect (buy Sun/Mon, exit Wed/Thu)
+    - Injects fundamental quality data (NPL, ROA, DPS, beta, etc.)
     - Produces structured JSON with specific NPR amounts
     - Writes recommendation to market_log table
 
@@ -25,69 +26,24 @@ What Claude does NOT do here:
     - Portfolio execution (always user's decision)
     - Macro extraction (that's NotebookLM monthly workflow)
 
-Evidence base for rules injected into Claude prompt:
-    MACD 12/26/9       → 23.64% ann. return, hold 17 days (Karki 2023)
-    Bollinger Band     → PF=12.19, hold 130 days (Karki 2023)
-    SMA crossover      → 21.33% ann. return, hold 33 days (Karki 2023)
-    RSI standalone     → -4.81% ann. return — NEVER sole trigger (Karki 2023)
-    Non-Life Insurance → best risk-adj sector β=0.034 (Khadka 2023)
-    Insurance politics → 4.6x more sensitive, 3-5 day recovery (political paper)
-    Herding            → β=0.351-0.428, amplifies bubbles (herd paper)
-    Trading days       → Buy Sun/Mon, exit Wed/Thu (trading days paper)
-    Dividend leakage   → starts 6 days pre-announcement (dividend paper)
-    Dashain rally      → +3.5% pre-festival, -2.5% post (seasonal paper)
-
-─────────────────────────────────────────────────────────────────────────────
-Called by: trading.yml every 6 min (only when gemini_filter flags stocks)
-Input:     list[GeminiFlag] from gemini_filter.py
-Output:    list[AnalystResult] + rows written to market_log table
-─────────────────────────────────────────────────────────────────────────────
+CLI:
+    python claude_analyst.py              → run with live gemini_filter data
+    python claude_analyst.py --dry-run    → use synthetic flag, no DB write
+    python claude_analyst.py NABIL        → analyze specific symbol directly
+    python claude_analyst.py --print-prompt → print prompt without API call
 """
 
 import json
 import logging
 import os
+import sys
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Optional
 
-from dotenv import load_dotenv
-load_dotenv()
+from config import NST
 
 logger = logging.getLogger(__name__)
-
-NST = timezone(timedelta(hours=5, minutes=45))
-
-# # ── Anthropic native API config ───────────────────────────────────────────────
-# ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-# CLAUDE_MODEL      = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5-20251022")
-
-# ── Nepal fee constants ───────────────────────────────────────────────────────
-from decimal import Decimal, ROUND_HALF_UP
-
-SEBON_PCT     = Decimal("0.00015")   # 0.015% — buy + sell
-DP_CHARGE_NPR = Decimal("25.0")      # flat per transaction
-CGT_PCT       = Decimal("0.075")     # 7.5% on profit
-
-
-def _brokerage(gross: Decimal) -> Decimal:
-    """
-    Tiered NEPSE brokerage on transaction value.
-    Matches auditor.py and telegram_bot.py exactly.
-    """
-    if gross <= Decimal("2500"):
-        return Decimal("10")
-    elif gross <= Decimal("50000"):
-        rate = Decimal("0.0036")
-    elif gross <= Decimal("500000"):
-        rate = Decimal("0.0033")
-    elif gross <= Decimal("2000000"):
-        rate = Decimal("0.0031")
-    elif gross <= Decimal("10000000"):
-        rate = Decimal("0.0027")
-    else:
-        rate = Decimal("0.0024")
-    return (gross * rate).quantize(Decimal("0.01"), ROUND_HALF_UP)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -97,12 +53,12 @@ def _brokerage(gross: Decimal) -> Decimal:
 @dataclass
 class AnalystResult:
     """
-    Claude's recommendation for one stock.
+    Full analysis result for one stock.
     Written to market_log table.
     """
     symbol:           str
-    action:           str        = "WAIT"     # BUY / WAIT / AVOID
-    confidence:       int        = 0          # 0–100
+    action:           str        = "WAIT"
+    confidence:       int        = 0
     entry_price:      float      = 0.0
     stop_loss:        float      = 0.0
     target:           float      = 0.0
@@ -110,7 +66,7 @@ class AnalystResult:
     shares:           int        = 0
     breakeven:        float      = 0.0
     risk_reward:      float      = 0.0
-    suggested_hold:   int        = 17         # days
+    suggested_hold:   int        = 17
     reasoning:        str        = ""
     lesson_applied:   str        = ""
     primary_signal:   str        = ""
@@ -118,17 +74,11 @@ class AnalystResult:
     geo_score:        int        = 0
     rsi_14:           float      = 0.0
     candle_pattern:   str        = ""
-    urgency:          str        = "NORMAL"   # from GeminiFlag
+    urgency:          str        = "NORMAL"
     gemini_reason:    str        = ""
     market_log_id:    int        = None
-
-    # Support / Resistance — from indicators.py (20-day high/low)
-    # Shown to Claude in prompt for stop loss and target validation
     support_level:    float      = 0.0
     resistance_level: float      = 0.0
-
-    # Headlines from nepal_pulse — written by Gemini Flash, NOT sent to Claude
-    # Stored in market_log.gpt_verdict for GPT Sunday review
     headlines_politics: str      = ""
     headlines_economy:  str      = ""
     headlines_stock:    str      = ""
@@ -160,32 +110,29 @@ class AnalystResult:
 def _load_portfolio() -> dict:
     """Load open positions and capital from Neon."""
     try:
-        from sheets import read_tab, get_setting
-
-        rows = read_tab("portfolio")
-        open_pos = [r for r in rows if r.get("status", "").upper() == "OPEN"]
-
+        from sheets import get_setting, read_tab
         total_capital = float(get_setting("CAPITAL_TOTAL_NPR", "100000"))
-        invested      = sum(float(r.get("total_cost", 0) or 0) for r in open_pos)
+        rows          = read_tab("portfolio")
+        open_rows     = [r for r in rows if r.get("status", "").upper() == "OPEN"]
+        invested      = sum(float(r.get("total_cost", 0) or 0) for r in open_rows)
         liquid        = max(0.0, total_capital - invested)
-
+        holdings      = [
+            {
+                "symbol":  r.get("symbol", "?"),
+                "shares":  r.get("shares", 0),
+                "wacc":    r.get("wacc", 0),
+                "pnl_pct": r.get("pnl_pct", 0),
+                "pnl_npr": r.get("pnl_npr", 0),
+            }
+            for r in open_rows
+        ]
         return {
             "total_capital_npr": total_capital,
             "liquid_npr":        liquid,
             "invested_npr":      invested,
-            "open_positions":    len(open_pos),
-            "max_positions":     99,
-            "slots_remaining":    99,#max(0, 3 - len(open_pos)), 
-            "holdings": [
-                {
-                    "symbol":    r.get("symbol", ""),
-                    "shares":    r.get("shares", ""),
-                    "wacc":      r.get("wacc", ""),
-                    "pnl_pct":   r.get("pnl_pct", ""),
-                    "pnl_npr":   r.get("pnl_npr", ""),
-                }
-                for r in open_pos
-            ],
+            "open_positions":    len(open_rows),
+            "slots_remaining":   max(0, 3 - len(open_rows)),
+            "holdings":          holdings,
         }
     except Exception as exc:
         logger.warning("_load_portfolio failed: %s", exc)
@@ -194,69 +141,53 @@ def _load_portfolio() -> dict:
             "liquid_npr":        100000,
             "invested_npr":      0,
             "open_positions":    0,
-            "max_positions":     3,
             "slots_remaining":   3,
             "holdings":          [],
         }
 
 
 def _load_geo_context() -> dict:
-    """Load latest geo + nepal scores."""
+    """Read latest geo + nepal scores."""
     try:
         from sheets import get_latest_geo, get_latest_pulse
-
         geo   = get_latest_geo()   or {}
         pulse = get_latest_pulse() or {}
-
         return {
-            "geo_score":      int(geo.get("geo_score",     0) or 0),
-            "nepal_score":    int(pulse.get("nepal_score", 0) or 0),
-            "combined":       int(geo.get("geo_score", 0) or 0) + int(pulse.get("nepal_score", 0) or 0),
-            "geo_status":     geo.get("status",        "NEUTRAL"),
-            "nepal_status":   pulse.get("nepal_status", "NEUTRAL"),
-            "dxy":            geo.get("dxy",           "?"),
-
-            "bandh":          pulse.get("bandh_today",    "NO"),
-            "ipo_drain":      pulse.get("ipo_fpo_active", "NO"),
-            "crisis":         pulse.get("crisis_detected","NO"),
-            "key_geo_event":  geo.get("key_event",        ""),
-            "key_nepal_event":pulse.get("key_event",      ""),
-
-            # Headlines written by Gemini Flash via nepal_pulse.py
-            # Passed through to market_log.gpt_verdict — NOT sent to Claude
-            "headlines_politics": pulse.get("headlines_politics", ""),
-            "headlines_economy":  pulse.get("headlines_economy",  ""),
-            "headlines_stock":    pulse.get("headlines_stock",    ""),
+            "geo_score":       int(geo.get("geo_score",    0) or 0),
+            "nepal_score":     int(pulse.get("nepal_score",0) or 0),
+            "combined":        int(geo.get("geo_score", 0) or 0) + int(pulse.get("nepal_score", 0) or 0),
+            "geo_status":      geo.get("geo_status",    "NEUTRAL"),
+            "nepal_status":    pulse.get("status",      "NEUTRAL"),
+            "bandh":           pulse.get("bandh_today", "NO"),
+            "ipo_drain":       pulse.get("ipo_fpo_active", "NO"),
+            "crisis_detected": pulse.get("crisis_detected", "NO"),
+            "key_geo_event":   geo.get("key_event",    "None"),
+            "key_nepal_event": pulse.get("key_event",  "None"),
+            "dxy":             geo.get("dxy",           "99"),
         }
     except Exception as exc:
         logger.warning("_load_geo_context failed: %s", exc)
-        return {"geo_score": 0, "nepal_score": 0, "combined": 0}
+        return {}
 
 
 def _load_macro_context() -> dict:
-    """Load macro indicators from Neon macro_data table."""
+    """Read NRB macro + FD rate from Neon."""
     try:
-        from sheets import read_tab, get_setting
-        rows = read_tab("nrb_monthly", limit=1)
-        nrb = rows[0] if rows else {}
+        from sheets import get_setting, run_raw_sql
+        rows   = run_raw_sql("SELECT kpi_name, current_value FROM macro_data ORDER BY updated_at DESC LIMIT 30", ())
+        macro  = {r["kpi_name"]: r["current_value"] for r in rows}
         fd_rate = get_setting("FD_RATE_PCT", "8.5")
         return {
-                "policy_rate":      nrb.get("policy_rate",              "?"),
-                "bank_rate":        nrb.get("bank_rate",                "?"),
-                "cpi_inflation":    nrb.get("cpi_inflation",            "?"),
-                "credit_growth":    nrb.get("credit_growth_rate",       "?"),
-                "remittance_yoy":   nrb.get("remittance_yoy_change_pct","?"),
-                "forex_reserve":    nrb.get("fx_reserve_months",        "?"),
-                "bop_balance":      nrb.get("bop_overall_balance_usd_m","?"),
-                "bop_status":       nrb.get("bop_status",               "?"),
-                "bop_trend":        nrb.get("bop_trend",                "?"),
-                "liquidity":        nrb.get("liquidity_injected_billion","?"),
-                "sentiment":        nrb.get("overall_sentiment",        "?"),
-                "key_risks":        nrb.get("key_risks",                "?"),
-                "period":           nrb.get("period",                   "?"),
-                "fd_rate":          fd_rate,
-                "fd_signal":        get_setting("FD_SCORE_SIGNAL",      "NEUTRAL"),
-            }
+            "policy_rate":          macro.get("Policy_Rate",          "?"),
+            "nrb_rate_decision":    macro.get("NRB_Rate_Decision",    "UNCHANGED"),
+            "inflation_pct":        macro.get("Inflation_Pct",        "?"),
+            "remittance_yoy_pct":   macro.get("Remittance_YoY_Pct",  "?"),
+            "forex_reserve_months": macro.get("Forex_Reserve_Months", "?"),
+            "lending_rate":         macro.get("Lending_Rate",         "?"),
+            "period":               macro.get("Period",               "?"),
+            "fd_rate":              fd_rate,
+            "fd_signal":            get_setting("FD_SCORE_SIGNAL",    "NEUTRAL"),
+        }
     except Exception as exc:
         logger.warning("_load_macro_context failed: %s", exc)
         return {}
@@ -266,7 +197,6 @@ def _load_lessons(symbol: str, sector: str, limit: int = 6) -> list[str]:
     """
     Load relevant Learning Hub lessons.
     Prioritises: this symbol > this sector > MARKET-level lessons.
-    Uses new learning_hub schema: condition, finding, action, confidence_level.
     """
     try:
         from sheets import run_raw_sql
@@ -295,15 +225,15 @@ def _load_lessons(symbol: str, sector: str, limit: int = 6) -> list[str]:
         )
         lessons = []
         for r in rows:
-            sym    = r.get("symbol", "?")
-            ltype  = r.get("lesson_type", "")
-            cond   = r.get("condition",   "")[:80]
-            find   = r.get("finding",     "")[:120]
-            act    = r.get("action",      "")
-            conf   = r.get("confidence_level", "LOW")
-            wr     = r.get("win_rate",    "")
-            n      = r.get("trade_count", "")
-            stat   = f" (win_rate={wr}, n={n})" if n else ""
+            sym   = r.get("symbol", "?")
+            ltype = r.get("lesson_type", "")
+            cond  = r.get("condition",   "")[:80]
+            find  = r.get("finding",     "")[:120]
+            act   = r.get("action",      "")
+            conf  = r.get("confidence_level", "LOW")
+            wr    = r.get("win_rate",    "")
+            n     = r.get("trade_count", "")
+            stat  = f" (win_rate={wr}, n={n})" if n else ""
             lessons.append(f"[{sym}|{ltype}|{conf}] IF {cond} → {act}: {find}{stat}")
         return lessons
     except Exception as exc:
@@ -312,7 +242,6 @@ def _load_lessons(symbol: str, sector: str, limit: int = 6) -> list[str]:
 
 
 def _load_market_state() -> str:
-    """Read current market state from settings."""
     try:
         from sheets import get_setting
         return get_setting("MARKET_STATE", "SIDEWAYS").upper().strip()
@@ -321,146 +250,258 @@ def _load_market_state() -> str:
 
 
 def _load_loss_streak() -> int:
-    """Read current loss streak from financials table."""
     try:
-        from sheets import run_raw_sql
-        rows = run_raw_sql(
-            "SELECT current_value FROM financials WHERE kpi_name = 'current_loss_streak'"
-        )
-        return int(float(rows[0]["current_value"] or 0)) if rows else 0
+        from sheets import read_tab
+        rows    = read_tab("financials")
+        kpi_map = {r.get("kpi_name", ""): r.get("current_value", "") for r in rows}
+        return int(float(kpi_map.get("Current_Loss_Streak", 0) or 0))
     except Exception:
         return 0
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 2 — FEE CALCULATIONS
+# SECTION 2 — FUNDAMENTAL CONTEXT LOADER
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _calc_breakeven(entry_price: float, shares: int = 1) -> float:
+def _load_fundamentals_context(symbol: str, sector: str) -> dict:
     """
-    True breakeven price after all Nepal transaction costs.
-    Uses tiered brokerage — same as auditor.py.
-
-    Buy side:  brokerage (tiered) + SEBON 0.015% + DP NPR 25
-    Sell side: brokerage (tiered) + SEBON 0.015% + DP NPR 25
-    CGT is only on profit so does not affect breakeven price directly,
-    but breakeven must cover both sides' costs.
-
-    Formula:
-        total_buy_cost  = brokerage(buy_val) + sebon(buy_val) + DP
-        breakeven_val   = buy_val + total_buy_cost + total_sell_cost
-        breakeven_price = breakeven_val / shares
-    (Where sell costs are estimated at buy price — close enough for target setting)
+    Load the latest two quarters of fundamentals for this symbol + empirical beta.
+    Returns {"found": False} on any failure — prompt continues without it.
     """
-    if entry_price <= 0 or shares <= 0:
-        return entry_price
+    result = {"found": False}
+    try:
+        from sheets import run_raw_sql
 
-    buy_val  = Decimal(str(entry_price)) * Decimal(str(shares))
-    buy_brok = _brokerage(buy_val)
-    buy_sebon = (buy_val * SEBON_PCT).quantize(Decimal("0.01"), ROUND_HALF_UP)
-    buy_cost = buy_brok + buy_sebon + DP_CHARGE_NPR
+        rows = run_raw_sql(
+            """
+            SELECT
+                symbol, fiscal_year, quarter,
+                npl, capital_fund_to_rwa, cd_ratio,
+                roa, roe, eps, dps,
+                pe_ratio, peg_value, net_profit,
+                prev_quarter_profit, growth_rate,
+                interest_spread, cost_of_fund, base_rate,
+                net_worth, promoter_shares, net_interest_income
+            FROM fundamentals
+            WHERE symbol = %s
+            ORDER BY fiscal_year DESC, quarter DESC
+            LIMIT 2
+            """,
+            (symbol.upper(),)
+        )
 
-    # Sell cost estimated at same value (breakeven — price hasn't moved)
-    sell_brok  = _brokerage(buy_val)
-    sell_sebon = (buy_val * SEBON_PCT).quantize(Decimal("0.01"), ROUND_HALF_UP)
-    sell_cost  = sell_brok + sell_sebon + DP_CHARGE_NPR
+        if not rows:
+            return result
 
-    total_cost    = buy_val + buy_cost + sell_cost
-    breakeven_prc = total_cost / Decimal(str(shares))
-    return float(breakeven_prc.quantize(Decimal("0.01"), ROUND_HALF_UP))
+        latest = dict(rows[0])
+        prev   = dict(rows[1]) if len(rows) > 1 else {}
+
+        # Beta lookup
+        beta_rows = run_raw_sql(
+            "SELECT beta, market_corr_p, n_months FROM fundamental_beta WHERE symbol = %s",
+            (symbol.upper(),)
+        )
+        beta        = None
+        beta_source = "not_available"
+        if beta_rows:
+            b_val = float(beta_rows[0].get("beta", 0))
+            b_p   = float(beta_rows[0].get("market_corr_p", 1))
+            b_n   = int(beta_rows[0].get("n_months", 0))
+            if b_p < 0.05 and b_n >= 12 and -2.0 <= b_val <= 3.0:
+                beta        = round(b_val, 3)
+                beta_source = f"empirical ({b_n}m, p={b_p:.3f})"
+            else:
+                beta_source = f"empirical_rejected (p={b_p:.3f}, n={b_n}m)"
+
+        # Pre-compute trend notes for Claude
+        trend_notes = []
+        sector_key  = sector.lower()
+
+        def _f(d, key):
+            try:
+                v = d.get(key)
+                return float(v) if v is not None else None
+            except (TypeError, ValueError):
+                return None
+
+        if any(s in sector_key for s in ["bank", "finance", "microfinance"]):
+            npl_new = _f(latest, "npl")
+            npl_old = _f(prev,   "npl")
+            if npl_new is not None:
+                if npl_new > 5.0:
+                    trend_notes.append(f"⚠ NPL={npl_new:.1f}% — above 5% (elevated credit risk)")
+                elif npl_new < 2.0:
+                    trend_notes.append(f"✓ NPL={npl_new:.1f}% — very clean loan book")
+                if npl_old is not None:
+                    if npl_new > npl_old:
+                        trend_notes.append(f"⚠ NPL rising: {npl_old:.1f}% → {npl_new:.1f}%")
+                    elif npl_new < npl_old:
+                        trend_notes.append(f"✓ NPL improving: {npl_old:.1f}% → {npl_new:.1f}%")
+
+            cfrwa = _f(latest, "capital_fund_to_rwa")
+            if cfrwa is not None:
+                if cfrwa < 11.0:
+                    trend_notes.append(f"⚠ capital_fund_to_rwa={cfrwa:.1f}% — below NRB minimum 11%")
+                elif cfrwa > 13.0:
+                    trend_notes.append(f"✓ capital_fund_to_rwa={cfrwa:.1f}% — well capitalised")
+
+            spread = _f(latest, "interest_spread")
+            if spread is not None:
+                if spread > 4.5:
+                    trend_notes.append(f"✓ interest_spread={spread:.2f}% — healthy margin")
+                elif spread < 3.0:
+                    trend_notes.append(f"⚠ interest_spread={spread:.2f}% — compressed margin")
+
+        if "hydro" in sector_key:
+            roa = _f(latest, "roa")
+            roe = _f(latest, "roe")
+            dps = _f(latest, "dps")
+            if roa is not None and roa > 5.0:
+                trend_notes.append(f"✓ ROA={roa:.1f}% — strong (Hydro signal rho=+0.19)")
+            if roe is not None and roe > 10.0:
+                trend_notes.append(f"✓ ROE={roe:.1f}% — good equity return")
+            if dps is not None and dps > 0:
+                trend_notes.append(f"✓ DPS={dps:.0f} — dividend paying (Hydro rho=+0.14)")
+
+        gr = _f(latest, "growth_rate")
+        if gr is not None:
+            if gr < -10:
+                trend_notes.append(f"⚠ growth_rate={gr:.1f}% — significant earnings decline")
+            elif gr > 20:
+                trend_notes.append(f"✓ growth_rate={gr:.1f}% — strong earnings growth")
+
+        pe = _f(latest, "pe_ratio")
+        if pe is not None and pe > 0:
+            if pe > 40:
+                trend_notes.append(f"PE={pe:.0f}x — premium valuation, needs strong momentum")
+            elif pe < 10:
+                trend_notes.append(f"PE={pe:.0f}x — low valuation, potential value opportunity")
+
+        prom = _f(latest, "promoter_shares")
+        if prom is not None and prom > 70:
+            trend_notes.append(
+                f"⚠ promoter_shares={prom:.0f}% — high concentration (validated neg signal rho=-0.12)"
+            )
+
+        result = {
+            "found":       True,
+            "period":      f"{latest.get('fiscal_year','?')} Q{latest.get('quarter','?')}",
+            "latest":      latest,
+            "beta":        beta,
+            "beta_source": beta_source,
+            "trend_notes": trend_notes,
+        }
+
+    except Exception as exc:
+        logger.warning("_load_fundamentals_context(%s) failed: %s", symbol, exc)
+        result = {"found": False}
+
+    return result
 
 
-def _calc_true_profit(entry: float, exit_price: float, shares: int) -> float:
-    """
-    Calculate actual NPR profit after ALL Nepal transaction costs.
-    Uses tiered brokerage — same as auditor.py.
-    """
-    if shares <= 0:
-        return 0.0
+def _format_fundamental_section(fund_ctx: dict) -> str:
+    """Format fundamental context for injection into Claude prompt."""
+    if not fund_ctx or not fund_ctx.get("found"):
+        return ""
 
-    buy_val  = Decimal(str(entry))      * Decimal(str(shares))
-    sell_val = Decimal(str(exit_price)) * Decimal(str(shares))
-    gross    = sell_val - buy_val
+    latest = fund_ctx.get("latest", {})
+    beta   = fund_ctx.get("beta")
+    notes  = fund_ctx.get("trend_notes", [])
+    period = fund_ctx.get("period", "?")
 
-    buy_cost  = (_brokerage(buy_val)
-                 + (buy_val  * SEBON_PCT).quantize(Decimal("0.01"), ROUND_HALF_UP)
-                 + DP_CHARGE_NPR)
-    sell_cost = (_brokerage(sell_val)
-                 + (sell_val * SEBON_PCT).quantize(Decimal("0.01"), ROUND_HALF_UP)
-                 + DP_CHARGE_NPR)
-    cgt = (gross * CGT_PCT).quantize(Decimal("0.01"), ROUND_HALF_UP) if gross > 0 else Decimal("0")
+    def _fmt(key, fmt=".2f", suffix=""):
+        val = latest.get(key)
+        try:
+            return f"{float(val):{fmt}}{suffix}" if val is not None else "N/A"
+        except (TypeError, ValueError):
+            return "N/A"
 
-    net = gross - buy_cost - sell_cost - cgt
-    return float(net.quantize(Decimal("0.01"), ROUND_HALF_UP))
+    beta_str = (
+        f"{beta:.3f} ({fund_ctx.get('beta_source', '')})"
+        if beta is not None
+        else f"N/A ({fund_ctx.get('beta_source', '')})"
+    )
+
+    lines = [
+        "",
+        "═══════════════════════════════════════════════",
+        f"FUNDAMENTAL DATA  ({period})",
+        "═══════════════════════════════════════════════",
+        f"Beta vs NEPSE:     {beta_str}",
+        f"EPS:               {_fmt('eps')}",
+        f"DPS:               {_fmt('dps')}",
+        f"PE Ratio:          {_fmt('pe_ratio')}",
+        f"ROA:               {_fmt('roa', '.2f', '%')}",
+        f"ROE:               {_fmt('roe', '.2f', '%')}",
+        f"NPL:               {_fmt('npl', '.2f', '%')}",
+        f"Capital/RWA:       {_fmt('capital_fund_to_rwa', '.2f', '%')}",
+        f"CD Ratio:          {_fmt('cd_ratio', '.2f', '%')}",
+        f"Interest Spread:   {_fmt('interest_spread', '.2f', '%')}",
+        f"Growth Rate:       {_fmt('growth_rate', '.1f', '%')}",
+        f"Net Profit:        NPR {_fmt('net_profit', ',.0f')}",
+        f"Promoter Shares:   {_fmt('promoter_shares', '.1f', '%')}",
+    ]
+
+    if notes:
+        lines.append("")
+        lines.append("KEY FUNDAMENTAL SIGNALS (research-validated, lag=1Q):")
+        for note in notes:
+            lines.append(f"  {note}")
+
+    lines.append("═══════════════════════════════════════════════")
+    lines.append(
+        "NOTE: Fundamentals are supporting context only. "
+        "Primary signal must still be technical (MACD/BB/SMA). "
+        "Data is 1 quarter lagged."
+    )
+
+    return "\n".join(lines)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 3 — TRADING DAY CONTEXT
+# SECTION 3 — HELPER CONTEXTS
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _trading_day_context() -> str:
-    """
-    Returns a one-liner about today's weekday for Claude to factor in.
-    Research: Buy Sun/Mon (-0.04% to -0.02% mean), Exit Wed/Thu (+0.13%)
-    """
-    nst_now  = datetime.now(tz=NST)
-    weekday  = nst_now.weekday()  # Mon=0 ... Sun=6
-    day_name = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"][weekday]
-
-    if weekday == 6:   # Sunday
-        return f"Today is {day_name}: historically lowest return day (-0.04% mean). Good entry day — buy dips."
-    elif weekday == 0: # Monday
-        return f"Today is {day_name}: second lowest return day. Still good for entries."
-    elif weekday == 1: # Tuesday
-        return f"Today is {day_name}: returns positive (+0.07% mean). Neutral for entry/exit."
-    elif weekday == 2: # Wednesday
-        return f"Today is {day_name}: historically best return day (+0.13% mean). Prefer exit over entry."
-    elif weekday == 3: # Thursday
-        return f"Today is {day_name}: second best return day, lowest volatility. Good exit day."
+    """Weekday effect: buy Sun/Mon, exit Wed/Thu."""
+    day = datetime.now(tz=NST).weekday()
+    day_names = {0: "Monday", 1: "Tuesday", 2: "Wednesday",
+                 3: "Thursday", 4: "Friday", 6: "Sunday"}
+    today = day_names.get(day, "Unknown")
+    if day == 6 or day == 0:
+        return f"TODAY IS {today} — best entry days (Sun/Mon effect). Favor BUY."
+    elif day in (2, 3):
+        return f"TODAY IS {today} — mid-week. Consider exits. New entries need strong signal."
     else:
-        return f"Today is {day_name}: non-trading day."
+        return f"TODAY IS {today} — neutral day."
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# SECTION 4 — HERDING / BUBBLE DETECTION
-# ══════════════════════════════════════════════════════════════════════════════
 
 def _herding_context(flag, market_state: str) -> str:
     """
-    Detect potential herding bubble or capitulation conditions.
+    Detect herding bubble / capitulation conditions.
     Research: herding β=0.351-0.428, strongest in bull markets and crises.
-    When herding is active, prices deviate from true value — increases risk.
     """
     warnings = []
+    rsi  = float(flag.rsi_14 or 0)
+    conf = float(getattr(flag, "composite_score", 0) or 0)
+    geo  = int(getattr(flag, "geo_combined", 0) or 0)
 
-    # High RSI + bull market = potential bubble
-    rsi = float(flag.rsi_14 or 0)
     if rsi > 72 and market_state in ("FULL_BULL", "CAUTIOUS_BULL"):
         warnings.append(
             f"RSI={rsi:.1f} in {market_state} — herding bubble risk. "
             "Retail herd may be chasing. Wait for pullback."
         )
-
-    # Very low RSI + BEAR = potential capitulation (contrarian opportunity)
     if rsi < 25 and market_state == "BEAR":
         warnings.append(
             f"RSI={rsi:.1f} in BEAR — possible capitulation. "
             "Herding-driven oversell. Watch for reversal signal."
         )
-
-    # Conf score very high = crowd already bought in
-    conf = float(getattr(flag, "composite_score", 0) or 0)
     if conf > 90:
-        warnings.append(
-            "Very high composite score — most alpha may already be priced in by crowd."
-        )
-
-    # High geo combined + bull market = euphoria risk
-    geo = int(getattr(flag, "geo_combined", 0) or 0)
+        warnings.append("Very high composite score — most alpha may already be priced in.")
     if geo >= 4 and market_state == "FULL_BULL":
         warnings.append(
-            "High geo score in FULL_BULL — market euphoria conditions. "
-            "Herding amplifies both gains and reversals. Tighten stops."
+            "High geo score in FULL_BULL — market euphoria. "
+            "Herding amplifies reversals. Tighten stops."
         )
 
     if not warnings:
@@ -468,39 +509,46 @@ def _herding_context(flag, market_state: str) -> str:
     return "HERDING ALERT: " + " | ".join(warnings)
 
 
+def _calc_breakeven(entry_price: float, shares: int) -> float:
+    """True breakeven after NEPSE fees: brokerage 0.40% + SEBON 0.015% + NPR 25 DP."""
+    if shares <= 0:
+        return entry_price
+    total_buy_cost = entry_price * shares * (1 + (0.40 + 0.015) / 100) + 25
+    breakeven_per_share = (total_buy_cost + entry_price * shares * (0.40 + 0.015) / 100 + 25) / shares
+    return round(breakeven_per_share, 2)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 5 — BUILD CLAUDE PROMPT
+# SECTION 4 — BUILD CLAUDE PROMPT
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _build_prompt(
-    flag:         object,  # GeminiFlag
+    flag:         object,   # GeminiFlag
     portfolio:    dict,
     geo:          dict,
     macro:        dict,
     lessons:      list[str],
     market_state: str,
     loss_streak:  int,
+    fund_ctx:     dict = None,  # ← NEW: fundamental context
 ) -> str:
     """
     Build the full deep-analysis prompt for Claude.
-    Injects all research-backed rules explicitly.
     """
     nst_now = datetime.now(tz=NST)
 
-    lessons_str = "\n".join(f"  - {l}" for l in lessons) if lessons else "  No lessons yet."
+    lessons_str  = "\n".join(f"  - {l}" for l in lessons) if lessons else "  No lessons yet."
     holdings_str = "\n".join(
-        f"  {h['symbol']}: {h['shares']} shares @ WACC {h['wacc']} | P&L {h['pnl_pct']}% (NPR {h['pnl_npr']})"
+        f"  {h['symbol']}: {h['shares']} shares @ WACC {h['wacc']} | "
+        f"P&L {h['pnl_pct']}% (NPR {h['pnl_npr']})"
         for h in portfolio.get("holdings", [])
     ) or "  No open positions."
 
-    day_context   = _trading_day_context()
-    herding_alert = _herding_context(flag, market_state)
-
-    # Candle info
-    candle_str = f"{flag.best_candle} (Tier {flag.candle_tier})" if flag.best_candle else "None"
-
-    # Suggested hold from Gemini
-    hold_days = getattr(flag, "suggested_hold", 17)
+    day_context      = _trading_day_context()
+    herding_alert    = _herding_context(flag, market_state)
+    candle_str       = f"{flag.best_candle} (Tier {flag.candle_tier})" if flag.best_candle else "None"
+    hold_days        = getattr(flag, "suggested_hold", 17)
+    fund_section_str = _format_fundamental_section(fund_ctx) if fund_ctx else ""
 
     prompt = f"""You are a senior NEPSE quantitative analyst with deep knowledge of Nepal market research.
 Analyze this specific stock and produce a precise trading recommendation.
@@ -520,8 +568,8 @@ Urgency:         {flag.urgency}  (from Gemini screener)
 Gemini Reason:   {flag.gemini_reason}
 Gemini Risk:     {flag.gemini_risk}
 
-TECHNICAL INDICATORS (frozen at 10:30 AM NST, computed from historical data):
-  RSI 14:          {flag.rsi_14:.1f}  [{flag.rsi_signal if hasattr(flag, 'rsi_signal') else ''}]
+TECHNICAL INDICATORS (frozen at 10:30 AM NST):
+  RSI 14:          {flag.rsi_14:.1f}  [{getattr(flag, 'rsi_signal', '')}]
   MACD Cross:      {flag.macd_cross}
   BB Signal:       {flag.bb_signal}
   OBV Trend:       {getattr(flag, 'obv_trend', '?')}
@@ -529,12 +577,19 @@ TECHNICAL INDICATORS (frozen at 10:30 AM NST, computed from historical data):
   Tech Score:      {flag.tech_score}/100
   Candle Pattern:  {candle_str}
   C* Signal:       {'YES — excess return above C*=0.129 (SIM paper)' if getattr(flag, 'cstar_signal', False) else 'NO'}
+  Fundamental Adj: {getattr(flag, 'fundamental_adj', 0.0):+.2f} pts [{getattr(flag, 'fundamental_reason', 'n/a')}]
 
 Primary Signal:  {flag.primary_signal}
 Composite Score: {flag.composite_score:.1f}
 Suggested Hold:  ~{hold_days} days (research-based)
 Geo Score:       {flag.geo_combined:+d}/10
 
+PRICE LEVELS (20-day range):
+  Support:         NPR {flag.support_level:,.2f}
+  Resistance:      NPR {flag.resistance_level:,.2f}
+  LTP vs Support:  {((flag.ltp - flag.support_level) / flag.support_level * 100) if flag.support_level else 0:+.1f}%
+  LTP vs Resist:   {((flag.resistance_level - flag.ltp) / flag.ltp * 100) if flag.resistance_level else 0:+.1f}%
+{fund_section_str}
 ═══════════════════════════════════════════════
 MARKET CONTEXT
 ═══════════════════════════════════════════════
@@ -542,94 +597,63 @@ Geo Score:       {geo.get('geo_score', 0):+d}/5  ({geo.get('geo_status', '?')})
 Nepal Score:     {geo.get('nepal_score', 0):+d}/5  ({geo.get('nepal_status', '?')})
 Combined:        {geo.get('combined', 0):+d}/10
 Bandh Today:     {geo.get('bandh', 'NO')}
-DIY:             {geo.get('dxy','99')}
 IPO Drain:       {geo.get('ipo_drain', 'NO')}
 Key Geo Event:   {geo.get('key_geo_event', 'None')}
 Key Nepal Event: {geo.get('key_nepal_event', 'None')}
 
-PRICE LEVELS (20-day range):
-  Support:         NPR {flag.support_level:,.2f}  (20-day low — potential floor / stop reference)
-  Resistance:      NPR {flag.resistance_level:,.2f}  (20-day high — potential ceiling / target reference)
-  LTP vs Support:  {((flag.ltp - flag.support_level) / flag.support_level * 100) if flag.support_level else 0:+.1f}%  from support
-  LTP vs Resist:   {((flag.resistance_level - flag.ltp) / flag.ltp * 100) if flag.resistance_level else 0:+.1f}%  to resistance
-
-MACRO (NRB Latest — updated monthly):
- MACRO (NRB {macro.get('period', '?')} — updated monthly):
+MACRO (NRB {macro.get('period', '?')} — updated monthly):
   Policy Rate:     {macro.get('policy_rate', '?')}%
-  CPI Inflation:   {macro.get('cpi_inflation', '?')}%
-  Credit Growth:   {macro.get('credit_growth', '?')}%
-  Remittance YoY:  {macro.get('remittance_yoy', '?')}%
-  FX Reserve:      {macro.get('forex_reserve', '?')} months
-  BOP Balance:     USD {macro.get('bop_balance', '?')}M ({macro.get('bop_status', '?')} — {macro.get('bop_trend', '?')})
-  Liquidity:       {macro.get('liquidity', '?')}
-  NRB Sentiment:   {macro.get('sentiment', '?')}
-  Key Risks:       {macro.get('key_risks', '?')}
-  FD Rate (1yr):   {macro.get('fd_rate', '?')}%  [{macro.get('fd_signal', '?')}]
-
+  NRB Decision:    {macro.get('nrb_rate_decision', '?')}
+  Inflation:       {macro.get('inflation_pct', '?')}%
+  Remittance YoY:  {macro.get('remittance_yoy_pct', '?')}%
+  Forex Reserve:   {macro.get('forex_reserve_months', '?')} months
+  Lending Rate:    {macro.get('lending_rate', '?')}%
+  FD Rate (1yr):   {macro.get('fd_rate', '?')}%  [{macro.get('fd_signal', 'NEUTRAL')}]
 
 ═══════════════════════════════════════════════
 YOUR PORTFOLIO
 ═══════════════════════════════════════════════
 Total Capital:   NPR {portfolio.get('total_capital_npr', 0):,.0f}
-Available Cash:  NPR {portfolio.get('liquid_npr', 0):,.0f}
-Invested:        NPR {portfolio.get('invested_npr', 0):,.0f}
-Open Positions:  {portfolio.get('open_positions', 0)}/1000 max
+Liquid Cash:     NPR {portfolio.get('liquid_npr', 0):,.0f}
+Open Positions:  {portfolio.get('open_positions', 0)}/3
 Slots Left:      {portfolio.get('slots_remaining', 0)}
 
-Current Holdings:
+Holdings:
 {holdings_str}
 
 ═══════════════════════════════════════════════
-TRADING DAY INTELLIGENCE
+SITUATIONAL CONTEXT
 ═══════════════════════════════════════════════
-{day_context}
-Research: Buy Sunday/Monday (lowest return days = better entry prices).
-          Exit Wednesday/Thursday (highest return days = better exits).
-          (Trading Day Effect paper, n=4,504 days, F=3.217, p=0.012)
+Trading Day:     {day_context}
+Herding Check:   {herding_alert}
 
 ═══════════════════════════════════════════════
-HERDING / BUBBLE DETECTION
-═══════════════════════════════════════════════
-{herding_alert}
-Research: Herding β=0.351-0.428 in NEPSE (p<0.052). Strongest in bull markets
-          and global crises. Herding amplifies bubbles AND crashes.
-          When herd is active: tighten stops, reduce allocation by 10-20%.
-
-═══════════════════════════════════════════════
-LEARNING HUB — RELEVANT LESSONS
+LEARNING HUB LESSONS (most relevant first)
 ═══════════════════════════════════════════════
 {lessons_str}
 
 ═══════════════════════════════════════════════
-RESEARCH-BACKED RULES (APPLY THESE)
+NEPAL FEE MATH (use for all price calculations)
 ═══════════════════════════════════════════════
-
-
-NEPAL FEES (always include):
-  Brokerage (tiered on transaction value):
-    ≤ NPR 2,500          → flat NPR 10
-    NPR 2,501–50,000     → 0.36%
-    NPR 50,001–500,000   → 0.33%
-    NPR 500,001–2,000,000→ 0.31%
-    NPR 2M–10M           → 0.27%
-    > NPR 10M            → 0.24%
-  SEBON:     0.015% buy + 0.015% sell
-  DP charge: NPR 25 flat per transaction
-  CGT:       7.5% on profit only
-  Breakeven = (buy_val + buy_brokerage + buy_sebon + NPR25 + sell_brokerage + sell_sebon + NPR25) / shares
+  Buy cost:    trade_value × 1.00415 + NPR 25
+  Sell cost:   trade_value × 1.00415 + NPR 25
+  Breakeven:   entry × (1 + 0.0083) + NPR 50/shares
+  CGT:         5% on net profit only (individuals)
+  Max position: 10% of total capital = NPR {portfolio.get('total_capital_npr', 0) * 0.10:,.0f}
+  Max positions: 3 simultaneous
 
 ═══════════════════════════════════════════════
-YOUR TASK
+TASK
 ═══════════════════════════════════════════════
-Analyze {flag.symbol} and decide: BUY / WAIT / AVOID
-
-BUY if: confidence ≥ 70%, setup is clean, risk is defined, allocation makes sense
-WAIT if: setup looks good but timing is off, or need confirmation
-AVOID if: risk too high, wrong sector, Learning Hub warns against it, or contra-indicators present
-
-For BUY: calculate exact NPR amounts. Use max 20% of total capital per position.
-For WAIT/AVOID: give specific conditions that would change your answer.
-Include only ordinary shares, exclude mutual funds, debentures, promotor shares etc
+Produce a precise BUY / WAIT / AVOID recommendation.
+- BUY: only if primary signal is MACD/BB/SMA (RSI alone is never enough)
+- Stop loss: always 3% below entry (hard rule)
+- Target: use resistance level as reference, must exceed breakeven by >1%
+- Hold: use suggested hold from research ({hold_days} days for {flag.primary_signal})
+- Use max 10% of total capital per position
+- For WAIT/AVOID: give specific conditions that would change your answer
+- Include only ordinary shares, exclude mutual funds, debentures, promoter shares
+- Consider fundamental signals as supporting context, not primary trigger
 
 Respond ONLY with this JSON — no markdown, no explanation outside JSON:
 {{
@@ -644,7 +668,7 @@ Respond ONLY with this JSON — no markdown, no explanation outside JSON:
   "risk_reward": number,
   "suggested_hold_days": number,
   "primary_signal": "MACD or BB or SMA or OBV_MOMENTUM or RSI",
-  "reasoning": "5-6 sentences covering: why this signal, what risks, what the Learning Hub says, sector context",
+  "reasoning": "5-6 sentences covering: why this signal, what risks, what the Learning Hub says, sector context, and any fundamental quality flags",
   "lesson_applied": "which lesson from Learning Hub was most relevant, or NONE",
   "wait_condition": "if WAIT/AVOID: what specific condition would make this a BUY",
   "herding_note": "one sentence on herding/bubble risk or NONE"
@@ -654,292 +678,119 @@ Respond ONLY with this JSON — no markdown, no explanation outside JSON:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 6.a — CALL CLAUDE
+# SECTION 5 — CALL CLAUDE
 # ══════════════════════════════════════════════════════════════════════════════
-def ask_claude(prompt: str) -> Optional[dict]:
-    from typing import Optional
-    from anthropic import Anthropic
-    # The SDK automatically uses os.environ.get("ANTHROPIC_API_KEY")
-    client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
+def _call_claude(prompt: str) -> Optional[dict]:
+    """Call Claude via Anthropic SDK. Returns parsed JSON dict or None."""
     try:
+        from anthropic import Anthropic
+        client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
         response = client.messages.create(
-            model="claude-3-5-sonnet-20241022", # Latest Sonnet 3.5 identifier
-            max_tokens=1200,
-            # Native SDK moves system instruction to its own argument
-            system=(
+            model      = "claude-sonnet-4-6",
+            max_tokens = 1200,
+            system     = (
                 "You are a senior NEPSE quantitative analyst. "
                 "You respond ONLY in valid JSON. No markdown fences. "
                 "You never recommend a trade without a clear stop loss."
             ),
-            messages=[
-                {"role": "user", "content": prompt},
-                # Tip: You can "prefill" the assistant response with "{" 
-                # to further force JSON, but requires a different structure.
-            ],
+            messages = [{"role": "user", "content": prompt}],
         )
-
-        # Content is a list of blocks; get the text from the first one
         raw = response.content[0].text.strip()
-
-        # Robust cleaning in case Claude still includes markdown fences
         if raw.startswith("```"):
-            # Split by backticks and find the segment that looks like JSON
             parts = raw.split("```")
-            raw = parts[1] if len(parts) > 1 else parts[0]
+            raw   = parts[1] if len(parts) > 1 else parts[0]
             if raw.lower().startswith("json"):
                 raw = raw[4:]
             raw = raw.strip()
-
         result = json.loads(raw)
-        
-        logger.info("Claude: %s %s | conf=%s",
-                    result.get("action", "?"),
-                    result.get("primary_signal", "?"),
-                    result.get("confidence", "?"))
-        return result
-
-    except json.JSONDecodeError as exc:
-        logger.error("Claude returned invalid JSON: %s | Raw: %s", exc, raw)
-        return None
-    except Exception as exc:
-        logger.error("Claude API call failed: %s", exc)
-        return None
-    
-# ══════════════════════════════════════════════════════════════════════════════
-# SECTION 6.b — CALL CLAUDE VIA NATIVE ANTHROPIC API
-# ══════════════════════════════════════════════════════════════════════════════
-def _call_claude(prompt: str) -> Optional[dict]:
-    from openai import OpenAI
-
-    client = OpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=os.getenv("OPENROUTER_API_KEY"),
-    )
-
-    try:
-        response = client.chat.completions.create(
-            model="anthropic/claude-sonnet-4.6" ,#"anthropic/claude-sonnet-4-5",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a senior NEPSE quantitative analyst. "
-                        "You respond ONLY in valid JSON. No markdown fences. "
-                        "You never recommend a trade without a clear stop loss."
-                    )
-                },
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=1200,
+        logger.info(
+            "Claude: %s %s | conf=%s",
+            result.get("action", "?"),
+            result.get("primary_signal", "?"),
+            result.get("confidence", "?"),
         )
-
-        raw = response.choices[0].message.content.strip()
-
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-            raw = raw.strip()
-
-        result = json.loads(raw)
-        logger.info("Claude: %s %s | conf=%s",
-                    result.get("action", "?"),
-                    result.get("primary_signal", "?"),
-                    result.get("confidence", "?"))
         return result
-
     except json.JSONDecodeError as exc:
-        logger.error("Claude returned invalid JSON: %s", exc)
+        logger.warning("Claude returned invalid JSON: %s", exc)
         return None
     except Exception as exc:
         logger.error("Claude API call failed: %s", exc)
         return None
 
+
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 7 — ASSEMBLE RESULT
+# SECTION 6 — ASSEMBLE RESULT + WRITE TO DB
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _assemble_result(claude_json: dict, flag, geo: dict = None) -> AnalystResult:
+def _assemble_result(claude_json: dict, flag, geo: dict) -> AnalystResult:
     """Convert Claude JSON response into AnalystResult dataclass."""
-    if geo is None:
-        geo = {}
-    action     = str(claude_json.get("action", "WAIT")).upper()
-    entry      = float(claude_json.get("entry_price", flag.ltp) or flag.ltp)
-    shares     = int(claude_json.get("shares", 0) or 0)
-    breakeven  = float(claude_json.get("breakeven", 0) or 0)
-
-    # If Claude didn't calculate breakeven, compute it ourselves
-    if breakeven <= 0 and entry > 0:
-        breakeven = _calc_breakeven(entry, max(shares, 1))
-
     return AnalystResult(
-        symbol         = flag.symbol,
-        action         = action,
-        confidence     = int(claude_json.get("confidence", 0) or 0),
-        entry_price    = entry,
-        stop_loss      = float(claude_json.get("stop_loss", 0)      or 0),
-        target         = float(claude_json.get("target", 0)         or 0),
-        allocation_npr = float(claude_json.get("allocation_npr", 0) or 0),
-        shares         = shares,
-        breakeven      = breakeven,
-        risk_reward    = float(claude_json.get("risk_reward", 0)    or 0),
-        suggested_hold = int(claude_json.get("suggested_hold_days",
-                              getattr(flag, "suggested_hold", 17)) or 17),
-        reasoning      = str(claude_json.get("reasoning",     "")[:500]),
-        lesson_applied = str(claude_json.get("lesson_applied","")[:200]),
-        primary_signal = str(claude_json.get("primary_signal",
-                              getattr(flag, "primary_signal", ""))[:20]),
-        sector         = getattr(flag, "sector",        ""),
-        geo_score      = getattr(flag, "geo_combined",  0),
-        rsi_14         = float(getattr(flag, "rsi_14",  0) or 0),
-        candle_pattern = getattr(flag, "best_candle",   ""),
-        urgency        = getattr(flag, "urgency",       "NORMAL"),
-        gemini_reason  = getattr(flag, "gemini_reason", "")[:200],
-        market_log_id  = getattr(flag, "market_log_id", None),
-        # Support / Resistance from indicators → filter_engine → gemini_filter
-        support_level    = float(getattr(flag, "support_level",    0) or 0),
-        resistance_level = float(getattr(flag, "resistance_level", 0) or 0),
-        # Headlines from nepal_pulse via geo context
-        headlines_politics = geo.get("headlines_politics", "") if geo else "",
-        headlines_economy  = geo.get("headlines_economy",  "") if geo else "",
-        headlines_stock    = geo.get("headlines_stock",    "") if geo else "",
+        symbol          = flag.symbol,
+        action          = claude_json.get("action",           "WAIT"),
+        confidence      = int(claude_json.get("confidence",   0)),
+        entry_price     = float(claude_json.get("entry_price",0)),
+        stop_loss       = float(claude_json.get("stop_loss",  0)),
+        target          = float(claude_json.get("target",     0)),
+        allocation_npr  = float(claude_json.get("allocation_npr", 0)),
+        shares          = int(claude_json.get("shares",       0)),
+        breakeven       = float(claude_json.get("breakeven",  0)),
+        risk_reward     = float(claude_json.get("risk_reward",0)),
+        suggested_hold  = int(claude_json.get("suggested_hold_days", 17)),
+        reasoning       = claude_json.get("reasoning",        ""),
+        lesson_applied  = claude_json.get("lesson_applied",   "NONE"),
+        primary_signal  = claude_json.get("primary_signal",   ""),
+        sector          = flag.sector,
+        geo_score       = geo.get("combined", 0),
+        rsi_14          = float(flag.rsi_14 or 0),
+        candle_pattern  = flag.best_candle or "",
+        urgency         = flag.urgency,
+        gemini_reason   = flag.gemini_reason,
+        support_level   = float(flag.support_level   or 0),
+        resistance_level= float(flag.resistance_level or 0),
     )
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# SECTION 7b — HEADLINES VERDICT BUILDER
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _build_headlines_verdict(politics: str, economy: str, stock: str) -> str:
-    """
-    Build gpt_verdict string from 3 headline buckets from nepal_pulse.
-    Empty buckets are skipped. Returns empty string if all empty.
-    Format: "POL: NRB holds rate | Budget session || ECON: Remittance +12% || STK: CHCL IPO open"
-    NOT sent to Claude — stored in market_log.gpt_verdict for GPT Sunday review.
-    """
-    parts = []
-    if politics and politics.strip():
-        parts.append(f"POL: {politics.strip()[:200]}")
-    if economy and economy.strip():
-        parts.append(f"ECON: {economy.strip()[:200]}")
-    if stock and stock.strip():
-        parts.append(f"STK: {stock.strip()[:200]}")
-    return " || ".join(parts) if parts else ""
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# SECTION 8 — WRITE TO NEON
-# ══════════════════════════════════════════════════════════════════════════════
-def _write_to_db(result: AnalystResult) -> bool:
-    """
-    Write analyst result to market_log, replacing the Gemini row in place.
-
-    FIX: replaced upsert_row(..., conflict_columns=["id"]) with update_row().
-
-    ROOT CAUSE of the old bug:
-      upsert_row() filters row_data against TABLE_COLUMNS["market_log"].
-      "id" is a SERIAL — excluded from TABLE_COLUMNS by design.
-      So row["id"] was silently stripped, ON CONFLICT (id) never fired,
-      and a brand new row was inserted every time instead of updating.
-      Result: separate Gemini rows + separate Claude rows per symbol.
-
-    FIX:
-      update_row() builds UPDATE market_log SET ... WHERE id = %s
-      Direct UPDATE by primary key — bypasses TABLE_COLUMNS filtering.
-      Gemini row is updated in place with Claude's full analysis.
-    """
+def _write_to_db(result: AnalystResult) -> None:
+    """Write ALL results (BUY/WAIT/AVOID) to market_log."""
     try:
-        from sheets import update_row, write_row
-
-        nst_now = datetime.now(tz=NST)
-
-        fields = {
-            "date":             nst_now.strftime("%Y-%m-%d"),
-            "time":             nst_now.strftime("%H:%M:%S"),
-            "symbol":           result.symbol,
-            "sector":           result.sector,
-            "action":           result.action,
-            "confidence":       str(result.confidence),
-            "entry_price":      str(result.entry_price),
-            "stop_loss":        str(result.stop_loss),
-            "target":           str(result.target),
-            "allocation_npr":   str(result.allocation_npr),
-            "shares":           str(result.shares),
-            "breakeven":        str(result.breakeven),
-            "risk_reward":      str(result.risk_reward),
-            "rsi_14":           str(result.rsi_14),
-            "candle_pattern":   result.candle_pattern,
-            "conf_score":       str(result.confidence),
-            "geo_score":        str(result.geo_score),
-            "macd_line":        str(getattr(result, "macd_line",          "")),
-            "macd_signal":      str(getattr(result, "macd_signal",        "")),
-            "obv_trend":        str(getattr(result, "obv_trend",          "")),
-            "volume_ratio":     str(getattr(result, "volume_ratio",       "")),
-            "fundamental_score":str(getattr(result, "fundamental_score",  "")),
-            "macro_score":      str(result.geo_score),
-            "support_level":    str(result.support_level)    if result.support_level    else "",
-            "resistance_level": str(result.resistance_level) if result.resistance_level else "",
-            "reasoning": (
-                f"[Claude|{result.primary_signal}|{result.urgency}] "
-                f"{result.reasoning}"
-                + (f" | Gemini: {result.gemini_reason}"
-                   if result.gemini_reason else "")
-                + (f" | Lesson: {result.lesson_applied}"
-                   if result.lesson_applied and result.lesson_applied != "NONE"
-                   else "")
-            )[:800],
-            "outcome":     "PENDING",
-            "timestamp":   result.timestamp,
-            # Headlines from nepal_pulse — NOT processed by Claude
-            # GPT Sunday review reads this to correlate news with outcomes
-            "gpt_verdict": _build_headlines_verdict(
-                result.headlines_politics,
-                result.headlines_economy,
-                result.headlines_stock,
-            ),
-        }
-
-        if result.market_log_id:
-            update_fields = {
-                k: v for k, v in fields.items()
-                if k not in ("date", "symbol")
-            }
-            updated = update_row(
-                "market_log",
-                updates=update_fields,
-                where={"id": str(result.market_log_id)},
-            )
-            ok = updated > 0
-            if ok:
-                logger.info(
-                    "market_log UPDATED (id=%s): %s %s conf=%d%%",
-                    result.market_log_id, result.action,
-                    result.symbol, result.confidence,
-                )
-            else:
-                logger.warning(
-                    "market_log UPDATE found 0 rows for id=%s — "
-                    "falling back to write_row",
-                    result.market_log_id,
-                )
-                ok = write_row("market_log", fields)
-        else:
-            ok = write_row("market_log", fields)
-            if ok:
-                logger.info(
-                    "market_log INSERTED (no Gemini id): %s %s conf=%d%%",
-                    result.action, result.symbol, result.confidence,
-                )
-
-        return ok
-
+        from sheets import upsert_row
+        upsert_row(
+            "market_log",
+            {
+                "symbol":          result.symbol,
+                "date":            datetime.now(tz=NST).strftime("%Y-%m-%d"),
+                "action":          result.action,
+                "confidence":      result.confidence,
+                "entry_price":     result.entry_price,
+                "stop_loss":       result.stop_loss,
+                "target":          result.target,
+                "allocation_npr":  result.allocation_npr,
+                "shares":          result.shares,
+                "breakeven":       result.breakeven,
+                "risk_reward":     result.risk_reward,
+                "suggested_hold":  result.suggested_hold,
+                "reasoning":       result.reasoning,
+                "lesson_applied":  result.lesson_applied,
+                "primary_signal":  result.primary_signal,
+                "sector":          result.sector,
+                "geo_score":       result.geo_score,
+                "rsi_14":          result.rsi_14,
+                "candle_pattern":  result.candle_pattern,
+                "urgency":         result.urgency,
+                "gemini_reason":   result.gemini_reason,
+                "source":          "claude_analyst",
+                "timestamp":       result.timestamp,
+            },
+            conflict_columns=["symbol", "date"],
+        )
+        logger.info("Written to market_log: %s %s", result.action, result.symbol)
     except Exception as exc:
-        logger.error("_write_to_db error: %s", exc)
-        return False
+        logger.error("_write_to_db failed for %s: %s", result.symbol, exc)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 9 — MAIN RUNNER
+# SECTION 7 — MAIN ENTRY POINT
 # ══════════════════════════════════════════════════════════════════════════════
 
 def run_analysis(flags: list) -> list[AnalystResult]:
@@ -975,12 +826,10 @@ def run_analysis(flags: list) -> list[AnalystResult]:
         loss_streak,
     )
 
-    # ── Portfolio full check ──────────────────────────────────────────────────
     if portfolio.get("slots_remaining", 0) <= 0:
         logger.info("Portfolio full (3/3 positions open) — no analysis needed")
         return []
 
-    # ── Circuit breaker ───────────────────────────────────────────────────────
     if loss_streak >= 8:
         logger.warning("Circuit breaker: loss_streak=%d — skipping all analysis", loss_streak)
         return []
@@ -992,20 +841,29 @@ def run_analysis(flags: list) -> list[AnalystResult]:
         logger.info("─" * 40)
         logger.info("Analyzing %s [%s] urgency=%s", sym, flag.sector, flag.urgency)
 
-        # Skip if portfolio now full (from earlier BUY in this run)
         buy_count = sum(1 for r in results if r.action == "BUY")
-        if portfolio.get("open_positions", 0) + buy_count >= 100:
+        if portfolio.get("open_positions", 0) + buy_count >= 3:
             logger.info("%s: portfolio full after earlier BUYs — skipping", sym)
             continue
 
-        # Load per-symbol lessons
         lessons = _load_lessons(sym, getattr(flag, "sector", ""))
 
-        # Build prompt and call Claude
-        prompt = _build_prompt(
-            flag, portfolio, geo, macro, lessons, market_state, loss_streak
+        # ── Load fundamental context per symbol ───────────────────────────────
+        fund_ctx = _load_fundamentals_context(sym, getattr(flag, "sector", ""))
+        logger.info(
+            "Fundamentals for %s: found=%s | beta=%s | notes=%d",
+            sym,
+            fund_ctx.get("found", False),
+            fund_ctx.get("beta", "N/A"),
+            len(fund_ctx.get("trend_notes", [])),
         )
-        claude_json = _call_claude(prompt)#ask_claude(prompt)               #
+
+        # ── Build prompt and call Claude ──────────────────────────────────────
+        prompt = _build_prompt(
+            flag, portfolio, geo, macro, lessons, market_state, loss_streak,
+            fund_ctx=fund_ctx,
+        )
+        claude_json = _call_claude(prompt)
 
         if claude_json is None:
             logger.warning("%s: Claude returned no result — skipping", sym)
@@ -1013,13 +871,9 @@ def run_analysis(flags: list) -> list[AnalystResult]:
 
         result = _assemble_result(claude_json, flag, geo)
         results.append(result)
-
-        # Write ALL results to DB (BUY, WAIT, AVOID all get logged)
         _write_to_db(result)
-
         logger.info("Result: %s", result.summary())
 
-    # ── Summary ───────────────────────────────────────────────────────────────
     buys   = [r for r in results if r.action == "BUY"]
     waits  = [r for r in results if r.action == "WAIT"]
     avoids = [r for r in results if r.action == "AVOID"]
@@ -1035,16 +889,11 @@ def run_analysis(flags: list) -> list[AnalystResult]:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# HELPER FOR notifier.py
+# SECTION 8 — FORMAT FOR NOTIFIER
 # ══════════════════════════════════════════════════════════════════════════════
 
 def format_buy_signal(result: AnalystResult) -> str:
-    """
-    Format a BUY result for Telegram notification.
-    Called by notifier.py.
-    """
-    true_profit = _calc_true_profit(result.entry_price, result.target, result.shares)
-
+    """Format a BUY result for Telegram notification. Called by notifier.py."""
     lines = [
         f"📈 *BUY SIGNAL — {result.symbol}*",
         f"Sector:      {result.sector}",
@@ -1056,32 +905,23 @@ def format_buy_signal(result: AnalystResult) -> str:
         f"R/R Ratio:   {result.risk_reward:.1f}x",
         f"Shares:      {result.shares}",
         f"Allocation:  NPR {result.allocation_npr:,.0f}",
-        f"True Profit: NPR {true_profit:+,.0f} (after all Nepal fees)",
         f"Hold:        ~{result.suggested_hold} days",
         f"",
         f"Reasoning: {result.reasoning[:200]}",
     ]
-
     if result.lesson_applied and result.lesson_applied != "NONE":
         lines.append(f"Lesson Applied: {result.lesson_applied[:100]}")
-
     return "\n".join(lines)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CLI
-#   python claude_analyst.py              → run with live gemini_filter data
-#   python claude_analyst.py --dry-run    → use synthetic flag, no DB write
-#   python claude_analyst.py NABIL        → analyze specific symbol directly
-#   python claude_analyst.py --print-prompt => print prompt 
 # ══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    import sys
-
     logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [CLAUDE_ANALYST] %(levelname)s: %(message)s",
+        level  = logging.INFO,
+        format = "%(asctime)s [CLAUDE_ANALYST] %(levelname)s: %(message)s",
     )
 
     args         = sys.argv[1:]
@@ -1093,32 +933,27 @@ if __name__ == "__main__":
     print("  NEPSE AI — claude_analyst.py")
     print("=" * 70)
 
-    # ── Print-prompt mode: full pipeline run but NO Claude API call ───────────
     if print_prompt:
-        print("\n[PRINT-PROMPT MODE] Running gemini_filter → building Claude prompt(s) — NO API call\n")
-
-        # Step 1: run gemini_filter exactly as live
-        print("[1/3] Running gemini_filter to get real flags...")
+        print("\n[PRINT-PROMPT MODE] Running gemini_filter → building prompts — NO API call\n")
+        print("[1/3] Running gemini_filter...")
         try:
             from gemini_filter import run_gemini_filter
             flags = run_gemini_filter()
             if not flags:
                 print("  No flags from Gemini — nothing to print")
                 sys.exit(0)
-            print(f"  {len(flags)} flag(s) received from Gemini\n")
+            print(f"  {len(flags)} flag(s) received\n")
         except Exception as e:
             print(f"  gemini_filter failed: {e}")
             sys.exit(1)
 
-        # Filter to specific symbol if passed on CLI
         if sym_args:
             flags = [f for f in flags if f.symbol in sym_args]
             if not flags:
                 print(f"  Symbol(s) {sym_args} not in Gemini flag list")
                 sys.exit(0)
 
-        # Step 2: load shared context exactly as live
-        print("[2/3] Loading context (portfolio, geo, macro, market state)...")
+        print("[2/3] Loading context...")
         portfolio    = _load_portfolio()
         geo          = _load_geo_context()
         macro        = _load_macro_context()
@@ -1127,149 +962,44 @@ if __name__ == "__main__":
         print(f"  market={market_state} | liquid=NPR {portfolio.get('liquid_npr',0):,.0f} | "
               f"slots={portfolio.get('slots_remaining',0)} | loss_streak={loss_streak}\n")
 
-        # Step 3: build and print prompt for each flag — NO Claude call
         print(f"[3/3] Building prompt(s) for {len(flags)} flag(s)...\n")
         for i, flag in enumerate(flags, 1):
-            lessons = _load_lessons(flag.symbol, getattr(flag, "sector", ""))
-            prompt  = _build_prompt(flag, portfolio, geo, macro, lessons, market_state, loss_streak)
-
+            lessons  = _load_lessons(flag.symbol, getattr(flag, "sector", ""))
+            fund_ctx = _load_fundamentals_context(flag.symbol, getattr(flag, "sector", ""))
+            prompt   = _build_prompt(
+                flag, portfolio, geo, macro, lessons, market_state, loss_streak,
+                fund_ctx=fund_ctx,
+            )
             char_count = len(prompt)
             token_est  = char_count // 4
-
             print("=" * 70)
             print(f"  PROMPT {i}/{len(flags)} — {flag.symbol} [{getattr(flag,'sector','')}]")
-            print(f"  Chars: {char_count} | ~Tokens: {token_est} | "
-                  f"~Cost: ${token_est * 0.000003:.4f}")
+            print(f"  Chars: {char_count} | ~Tokens: {token_est} | ~Cost: ${token_est * 0.000003:.4f}")
             print("=" * 70)
             print(prompt)
             print()
-
-        total_tokens = sum(len(_build_prompt(
-            f, portfolio, geo, macro,
-            _load_lessons(f.symbol, getattr(f, "sector", "")),
-            market_state, loss_streak
-        )) // 4 for f in flags)
-        print("─" * 70)
-        print(f"TOTAL: {len(flags)} prompt(s) | ~{total_tokens} tokens | "
-              f"~${total_tokens * 0.000003:.4f} input cost if sent to Claude")
-        print("[DONE] No API call made. Cost: $0.00")
-        print("=" * 70 + "\n")
         sys.exit(0)
 
-    # ── Dry run with synthetic flag ───────────────────────────────────────────
-    if dry_run:
-        print("\n[DRY RUN] Creating synthetic GeminiFlag for NABIL...\n")
+    # ── Live run ──────────────────────────────────────────────────────────────
+    print("\n[1/2] Running gemini_filter...")
+    try:
+        from gemini_filter import run_gemini_filter
+        flags = run_gemini_filter()
+        if not flags:
+            print("  No flags from Gemini — nothing to analyze")
+            sys.exit(0)
+        print(f"  {len(flags)} flag(s) to analyze\n")
+    except Exception as e:
+        print(f"  gemini_filter failed: {e}")
+        sys.exit(1)
 
-        from dataclasses import dataclass as dc, field as f
+    if sym_args:
+        flags = [f for f in flags if f.symbol in sym_args]
 
-        @dc
-        class SyntheticFlag:
-            symbol: str = "NABIL"
-            sector: str = "commercial bank"
-            ltp: float = 1240.0
-            change_pct: float = 0.8
-            urgency: str = "NORMAL"
-            gemini_reason: str = "MACD bullish cross with volume surge"
-            gemini_risk: str = "Banking sector excluded from optimal portfolio"
-            primary_signal: str = "MACD"
-            composite_score: float = 68.5
-            tech_score: int = 65
-            rsi_14: float = 42.3
-            rsi_signal: str = "NEUTRAL"
-            macd_cross: str = "BULLISH"
-            bb_signal: str = "NEUTRAL"
-            bb_pct_b: float = 0.42
-            obv_trend: str = "RISING"
-            ema_trend: str = "ABOVE_ALL"
-            best_candle: str = "Hammer"
-            candle_tier: int = 1
-            candle_conf: int = 72
-            cstar_signal: bool = False
-            suggested_hold: int = 17
-            geo_combined: int = 2
+    print("[2/2] Running Claude analysis...")
+    results = run_analysis(flags)
 
-        flags = [SyntheticFlag()]
-        print("  Synthetic flag created")
-
-    # ── Live run from gemini_filter ───────────────────────────────────────────
-    else:
-        print("\n[1/2] Running gemini_filter to get flags...")
-        try:
-            from gemini_filter import run_gemini_filter
-            flags = run_gemini_filter()
-            if not flags:
-                print("  No flags from Gemini — nothing to analyze")
-                sys.exit(0)
-            print(f"  {len(flags)} flags received")
-        except Exception as e:
-            print(f"  Failed to get flags: {e}")
-            sys.exit(1)
-
-        # Filter to specific symbol if passed
-        if sym_args:
-            flags = [f for f in flags if f.symbol in sym_args]
-            if not flags:
-                print(f"  Symbol(s) {sym_args} not in flag list")
-                sys.exit(0)
-
-    # ── Run analysis ──────────────────────────────────────────────────────────
-    print(f"\n[2/2] Running Claude analysis on {len(flags)} flag(s)...")
-    if dry_run:
-        print("  [DRY RUN] DB writes disabled — results printed only\n")
-
-    results = run_analysis(flags) if not dry_run else []
-
-    # Dry run: manually call single analysis
-    if dry_run and flags:
-        portfolio    = _load_portfolio()
-        geo          = _load_geo_context()
-        macro        = _load_macro_context()
-        market_state = _load_market_state()
-        loss_streak  = _load_loss_streak()
-        lessons      = _load_lessons(flags[0].symbol, flags[0].sector)
-
-        prompt = _build_prompt(
-            flags[0], portfolio, geo, macro, lessons, market_state, loss_streak
-        )
-
-        print("  Calling Claude...\n")
-        claude_json = _call_claude(prompt)
-
-        if claude_json:
-            result = _assemble_result(claude_json, flags[0], geo)
-            results = [result]
-
-    # ── Print results ─────────────────────────────────────────────────────────
-    if results:
-        print(f"\n  {'='*60}")
-        print(f"  ANALYSIS RESULTS")
-        print(f"  {'='*60}")
-        for r in results:
-            action_emoji = "✅" if r.action == "BUY" else ("⏸" if r.action == "WAIT" else "🚫")
-            print(f"\n  {action_emoji} {r.action} — {r.symbol} [{r.sector}]")
-            print(f"     Confidence:  {r.confidence}%")
-            print(f"     Signal:      {r.primary_signal}")
-            print(f"     Urgency:     {r.urgency}")
-            if r.action == "BUY":
-                print(f"     Entry:       NPR {r.entry_price:,.0f}")
-                print(f"     Stop:        NPR {r.stop_loss:,.0f}")
-                print(f"     Target:      NPR {r.target:,.0f}")
-                print(f"     Breakeven:   NPR {r.breakeven:,.0f}")
-                print(f"     R/R:         {r.risk_reward:.1f}x")
-                print(f"     Shares:      {r.shares}")
-                print(f"     Allocation:  NPR {r.allocation_npr:,.0f}")
-                print(f"     Hold:        ~{r.suggested_hold} days")
-                print()
-                print("  ── TELEGRAM FORMAT ──────────────────────────────")
-                print(format_buy_signal(r))
-            print(f"\n     Reasoning:   {r.reasoning[:200]}")
-            if r.lesson_applied and r.lesson_applied != "NONE":
-                print(f"     Lesson:      {r.lesson_applied[:100]}")
-    else:
-        print("\n  No analysis results.")
-
-    if not dry_run and results:
-        buy_count = sum(1 for r in results if r.action == "BUY")
-        print(f"\n  ✅ {buy_count} BUY signal(s) written to market_log table")
-
-    print("\n" + "=" * 70 + "\n")
+    print(f"\n  {len(results)} result(s):")
+    for r in results:
+        print(f"  {r.summary()}")
+    print()

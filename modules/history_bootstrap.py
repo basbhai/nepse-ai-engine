@@ -50,7 +50,7 @@ AJAX ENDPOINT NOTES:
 import logging
 import sys
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 import requests
@@ -58,6 +58,7 @@ from bs4 import BeautifulSoup
 import lxml.html as html
 
 from sheets import run_raw_sql
+from config import NST
 
 # ══════════════════════════════════════════════════════════════════════════════
 # LOGGING
@@ -72,8 +73,6 @@ log = logging.getLogger(__name__)
 # ══════════════════════════════════════════════════════════════════════════════
 # CONSTANTS
 # ══════════════════════════════════════════════════════════════════════════════
-
-NST = timezone(timedelta(hours=5, minutes=45))
 
 BASE_URL         = "https://www.sharesansar.com"
 TODAY_URL        = f"{BASE_URL}/today-share-price"

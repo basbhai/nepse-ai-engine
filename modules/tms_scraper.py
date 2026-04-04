@@ -14,11 +14,11 @@ Designed to run on GitHub Actions (no persistent filesystem needed).
 """
 
 import os, sys, base64, logging, json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from http.cookies import SimpleCookie
 import requests
-from dotenv import load_dotenv
-load_dotenv()
+
+from config import NST, GEMINI_API_KEY, GEMINI_MODEL, BROWSER_USER_AGENT
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [TMS] %(levelname)s: %(message)s")
@@ -33,10 +33,6 @@ MEMBER_CODE     = "49"
 USERNAME       = os.getenv("TMS_USERNAME")
 PASSWORD       = os.getenv("TMS_PASSWORD")
 REQUEST_OWNER  = os.getenv("TMS_REQUEST_OWNER", "109268")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL   = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-
-NST = timezone(timedelta(hours=5, minutes=45))
 
 BASE_HEADERS = {
     "Accept":             "application/json, text/plain, */*",
@@ -49,11 +45,7 @@ BASE_HEADERS = {
     "Sec-Fetch-Dest":     "empty",
     "Sec-Fetch-Mode":     "cors",
     "Sec-Fetch-Site":     "same-origin",
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/145.0.0.0 Safari/537.36"
-    ),
+    "User-Agent": BROWSER_USER_AGENT,
 }
 
 

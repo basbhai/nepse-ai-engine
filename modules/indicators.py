@@ -28,12 +28,12 @@ HistoryCache:
 
 import logging
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Optional
 
-logger = logging.getLogger(__name__)
+from config import NST
 
-NST = timezone(timedelta(hours=5, minutes=45))
+logger = logging.getLogger(__name__)
 DEFAULT_LOAD_PERIODS = 250   # trading days to load (~1 year)
 
 
@@ -175,7 +175,7 @@ class IndicatorResult:
     tech_signal:     str = ""        # STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR
 
     timestamp:       str = field(default_factory=lambda: datetime.now(
-        tz=timezone(timedelta(hours=5, minutes=45))
+        tz=NST
     ).strftime("%Y-%m-%d %H:%M:%S"))
 
     def to_dict(self) -> dict:
