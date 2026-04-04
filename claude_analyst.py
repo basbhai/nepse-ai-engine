@@ -62,11 +62,32 @@ NST = timezone(timedelta(hours=5, minutes=45))
 # ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 # CLAUDE_MODEL      = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5-20251022")
 
-# ── Nepal fee constants (for breakeven calculation) ───────────────────────────
-BROKERAGE_PCT = 0.40
-SEBON_PCT     = 0.015
-DP_CHARGE_NPR = 25.0
-CGT_PCT       = 7.5
+# ── Nepal fee constants ───────────────────────────────────────────────────────
+from decimal import Decimal, ROUND_HALF_UP
+
+SEBON_PCT     = Decimal("0.00015")   # 0.015% — buy + sell
+DP_CHARGE_NPR = Decimal("25.0")      # flat per transaction
+CGT_PCT       = Decimal("0.075")     # 7.5% on profit
+
+
+def _brokerage(gross: Decimal) -> Decimal:
+    """
+    Tiered NEPSE brokerage on transaction value.
+    Matches auditor.py and telegram_bot.py exactly.
+    """
+    if gross <= Decimal("2500"):
+        return Decimal("10")
+    elif gross <= Decimal("50000"):
+        rate = Decimal("0.0036")
+    elif gross <= Decimal("500000"):
+        rate = Decimal("0.0033")
+    elif gross <= Decimal("2000000"):
+        rate = Decimal("0.0031")
+    elif gross <= Decimal("10000000"):
+        rate = Decimal("0.0027")
+    else:
+        rate = Decimal("0.0024")
+    return (gross * rate).quantize(Decimal("0.01"), ROUND_HALF_UP)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -99,7 +120,18 @@ class AnalystResult:
     candle_pattern:   str        = ""
     urgency:          str        = "NORMAL"   # from GeminiFlag
     gemini_reason:    str        = ""
-    market_log_id:    int       = None
+    market_log_id:    int        = None
+
+    # Support / Resistance — from indicators.py (20-day high/low)
+    # Shown to Claude in prompt for stop loss and target validation
+    support_level:    float      = 0.0
+    resistance_level: float      = 0.0
+
+    # Headlines from nepal_pulse — written by Gemini Flash, NOT sent to Claude
+    # Stored in market_log.gpt_verdict for GPT Sunday review
+    headlines_politics: str      = ""
+    headlines_economy:  str      = ""
+    headlines_stock:    str      = ""
 
     timestamp: str = field(default_factory=lambda:
                     datetime.now(tz=NST).strftime("%Y-%m-%d %H:%M:%S"))
@@ -184,11 +216,17 @@ def _load_geo_context() -> dict:
             "nepal_status":   pulse.get("nepal_status", "NEUTRAL"),
             "dxy":            geo.get("dxy",           "?"),
 
-            "bandh":          pulse.get("bandh_today", "NO"),
+            "bandh":          pulse.get("bandh_today",    "NO"),
             "ipo_drain":      pulse.get("ipo_fpo_active", "NO"),
-            "crisis":         pulse.get("crisis_detected", "NO"),
-            "key_geo_event":  geo.get("key_event",    ""),
-            "key_nepal_event":pulse.get("key_event",   ""),
+            "crisis":         pulse.get("crisis_detected","NO"),
+            "key_geo_event":  geo.get("key_event",        ""),
+            "key_nepal_event":pulse.get("key_event",      ""),
+
+            # Headlines written by Gemini Flash via nepal_pulse.py
+            # Passed through to market_log.gpt_verdict — NOT sent to Claude
+            "headlines_politics": pulse.get("headlines_politics", ""),
+            "headlines_economy":  pulse.get("headlines_economy",  ""),
+            "headlines_stock":    pulse.get("headlines_stock",    ""),
         }
     except Exception as exc:
         logger.warning("_load_geo_context failed: %s", exc)
@@ -300,34 +338,60 @@ def _load_loss_streak() -> int:
 
 def _calc_breakeven(entry_price: float, shares: int = 1) -> float:
     """
-    True breakeven price after Nepal transaction costs.
-    Must exceed this price to avoid loss.
+    True breakeven price after all Nepal transaction costs.
+    Uses tiered brokerage — same as auditor.py.
+
+    Buy side:  brokerage (tiered) + SEBON 0.015% + DP NPR 25
+    Sell side: brokerage (tiered) + SEBON 0.015% + DP NPR 25
+    CGT is only on profit so does not affect breakeven price directly,
+    but breakeven must cover both sides' costs.
+
+    Formula:
+        total_buy_cost  = brokerage(buy_val) + sebon(buy_val) + DP
+        breakeven_val   = buy_val + total_buy_cost + total_sell_cost
+        breakeven_price = breakeven_val / shares
+    (Where sell costs are estimated at buy price — close enough for target setting)
     """
-    if entry_price <= 0:
+    if entry_price <= 0 or shares <= 0:
         return entry_price
-    trade_value   = entry_price * shares
-    buy_brokerage = trade_value * BROKERAGE_PCT / 100
-    buy_sebon     = trade_value * SEBON_PCT / 100
-    buy_dp        = DP_CHARGE_NPR
-    # At breakeven, sell costs are symmetric — add sell side too
-    # breakeven_price × shares = trade_value + buy_costs + sell_costs + CGT
-    # Approximated as: entry × (1 + 2×(brokerage+sebon)/100) + 2×DP / shares
-    total_fee_rate = 2 * (BROKERAGE_PCT + SEBON_PCT) / 100
-    breakeven      = entry_price * (1 + total_fee_rate) + (2 * DP_CHARGE_NPR / max(shares, 1))
-    return round(breakeven, 2)
+
+    buy_val  = Decimal(str(entry_price)) * Decimal(str(shares))
+    buy_brok = _brokerage(buy_val)
+    buy_sebon = (buy_val * SEBON_PCT).quantize(Decimal("0.01"), ROUND_HALF_UP)
+    buy_cost = buy_brok + buy_sebon + DP_CHARGE_NPR
+
+    # Sell cost estimated at same value (breakeven — price hasn't moved)
+    sell_brok  = _brokerage(buy_val)
+    sell_sebon = (buy_val * SEBON_PCT).quantize(Decimal("0.01"), ROUND_HALF_UP)
+    sell_cost  = sell_brok + sell_sebon + DP_CHARGE_NPR
+
+    total_cost    = buy_val + buy_cost + sell_cost
+    breakeven_prc = total_cost / Decimal(str(shares))
+    return float(breakeven_prc.quantize(Decimal("0.01"), ROUND_HALF_UP))
 
 
 def _calc_true_profit(entry: float, exit_price: float, shares: int) -> float:
-    """Calculate actual NPR profit after ALL Nepal transaction costs."""
-    buy_val    = entry      * shares
-    sell_val   = exit_price * shares
-    gross      = sell_val - buy_val
+    """
+    Calculate actual NPR profit after ALL Nepal transaction costs.
+    Uses tiered brokerage — same as auditor.py.
+    """
+    if shares <= 0:
+        return 0.0
 
-    buy_cost   = buy_val  * (BROKERAGE_PCT + SEBON_PCT) / 100 + DP_CHARGE_NPR
-    sell_cost  = sell_val * (BROKERAGE_PCT + SEBON_PCT) / 100 + DP_CHARGE_NPR
-    cgt        = max(0, gross) * CGT_PCT / 100
+    buy_val  = Decimal(str(entry))      * Decimal(str(shares))
+    sell_val = Decimal(str(exit_price)) * Decimal(str(shares))
+    gross    = sell_val - buy_val
 
-    return round(gross - buy_cost - sell_cost - cgt, 2)
+    buy_cost  = (_brokerage(buy_val)
+                 + (buy_val  * SEBON_PCT).quantize(Decimal("0.01"), ROUND_HALF_UP)
+                 + DP_CHARGE_NPR)
+    sell_cost = (_brokerage(sell_val)
+                 + (sell_val * SEBON_PCT).quantize(Decimal("0.01"), ROUND_HALF_UP)
+                 + DP_CHARGE_NPR)
+    cgt = (gross * CGT_PCT).quantize(Decimal("0.01"), ROUND_HALF_UP) if gross > 0 else Decimal("0")
+
+    net = gross - buy_cost - sell_cost - cgt
+    return float(net.quantize(Decimal("0.01"), ROUND_HALF_UP))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -483,6 +547,12 @@ IPO Drain:       {geo.get('ipo_drain', 'NO')}
 Key Geo Event:   {geo.get('key_geo_event', 'None')}
 Key Nepal Event: {geo.get('key_nepal_event', 'None')}
 
+PRICE LEVELS (20-day range):
+  Support:         NPR {flag.support_level:,.2f}  (20-day low — potential floor / stop reference)
+  Resistance:      NPR {flag.resistance_level:,.2f}  (20-day high — potential ceiling / target reference)
+  LTP vs Support:  {((flag.ltp - flag.support_level) / flag.support_level * 100) if flag.support_level else 0:+.1f}%  from support
+  LTP vs Resist:   {((flag.resistance_level - flag.ltp) / flag.ltp * 100) if flag.resistance_level else 0:+.1f}%  to resistance
+
 MACRO (NRB Latest — updated monthly):
  MACRO (NRB {macro.get('period', '?')} — updated monthly):
   Policy Rate:     {macro.get('policy_rate', '?')}%
@@ -536,20 +606,17 @@ RESEARCH-BACKED RULES (APPLY THESE)
 
 
 NEPAL FEES (always include):
-  Brokerage: 
-  | Transaction Amount       | Commission Rate |
-|--------------------------|-----------------|
-| ≤ Rs. 2,500              | Flat Rs. 10     |
-| Rs. 2,501 – 50,000       | 0.36%           |
-| Rs. 50,001 – 500,000     | 0.33%           |
-| Rs. 500,001 – 2,000,000  | 0.31%           |
-| Rs. 2,000,001 – 10,000,000 | 0.27%         |
-| Above Rs. 10,000,000     | 0.24%           |
-
+  Brokerage (tiered on transaction value):
+    ≤ NPR 2,500          → flat NPR 10
+    NPR 2,501–50,000     → 0.36%
+    NPR 50,001–500,000   → 0.33%
+    NPR 500,001–2,000,000→ 0.31%
+    NPR 2M–10M           → 0.27%
+    > NPR 10M            → 0.24%
   SEBON:     0.015% buy + 0.015% sell
   DP charge: NPR 25 flat per transaction
-  CGT:       7.5% on profit
-  Breakeven = Entry Price × (1 + 0.75%) + (Rs. 50 / Number of Shares)
+  CGT:       7.5% on profit only
+  Breakeven = (buy_val + buy_brokerage + buy_sebon + NPR25 + sell_brokerage + sell_sebon + NPR25) / shares
 
 ═══════════════════════════════════════════════
 YOUR TASK
@@ -577,7 +644,7 @@ Respond ONLY with this JSON — no markdown, no explanation outside JSON:
   "risk_reward": number,
   "suggested_hold_days": number,
   "primary_signal": "MACD or BB or SMA or OBV_MOMENTUM or RSI",
-  "reasoning": "3-4 sentences covering: why this signal, what risks, what the Learning Hub says, sector context",
+  "reasoning": "5-6 sentences covering: why this signal, what risks, what the Learning Hub says, sector context",
   "lesson_applied": "which lesson from Learning Hub was most relevant, or NONE",
   "wait_condition": "if WAIT/AVOID: what specific condition would make this a BUY",
   "herding_note": "one sentence on herding/bubble risk or NONE"
@@ -693,8 +760,10 @@ def _call_claude(prompt: str) -> Optional[dict]:
 # SECTION 7 — ASSEMBLE RESULT
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _assemble_result(claude_json: dict, flag) -> AnalystResult:
+def _assemble_result(claude_json: dict, flag, geo: dict = None) -> AnalystResult:
     """Convert Claude JSON response into AnalystResult dataclass."""
+    if geo is None:
+        geo = {}
     action     = str(claude_json.get("action", "WAIT")).upper()
     entry      = float(claude_json.get("entry_price", flag.ltp) or flag.ltp)
     shares     = int(claude_json.get("shares", 0) or 0)
@@ -727,23 +796,65 @@ def _assemble_result(claude_json: dict, flag) -> AnalystResult:
         candle_pattern = getattr(flag, "best_candle",   ""),
         urgency        = getattr(flag, "urgency",       "NORMAL"),
         gemini_reason  = getattr(flag, "gemini_reason", "")[:200],
-        market_log_id =     getattr(flag, 'market_log_id', None),
+        market_log_id  = getattr(flag, "market_log_id", None),
+        # Support / Resistance from indicators → filter_engine → gemini_filter
+        support_level    = float(getattr(flag, "support_level",    0) or 0),
+        resistance_level = float(getattr(flag, "resistance_level", 0) or 0),
+        # Headlines from nepal_pulse via geo context
+        headlines_politics = geo.get("headlines_politics", "") if geo else "",
+        headlines_economy  = geo.get("headlines_economy",  "") if geo else "",
+        headlines_stock    = geo.get("headlines_stock",    "") if geo else "",
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 7b — HEADLINES VERDICT BUILDER
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _build_headlines_verdict(politics: str, economy: str, stock: str) -> str:
+    """
+    Build gpt_verdict string from 3 headline buckets from nepal_pulse.
+    Empty buckets are skipped. Returns empty string if all empty.
+    Format: "POL: NRB holds rate | Budget session || ECON: Remittance +12% || STK: CHCL IPO open"
+    NOT sent to Claude — stored in market_log.gpt_verdict for GPT Sunday review.
+    """
+    parts = []
+    if politics and politics.strip():
+        parts.append(f"POL: {politics.strip()[:200]}")
+    if economy and economy.strip():
+        parts.append(f"ECON: {economy.strip()[:200]}")
+    if stock and stock.strip():
+        parts.append(f"STK: {stock.strip()[:200]}")
+    return " || ".join(parts) if parts else ""
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 8 — WRITE TO NEON
 # ══════════════════════════════════════════════════════════════════════════════
-
 def _write_to_db(result: AnalystResult) -> bool:
-    """Write analyst result to market_log table, replacing Gemini row."""
+    """
+    Write analyst result to market_log, replacing the Gemini row in place.
+
+    FIX: replaced upsert_row(..., conflict_columns=["id"]) with update_row().
+
+    ROOT CAUSE of the old bug:
+      upsert_row() filters row_data against TABLE_COLUMNS["market_log"].
+      "id" is a SERIAL — excluded from TABLE_COLUMNS by design.
+      So row["id"] was silently stripped, ON CONFLICT (id) never fired,
+      and a brand new row was inserted every time instead of updating.
+      Result: separate Gemini rows + separate Claude rows per symbol.
+
+    FIX:
+      update_row() builds UPDATE market_log SET ... WHERE id = %s
+      Direct UPDATE by primary key — bypasses TABLE_COLUMNS filtering.
+      Gemini row is updated in place with Claude's full analysis.
+    """
     try:
-        from sheets import upsert_row
-        from db.connection import _db
+        from sheets import update_row, write_row
 
         nst_now = datetime.now(tz=NST)
 
-        row = {
+        fields = {
             "date":             nst_now.strftime("%Y-%m-%d"),
             "time":             nst_now.strftime("%H:%M:%S"),
             "symbol":           result.symbol,
@@ -761,41 +872,70 @@ def _write_to_db(result: AnalystResult) -> bool:
             "candle_pattern":   result.candle_pattern,
             "conf_score":       str(result.confidence),
             "geo_score":        str(result.geo_score),
-            "macd_line":        str(getattr(result, "macd_line",         "")),
-            "macd_signal":      str(getattr(result, "macd_signal",       "")),
-            "obv_trend":        str(getattr(result, "obv_trend",         "")),
-            "volume_ratio":     str(getattr(result, "volume_ratio",      "")),
-            "fundamental_score":str(getattr(result, "fundamental_score", "")),
+            "macd_line":        str(getattr(result, "macd_line",          "")),
+            "macd_signal":      str(getattr(result, "macd_signal",        "")),
+            "obv_trend":        str(getattr(result, "obv_trend",          "")),
+            "volume_ratio":     str(getattr(result, "volume_ratio",       "")),
+            "fundamental_score":str(getattr(result, "fundamental_score",  "")),
             "macro_score":      str(result.geo_score),
-            "reasoning":        (
+            "support_level":    str(result.support_level)    if result.support_level    else "",
+            "resistance_level": str(result.resistance_level) if result.resistance_level else "",
+            "reasoning": (
                 f"[Claude|{result.primary_signal}|{result.urgency}] "
                 f"{result.reasoning}"
-                + (f" | Gemini: {result.gemini_reason}" if result.gemini_reason else "")
-                + (f" | Lesson: {result.lesson_applied}" if result.lesson_applied and result.lesson_applied != "NONE" else "")
+                + (f" | Gemini: {result.gemini_reason}"
+                   if result.gemini_reason else "")
+                + (f" | Lesson: {result.lesson_applied}"
+                   if result.lesson_applied and result.lesson_applied != "NONE"
+                   else "")
             )[:800],
-            "outcome":          "PENDING",
-            "timestamp":        result.timestamp,
+            "outcome":     "PENDING",
+            "timestamp":   result.timestamp,
+            # Headlines from nepal_pulse — NOT processed by Claude
+            # GPT Sunday review reads this to correlate news with outcomes
+            "gpt_verdict": _build_headlines_verdict(
+                result.headlines_politics,
+                result.headlines_economy,
+                result.headlines_stock,
+            ),
         }
 
-        # Update existing Gemini row if we have its id
         if result.market_log_id:
-            row["id"] = result.market_log_id
-            ok = upsert_row("market_log", row, conflict_columns=["id"])
+            update_fields = {
+                k: v for k, v in fields.items()
+                if k not in ("date", "symbol")
+            }
+            updated = update_row(
+                "market_log",
+                updates=update_fields,
+                where={"id": str(result.market_log_id)},
+            )
+            ok = updated > 0
+            if ok:
+                logger.info(
+                    "market_log UPDATED (id=%s): %s %s conf=%d%%",
+                    result.market_log_id, result.action,
+                    result.symbol, result.confidence,
+                )
+            else:
+                logger.warning(
+                    "market_log UPDATE found 0 rows for id=%s — "
+                    "falling back to write_row",
+                    result.market_log_id,
+                )
+                ok = write_row("market_log", fields)
         else:
-            from sheets import write_row
-            ok = write_row("market_log", row)
-
-        if ok:
-            logger.info("market_log written: %s %s conf=%d%%",
-                        result.action, result.symbol, result.confidence)
-
-            # Delete the original Gemini row if we wrote a new one (no id case)
-            # If we upserted by id, the row is already updated in place — no delete needed
+            ok = write_row("market_log", fields)
+            if ok:
+                logger.info(
+                    "market_log INSERTED (no Gemini id): %s %s conf=%d%%",
+                    result.action, result.symbol, result.confidence,
+                )
 
         return ok
 
     except Exception as exc:
-        logger.error("DB error: %s", exc)
+        logger.error("_write_to_db error: %s", exc)
         return False
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -871,7 +1011,7 @@ def run_analysis(flags: list) -> list[AnalystResult]:
             logger.warning("%s: Claude returned no result — skipping", sym)
             continue
 
-        result = _assemble_result(claude_json, flag)
+        result = _assemble_result(claude_json, flag, geo)
         results.append(result)
 
         # Write ALL results to DB (BUY, WAIT, AVOID all get logged)
@@ -1096,7 +1236,7 @@ if __name__ == "__main__":
         claude_json = _call_claude(prompt)
 
         if claude_json:
-            result = _assemble_result(claude_json, flags[0])
+            result = _assemble_result(claude_json, flags[0], geo)
             results = [result]
 
     # ── Print results ─────────────────────────────────────────────────────────

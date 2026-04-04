@@ -1,9 +1,10 @@
 import requests
-s=requests.Session()
-s.get("https://tms.roadshowsecurities.com.np/atsweb/login")
-data={"action":"login","format":"json","txtUserName":"20240300188","txtPassword":"C@hange@021"}
-headers={"accept":"*/*","content-type":"application/x-www-form-urlencoded","origin":"https://tms.roadshowsecurities.com.np","referer":"https://tms.roadshowsecurities.com.np/atsweb/login"}
-r=s.post("https://tms.roadshowsecurities.com.np/atsweb/login",data=data,headers=headers)
-print(r.status_code)
-print(r.text)
-print(dict(r.cookies))
+data=requests.get("https://chukul.com/api/stock/").json()
+for s in data:
+    n=s.get("name","").lower()
+    if "debenture" in n or "mutual" in n: continue
+    r=requests.get(f"https://chukul.com/api/stock/{s['id']}/report/").json()
+    print(r)
+    break
+
+

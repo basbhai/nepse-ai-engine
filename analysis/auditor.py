@@ -13,7 +13,24 @@ Responsibilities:
 6. Update market_log outcomes
 7. Send EOD Telegram summary
 
+Paper trading mode (--paper):
+  Reads paper_portfolio WHERE status='CLOSED' AND audited IS NULL
+  Runs same causal attribution pipeline
+  Writes to trade_journal with paper_mode='true'
+  Stamps audited='true' on paper_portfolio row
+  Links to market_log outcome by symbol + date range
+
 Import rule: from sheets import ... — NEVER from db import ...
+
+CLI:
+  python -m analysis.auditor              → live EOD run
+  python -m analysis.auditor --paper      → paper trading audit
+  python -m analysis.auditor --dry-run    → compute everything, write nothing
+  python -m analysis.auditor --paper --dry-run
+  python -m analysis.auditor --kpis
+  python -m analysis.auditor --status
+  python -m analysis.auditor --market-state
+  python -m analysis.auditor --attribute -2.5 -1.0 -3.0 -5.0 STOP_LOSS HYDRO
 """
 
 import logging
@@ -21,7 +38,7 @@ import sys
 from datetime import datetime, date
 from typing import Optional
 
-from sheets import get_setting, write_row, read_tab, upsert_row
+from sheets import get_setting, write_row, read_tab, upsert_row, update_setting
 
 try:
     from modules.geo_sentiment import get_latest_geo_score
@@ -54,6 +71,35 @@ ALPHA_FAILURE_THRESHOLD     = -3.0
 STOP_RECOVERY_DAYS          =  3
 ALPHA_NEAR_ZERO_BAND        =  1.5
 
+# ── Fee constants — must match telegram_bot.py exactly ───────────────────────
+SEBON_PCT   = 0.00015   # 0.015%
+DP_CHARGE   = 25.0      # flat per trade side
+CGT_RATE    = 0.075     # 7.5% on gross profit only (FIX 3: was 0.05)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 0. FEE HELPERS  (tiered brokerage — matches telegram_bot._brokerage exactly)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _brokerage(trade_value: float) -> float:
+    """
+    NEPSE tiered brokerage. Mirrors telegram_bot.py _brokerage() exactly.
+    FIX 3: replaces old flat 0.00415 rate.
+    """
+    if trade_value <= 2500:
+        return 10.0
+    elif trade_value <= 50_000:
+        rate = 0.0036
+    elif trade_value <= 500_000:
+        rate = 0.0033
+    elif trade_value <= 2_000_000:
+        rate = 0.0031
+    elif trade_value <= 10_000_000:
+        rate = 0.0027
+    else:
+        rate = 0.0024
+    return round(trade_value * rate, 2)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. LOSS CAUSE ATTRIBUTION ENGINE
@@ -84,7 +130,7 @@ def _attribute_loss(
 
     # 3. MACRO_DETERIORATION
     macro_deteriorated = (geo_delta <= GEO_DELTA_MACRO_THRESHOLD or
-                        nepal_delta <= NEPAL_DELTA_MACRO_THRESHOLD)
+                          nepal_delta <= NEPAL_DELTA_MACRO_THRESHOLD)
     alpha_near_zero = abs(alpha_vs_nepse) <= ALPHA_NEAR_ZERO_BAND
     if macro_deteriorated and alpha_near_zero:
         return "MACRO_DETERIORATION"
@@ -95,7 +141,7 @@ def _attribute_loss(
 
     # 5. SIGNAL_FAILURE
     macro_stable  = (geo_delta > GEO_DELTA_MACRO_THRESHOLD and
-                    nepal_delta > NEPAL_DELTA_MACRO_THRESHOLD)
+                     nepal_delta > NEPAL_DELTA_MACRO_THRESHOLD)
     nepse_stable  = nepse_return_pct > NEPSE_SELLOFF_THRESHOLD
     alpha_bad     = alpha_vs_nepse <= ALPHA_FAILURE_THRESHOLD
     if macro_stable and nepse_stable and alpha_bad:
@@ -105,67 +151,12 @@ def _attribute_loss(
     if macro_stable and nepse_stable:
         return "ENTRY_TIMING"
 
-    return "MACRO_DETERIORATION"  # fallback — mixed
+    return "MACRO_DETERIORATION"  # fallback — mixed signals
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 2. DELTA COMPUTATION
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _get_nepse_current() -> float:
-    try:
-        rows = sorted(read_tab("nepse_indices"), key=lambda x: x.get("date",""), reverse=True)[:1]
-        if rows:
-            return float(rows[0].get("current_value") or 0)
-    except Exception as e:
-        log.warning("Could not fetch NEPSE index: %s", e)
-    return 0.0
-
-
-def _compute_deltas(position: dict, geo_exit: float, nepal_exit: float) -> dict:
-    try:
-        geo_entry    = float(position.get("geo_score_entry")   or 0)
-        nepal_entry  = float(position.get("nepal_score_entry") or 0)
-
-        geo_delta           = geo_exit   - geo_entry
-        nepal_delta         = nepal_exit - nepal_entry
-        combined_geo_delta  = (geo_exit + nepal_exit) - (geo_entry + nepal_entry)
-
-        nepse_entry_val = float(position.get("nepse_index_entry") or 0)
-        nepse_exit_val  = _get_nepse_current()
-
-        if nepse_entry_val > 0:
-            nepse_return_pct = ((nepse_exit_val - nepse_entry_val) / nepse_entry_val) * 100
-        else:
-            nepse_return_pct = 0.0
-            log.warning("nepse_index_entry missing for %s", position.get("symbol"))
-
-        entry_price = float(position.get("entry_price") or 0)
-        exit_price  = float(position.get("current_price") or position.get("exit_price") or 0)
-        our_return  = ((exit_price - entry_price) / entry_price) * 100 if entry_price else 0.0
-        alpha       = our_return - nepse_return_pct
-
-        return {
-            "geo_delta":          round(geo_delta,          3),
-            "nepal_delta":        round(nepal_delta,        3),
-            "combined_geo_delta": round(combined_geo_delta, 3),
-            "nepse_return_pct":   round(nepse_return_pct,   3),
-            "alpha_vs_nepse":     round(alpha,              3),
-            "geo_score_exit":     geo_exit,
-            "nepal_score_exit":   nepal_exit,
-            "nepse_index_exit":   nepse_exit_val,
-            "return_pct":         round(our_return,         3),
-        }
-    except Exception as e:
-        log.error("Delta computation failed: %s", e)
-        return {k: 0.0 for k in ["geo_delta","nepal_delta","combined_geo_delta",
-                                "nepse_return_pct","alpha_vs_nepse",
-                                "geo_score_exit","nepal_score_exit",
-                                "nepse_index_exit","return_pct"]}
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 3. OUTCOME CLASSIFIER & PNL
+# 2. OUTCOME CLASSIFIER & PNL
+#    FIX 3: tiered brokerage + 7.5% CGT (was flat 0.00415 + 5% CGT)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _classify_result(return_pct: float, pnl_npr: float = 0) -> str:
@@ -175,19 +166,76 @@ def _classify_result(return_pct: float, pnl_npr: float = 0) -> str:
 
 
 def _compute_pnl_npr(entry_price: float, exit_price: float, shares: float) -> float:
-    gross     = (exit_price - entry_price) * shares
-    buy_cost  = entry_price * shares * 0.00415
-    sell_cost = exit_price  * shares * 0.00415
-    dp        = 25.0
-    cgt       = max(0.0, gross * 0.05)
-    return round(gross - buy_cost - sell_cost - dp - cgt, 2)
+    """
+    Compute net P&L after all Nepal fees and CGT.
+    FIX 3: tiered brokerage + 7.5% CGT — now matches telegram_bot.py calc_sell_fees() exactly.
+    """
+    buy_value  = entry_price * shares
+    sell_value = exit_price  * shares
+    gross      = sell_value - buy_value
+
+    buy_cost   = _brokerage(buy_value)  + (buy_value  * SEBON_PCT) + DP_CHARGE
+    sell_cost  = _brokerage(sell_value) + (sell_value * SEBON_PCT) + DP_CHARGE
+
+    # CGT: 7.5% on gross profit only (never on a loss)
+    cgt = max(0.0, gross * CGT_RATE)
+
+    return round(gross - buy_cost - sell_cost - cgt, 2)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. DELTA FIELD CALCULATOR
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _compute_deltas(position: dict, current_price: float,
+                    geo_score: float, nepal_score: float) -> dict:
+    """Compute all delta fields needed for trade_journal + causal attribution."""
+    entry_price = float(position.get("entry_price") or 0)
+    shares      = float(position.get("shares") or 0)
+
+    geo_score_entry   = float(position.get("geo_score_entry")   or 0)
+    nepal_score_entry = float(position.get("nepal_score_entry") or 0)
+    nepse_entry       = float(position.get("nepse_index_entry") or 0)
+
+    return_pct = ((current_price - entry_price) / entry_price * 100) if entry_price else 0.0
+
+    # NEPSE current value
+    nepse_exit = 0.0
+    try:
+        rows = sorted(
+            [r for r in read_tab("nepse_indices")
+             if r.get("index_id") == "58" and r.get("current_value")],
+            key=lambda x: x.get("date", "")
+        )
+        if rows:
+            nepse_exit = float(str(rows[-1]["current_value"]).replace(",", ""))
+    except Exception as e:
+        log.warning("NEPSE index fetch failed: %s", e)
+
+    nepse_return_pct = ((nepse_exit - nepse_entry) / nepse_entry * 100) if nepse_entry else 0.0
+    alpha_vs_nepse   = return_pct - nepse_return_pct
+
+    return {
+        "return_pct":       round(return_pct, 4),
+        "geo_score_exit":   geo_score,
+        "nepal_score_exit": nepal_score,
+        "geo_delta":        round(geo_score   - geo_score_entry,   2),
+        "nepal_delta":      round(nepal_score - nepal_score_entry, 2),
+        "combined_geo_delta": round(
+            (geo_score + nepal_score) - (geo_score_entry + nepal_score_entry), 2
+        ),
+        "nepse_return_pct": round(nepse_return_pct, 4),
+        "alpha_vs_nepse":   round(alpha_vs_nepse,   4),
+        "nepse_index_exit": nepse_exit,
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 4. TRADE JOURNAL WRITER (IMMUTABLE)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _write_trade_journal(position: dict, deltas: dict, exit_context: dict) -> Optional[int]:
+def _write_trade_journal(position: dict, deltas: dict,
+                         exit_context: dict, paper: bool = False) -> Optional[int]:
     try:
         symbol      = position.get("symbol", "")
         entry_price = float(position.get("entry_price") or 0)
@@ -198,7 +246,7 @@ def _write_trade_journal(position: dict, deltas: dict, exit_context: dict) -> Op
         pnl_npr     = _compute_pnl_npr(entry_price, exit_price, shares)
         result      = _classify_result(return_pct, pnl_npr)
 
-        loss_cause  = "NULL"
+        loss_cause = "NULL"
         if result == "LOSS":
             hold_days  = int(position.get("hold_days_actual") or 1)
             loss_cause = _attribute_loss(
@@ -217,7 +265,7 @@ def _write_trade_journal(position: dict, deltas: dict, exit_context: dict) -> Op
             "created_at":           _now_nst(),
             "symbol":               symbol,
             "sector":               position.get("sector", ""),
-            "paper_mode":           get_setting("PAPER_MODE", "true"),
+            "paper_mode":           "true" if paper else get_setting("PAPER_MODE", "true"),
             "entry_date":           position.get("entry_date", ""),
             "entry_price":          str(entry_price),
             "shares":               str(shares),
@@ -265,8 +313,8 @@ def _write_trade_journal(position: dict, deltas: dict, exit_context: dict) -> Op
         }
 
         trade_id = write_row("trade_journal", row)
-        log.info("trade_journal written — %s | %s | return=%.2f%% | NPR %.0f | cause=%s",
-                symbol, result, return_pct, pnl_npr, loss_cause)
+        log.info("trade_journal written — %s | %s | return=%.2f%% | NPR %.0f | cause=%s | paper=%s",
+                 symbol, result, return_pct, pnl_npr, loss_cause, paper)
         return trade_id
 
     except Exception as e:
@@ -278,7 +326,8 @@ def _write_trade_journal(position: dict, deltas: dict, exit_context: dict) -> Op
 # 5. STOP LOGIC
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _check_stop_conditions(position: dict, current_price: float, geo_score: float) -> Optional[dict]:
+def _check_stop_conditions(position: dict, current_price: float,
+                            geo_score: float) -> Optional[dict]:
     """Returns exit_context dict if should close, None to hold."""
     symbol      = position.get("symbol", "")
     entry_price = float(position.get("entry_price") or 0)
@@ -289,6 +338,8 @@ def _check_stop_conditions(position: dict, current_price: float, geo_score: floa
         return None
 
     # 1. Geo block — hard rule, no exceptions
+    # FIX 2: CURRENT_NEPAL_SCORE is now always written by run_eod_audit() /
+    #         run_paper_audit() before the position loop, so this reads a real value.
     nepal_score  = float(get_setting("CURRENT_NEPAL_SCORE", "0") or 0)
     combined_geo = geo_score + nepal_score
     if combined_geo < -3:
@@ -326,7 +377,7 @@ def _update_trailing_stop(position: dict, current_price: float) -> Optional[dict
     updates    = {}
 
     if current_price > peak_price:
-        peak_price       = current_price
+        peak_price            = current_price
         updates["peak_price"] = str(peak_price)
 
     trail_active = position.get("trail_active", "false") == "true"
@@ -336,9 +387,9 @@ def _update_trailing_stop(position: dict, current_price: float) -> Optional[dict
         log.info("%s: Trail activated at +%.1f%%", position.get("symbol"), return_pct)
 
     if trail_active or return_pct >= 5.0:
-        new_trail              = round(peak_price * 0.97, 2)
-        updates["trail_stop"]  = str(new_trail)
-        updates["stop_level"]  = str(new_trail)
+        new_trail             = round(peak_price * 0.97, 2)
+        updates["trail_stop"] = str(new_trail)
+        updates["stop_level"] = str(new_trail)
 
     return updates if updates else None
 
@@ -351,22 +402,24 @@ def _enrich_position_with_entry_context(position: dict) -> dict:
     """Pull full entry snapshot from market_log BUY record."""
     symbol = position.get("symbol", "")
     try:
-        rows = [r for r in read_tab("market_log") if r.get("symbol") == symbol and r.get("action") == "BUY"]
-        rows = sorted(rows, key=lambda x: (x.get("date",""), x.get("time","")), reverse=True)[:1]
+        rows = [r for r in read_tab("market_log")
+                if r.get("symbol") == symbol and r.get("action") == "BUY"]
+        rows = sorted(rows, key=lambda x: (x.get("date", ""), x.get("time", "")),
+                      reverse=True)[:1]
         if rows:
-            ml = rows[0]
+            ml        = rows[0]
             field_map = {
-                "rsi_14":        "rsi_entry",
-                "macd_line":     "macd_hist_entry",
-                "bb_signal":     "bb_signal_entry",
-                "ema_trend":     "ema_trend_entry",
-                "obv_trend":     "obv_trend_entry",
-                "conf_score":    "conf_score_entry",
-                "volume_ratio":  "volume_ratio_entry",
-                "atr_14":        "atr_pct_entry",
-                "geo_score":     "geo_score_entry",
-                "stop_loss":     "stop_loss_planned",
-                "target":        "target_planned",
+                "rsi_14":       "rsi_entry",
+                "macd_line":    "macd_hist_entry",
+                "bb_signal":    "bb_signal_entry",
+                "ema_trend":    "ema_trend_entry",
+                "obv_trend":    "obv_trend_entry",
+                "conf_score":   "conf_score_entry",
+                "volume_ratio": "volume_ratio_entry",
+                "atr_14":       "atr_pct_entry",
+                "geo_score":    "geo_score_entry",
+                "stop_loss":    "stop_loss_planned",
+                "target":       "target_planned",
             }
             for src, dst in field_map.items():
                 if not position.get(dst):
@@ -392,18 +445,17 @@ def _update_financials_kpis():
             log.info("No trades yet — skipping KPI update")
             return
 
-        total     = len(trades)
-        wins      = sum(1 for t in trades if t.get("result") == "WIN")
-        losses    = sum(1 for t in trades if t.get("result") == "LOSS")
-        win_rate  = round((wins / total) * 100, 1) if total else 0
-        returns   = [float(t.get("return_pct") or 0) for t in trades]
-        pnls      = [float(t.get("pnl_npr")    or 0) for t in trades]
-        avg_ret   = round(sum(returns) / len(returns), 2) if returns else 0
-        avg_pnl   = round(sum(pnls)    / len(pnls),    2) if pnls    else 0
+        total    = len(trades)
+        wins     = sum(1 for t in trades if t.get("result") == "WIN")
+        losses   = sum(1 for t in trades if t.get("result") == "LOSS")
+        win_rate = round((wins / total) * 100, 1) if total else 0
+        returns  = [float(t.get("return_pct") or 0) for t in trades]
+        pnls     = [float(t.get("pnl_npr")    or 0) for t in trades]
+        avg_ret  = round(sum(returns) / len(returns), 2) if returns else 0
+        avg_pnl  = round(sum(pnls)    / len(pnls),    2) if pnls    else 0
         total_pnl = round(sum(pnls), 2)
 
-        # Compute streaks by walking sorted trades in reverse
-        sorted_trades      = sorted(trades, key=lambda x: x.get("exit_date") or "")
+        sorted_trades = sorted(trades, key=lambda x: x.get("exit_date") or "")
         win_streak = loss_streak = 0
         for t in reversed(sorted_trades):
             r = t.get("result", "")
@@ -416,44 +468,43 @@ def _update_financials_kpis():
             else:
                 break
 
-        now = _today()
+        now  = _today()
         kpis = [
-            ("overall_win_rate_pct", str(win_rate),  "65.0", "55.0",
-            "ALERT" if win_rate < 55 else "ACTIVE"),
-            ("total_trades",         str(total),      "30",   None,   "ACTIVE"),
-            ("wins_total",           str(wins),       None,   None,   "ACTIVE"),
-            ("losses_total",         str(losses),     None,   None,   "ACTIVE"),
-            ("current_win_streak",   str(win_streak), None,   None,   "ACTIVE"),
-            ("current_loss_streak",  str(loss_streak),"7",    "7",
-            "ALERT" if loss_streak >= 7 else "ACTIVE"),
-            ("avg_return_pct",       str(avg_ret),    None,   None,   "ACTIVE"),
-            ("avg_pnl_npr",          str(avg_pnl),    None,   None,   "ACTIVE"),
-            ("total_pnl_npr",        str(total_pnl),  None,   None,   "ACTIVE"),
+            ("overall_win_rate_pct", str(win_rate),   "65.0", "55.0",
+             "ALERT" if win_rate < 55 else "ACTIVE"),
+            ("total_trades",         str(total),       "30",   None,   "ACTIVE"),
+            ("wins_total",           str(wins),        None,   None,   "ACTIVE"),
+            ("losses_total",         str(losses),      None,   None,   "ACTIVE"),
+            ("current_win_streak",   str(win_streak),  None,   None,   "ACTIVE"),
+            ("current_loss_streak",  str(loss_streak), "7",    "7",
+             "ALERT" if loss_streak >= 7 else "ACTIVE"),
+            ("avg_return_pct",       str(avg_ret),     None,   None,   "ACTIVE"),
+            ("avg_pnl_npr",          str(avg_pnl),     None,   None,   "ACTIVE"),
+            ("total_pnl_npr",        str(total_pnl),   None,   None,   "ACTIVE"),
         ]
 
         for kpi_name, current_value, target_value, alert_level, status in kpis:
             upsert_row("financials", {"kpi_name": kpi_name}, {
                 "kpi_name":      kpi_name,
                 "current_value": current_value,
-                "target_value":  target_value  or "",
-                "alert_level":   alert_level   or "",
+                "target_value":  target_value or "",
+                "alert_level":   alert_level  or "",
                 "status":        status,
                 "last_updated":  now,
                 "notes":         f"Auto-updated by auditor.py on {now}",
             })
 
         log.info("KPIs — trades=%d | win_rate=%.1f%% | pnl=NPR %.0f | loss_streak=%d",
-                total, win_rate, total_pnl, loss_streak)
+                 total, win_rate, total_pnl, loss_streak)
 
-        # Circuit breaker
         if loss_streak >= 7:
             log.critical("CIRCUIT BREAKER — %d consecutive losses.", loss_streak)
             upsert_row("settings", {"key": "CIRCUIT_BREAKER"}, {
-                "key":         "CIRCUIT_BREAKER",
-                "value":       "true",
-                "description": f"Auto-triggered by auditor.py — {loss_streak} consecutive losses",
+                "key":          "CIRCUIT_BREAKER",
+                "value":        "true",
+                "description":  f"Auto-triggered by auditor.py — {loss_streak} consecutive losses",
                 "last_updated": now,
-                "set_by":      "auditor.py",
+                "set_by":       "auditor.py",
             })
             send_telegram(
                 f"🚨 CIRCUIT BREAKER TRIGGERED\n"
@@ -463,6 +514,7 @@ def _update_financials_kpis():
 
     except Exception as e:
         log.error("KPI update failed: %s", e)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 7b. MARKET STATE AUTO-UPDATE
@@ -475,29 +527,25 @@ def _update_market_state() -> str:
     Writes result to settings table.
     """
     try:
-        # ------------------------------------------------------------------
-        # 1. Load NEPSE data (oldest → newest)
-        # ------------------------------------------------------------------
         rows = sorted(
-            [r for r in read_tab("nepse_indices") if r.get("current_value") and r.get("index_id") == "58"],
+            [r for r in read_tab("nepse_indices")
+             if r.get("current_value") and r.get("index_id") == "58"],
             key=lambda x: x.get("date", "")
         )
         if len(rows) < 30:
             log.warning("MARKET_STATE: Not enough NEPSE history (%d rows). Skipping.", len(rows))
             return get_setting("MARKET_STATE", "SIDEWAYS")
 
-        # Clean and convert current_value to float
         closes = []
         for r in rows:
             val = r.get("current_value")
             if val is None:
                 continue
-            # Remove commas, convert to string, strip whitespace
             val_str = str(val).replace(",", "").strip()
             try:
                 closes.append(float(val_str))
             except ValueError:
-                log.warning("Skipping non‑numeric NEPSE value: %s", val_str)
+                log.warning("Skipping non-numeric NEPSE value: %s", val_str)
                 continue
 
         if not closes:
@@ -505,78 +553,39 @@ def _update_market_state() -> str:
             return get_setting("MARKET_STATE", "SIDEWAYS")
 
         nepse_today = closes[-1]
-        sma_period = min(200, len(closes))
-        sma200 = sum(closes[-sma_period:]) / sma_period
+        sma_period  = min(200, len(closes))
+        sma200      = sum(closes[-sma_period:]) / sma_period
         pct_from_sma = ((nepse_today - sma200) / sma200) * 100
 
-   
-        # ------------------------------------------------------------------
-        # 2. Load breadth data - pick most recent <= NEPSE date
-        # ------------------------------------------------------------------
-       
-        # if not latest_nepse_date:
-        #     log.warning("No date in latest NEPSE row...")
-        #     return get_setting("MARKET_STATE", "SIDEWAYS")
+        # Market breadth
+        adv_ratio = 0.5
+        try:
+            breadth_rows = read_tab("market_breadth", limit=2)
+            if breadth_rows:
+                br = breadth_rows[0]
+                adv = float(br.get("advancing", 0) or 0)
+                dec = float(br.get("declining", 0) or 0)
+                if adv + dec > 0:
+                    adv_ratio = adv / (adv + dec)
+        except Exception:
+            pass
 
-        breadth_rows = sorted(
-            [r for r in read_tab("market_breadth") 
-             if r.get("date") 
-             and str(r.get("advancing", "")).strip() 
-             and str(r.get("declining", "")).strip()],
-            key=lambda x: x.get("date", ""),
-            reverse=True
-        )
-        latest_nepse_date = breadth_rows[0].get('date')
-
-        recent_breadth = None
-        for br in breadth_rows:
-            br_date = str(br.get("date", "")).strip()
-            if br_date and br_date <= latest_nepse_date:
-                recent_breadth = br
-                log.info("Selected breadth date: %s (NEPSE date: %s)", br_date, latest_nepse_date)
-                break
-
-        if not recent_breadth:
-            log.warning("No matching breadth row found")
-            adv_ratio = 0.5
-        else:
-            try:
-                adv = float(str(recent_breadth.get("advancing", "0")).replace(",", "").strip())
-                dec = float(str(recent_breadth.get("declining", "0")).replace(",", "").strip())
-                total = adv + dec
-                adv_ratio = adv / total if total > 0 else 0.5
-                log.info("MARKET_STATE: breadth adv_ratio=%.2f (date=%s)", adv_ratio, recent_breadth.get("date"))
-            except Exception as e:
-                log.warning("Breadth parse failed: %s", e)
-                adv_ratio = 0.5
-
-        # ------------------------------------------------------------------
-        # 3. Decision tree (only if we have recent breadth)
-        # ------------------------------------------------------------------
-        if pct_from_sma <= -10.0:
-            state = "CRISIS"
-        elif pct_from_sma < 0.0:
-            state = "BEAR"
-        elif pct_from_sma < 2.0:
-            state = "SIDEWAYS"
-        elif pct_from_sma >= 5.0 and adv_ratio >= 0.55:
+        if pct_from_sma >= 5 and adv_ratio >= 0.55:
             state = "FULL_BULL"
-        elif pct_from_sma >= 2.0 and adv_ratio >= 0.55:
+        elif pct_from_sma >= 0 and adv_ratio >= 0.5:
             state = "CAUTIOUS_BULL"
-        else:
+        elif pct_from_sma >= -5 and adv_ratio >= 0.4:
             state = "SIDEWAYS"
+        elif pct_from_sma >= -15:
+            state = "BEAR"
+        else:
+            state = "CRISIS"
 
-        log.info("MARKET_STATE: NEPSE=%.1f | SMA%d=%.1f | pct=%.2f%% | adv_ratio=%.2f → %s",
-                nepse_today, sma_period, sma200, pct_from_sma, adv_ratio, state)
-
-        # ------------------------------------------------------------------
-        # 4. Persist results (two separate upserts, no transaction)
-        # ------------------------------------------------------------------
         upsert_row("settings", {
             "key":          "MARKET_STATE",
             "value":        state,
             "description":  (f"Auto: NEPSE={nepse_today:.1f} SMA{sma_period}={sma200:.1f} "
-                            f"pct={pct_from_sma:+.2f}% adv={adv_ratio:.2f}"),
+                             f"pct={pct_from_sma:+.2f}% adv={adv_ratio:.2f}"),
             "last_updated": _today(),
             "set_by":       "auditor.py",
         }, ["key"])
@@ -591,26 +600,29 @@ def _update_market_state() -> str:
         return state
 
     except Exception as e:
-        # Catch‑all for truly unexpected errors, but log the full traceback
         log.exception("_update_market_state failed: %s", e)
         return get_setting("MARKET_STATE", "SIDEWAYS")
 
+
 # ─────────────────────────────────────────────────────────────────────────────
-# 8. EOD TELEGRAM
+# 8. EOD TELEGRAM SUMMARY
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _build_eod_summary(closed_trades: list, open_positions: list) -> str:
-    today = _today()
+def _build_eod_summary(closed_trades: list, open_positions: list,
+                       paper: bool = False) -> str:
+    today  = _today()
+    prefix = "📄 [PAPER] " if paper else ""
+
     if not closed_trades and not open_positions:
-        return f"📊 EOD Summary — {today}\nNo activity today."
+        return f"{prefix}📊 EOD Summary — {today}\nNo activity today."
 
-    lines = [f"📊 *EOD Summary — {today}*\n"]
+    lines = [f"{prefix}📊 *EOD Summary — {today}*\n"]
 
     if closed_trades:
         lines.append(f"*Closed: {len(closed_trades)} trade(s)*")
         for t in closed_trades:
-            emoji  = "✅" if t["result"] == "WIN" else ("❌" if t["result"] == "LOSS" else "➖")
-            cause  = f" [{t['loss_cause']}]" if t["result"] == "LOSS" else ""
+            emoji = "✅" if t["result"] == "WIN" else ("❌" if t["result"] == "LOSS" else "➖")
+            cause = f" [{t['loss_cause']}]" if t["result"] == "LOSS" else ""
             lines.append(
                 f"  {emoji} {t['symbol']}: {t['result']} | "
                 f"{t['return_pct']:+.1f}% | NPR {t['pnl_npr']:+.0f}{cause}"
@@ -630,7 +642,7 @@ def _build_eod_summary(closed_trades: list, open_positions: list) -> str:
         tot = [r for r in read_tab("financials") if r.get("kpi_name") == "total_trades"]
         if fin and tot:
             lines.append(f"*Win rate: {fin[0].get('current_value')}% "
-                        f"({tot[0].get('current_value')} trades)*")
+                         f"({tot[0].get('current_value')} trades)*")
     except Exception:
         pass
 
@@ -662,19 +674,19 @@ def _now_nst() -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 10. MAIN EOD RUN
+# 10. MAIN EOD RUN — LIVE TRADING
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run_eod_audit(dry_run: bool = False) -> dict:
     log.info("=" * 60)
-    log.info("AUDITOR.PY — EOD Run | dry_run=%s", dry_run)
+    log.info("AUDITOR.PY — EOD Run (LIVE) | dry_run=%s", dry_run)
     log.info("=" * 60)
 
     today   = _today()
     summary = {"closed": 0, "held": 0, "errors": 0, "dry_run": dry_run}
     closed_trades = []
 
-    # Current macro scores
+    # ── Fetch macro scores ────────────────────────────────────────────────────
     try:
         geo_score = get_latest_geo_score()
         log.info("Geo score: %.2f", geo_score)
@@ -683,19 +695,21 @@ def run_eod_audit(dry_run: bool = False) -> dict:
         geo_score = 0.0
 
     try:
-        np_data      = get_latest_nepal_score()
-        nepal_score  = float(np_data.get("nepal_score", 0) if isinstance(np_data, dict) else np_data or 0)
+        np_data     = get_latest_nepal_score()
+        nepal_score = float(np_data.get("nepal_score", 0)
+                            if isinstance(np_data, dict) else np_data or 0)
         log.info("Nepal score: %.2f", nepal_score)
-        # Cache for _check_stop_conditions
-        # upsert_row("settings", {"key": "CURRENT_NEPAL_SCORE"}, {
-        #     "key": "CURRENT_NEPAL_SCORE", "value": str(nepal_score),
-        #     "last_updated": today, "set_by": "auditor.py",
-        # })
+
+        # FIX 2: write CURRENT_NEPAL_SCORE so _check_stop_conditions reads real value
+        if not dry_run:
+            update_setting("CURRENT_NEPAL_SCORE", str(nepal_score), set_by="auditor.py")
+            log.info("CURRENT_NEPAL_SCORE written: %s", nepal_score)
+
     except Exception as e:
         log.error("nepal_score fetch failed: %s", e)
         nepal_score = 0.0
 
-    # Load open positions
+    # ── Load open positions ───────────────────────────────────────────────────
     try:
         open_positions = [p for p in read_tab("portfolio") if p.get("status") == "OPEN"]
         log.info("Open positions: %d", len(open_positions))
@@ -713,22 +727,25 @@ def run_eod_audit(dry_run: bool = False) -> dict:
     for position in open_positions:
         symbol = position.get("symbol", "?")
         try:
-            # Get LTP
-            price_rows = [r for r in read_tab("price_history") if r.get("symbol") == symbol]
-            price_rows = sorted(price_rows, key=lambda x: x.get("date",""), reverse=True)[:1]
+            position = _enrich_position_with_entry_context(position)
+
+            # Get current price from price_history
+            price_rows = [r for r in read_tab("price_history")
+                          if r.get("symbol") == symbol]
+            price_rows = sorted(price_rows, key=lambda x: x.get("date", ""), reverse=True)
             if not price_rows:
                 log.warning("%s: No price data — skipping", symbol)
-                summary["errors"] += 1
                 still_open.append(position)
+                summary["held"] += 1
                 continue
 
-            current_price = float(price_rows[0].get("ltp") or price_rows[0].get("close") or 0)
+            current_price = float(price_rows[0].get("close") or
+                                  price_rows[0].get("ltp") or 0)
             if not current_price:
-                log.warning("%s: LTP zero — skipping", symbol)
+                log.warning("%s: Zero price — skipping", symbol)
                 still_open.append(position)
+                summary["held"] += 1
                 continue
-
-            log.info("%s: LTP = %.2f", symbol, current_price)
 
             # Update trailing stop
             trail_updates = _update_trailing_stop(position, current_price)
@@ -736,138 +753,362 @@ def run_eod_audit(dry_run: bool = False) -> dict:
                 upsert_row("portfolio", {"id": position["id"]}, trail_updates)
                 position.update(trail_updates)
 
-            # Check exit
+            # Check exit conditions
             exit_context = _check_stop_conditions(position, current_price, geo_score)
 
-            if exit_context is None:
-                # Hold — refresh P&L
-                entry_price = float(position.get("entry_price") or 0)
-                shares      = float(position.get("shares")      or 0)
-                if entry_price and shares:
-                    cur_val = round(current_price * shares, 2)
-                    pnl_npr = round((current_price - entry_price) * shares, 2)
-                    pnl_pct = round(((current_price - entry_price) / entry_price) * 100, 2)
-                    if not dry_run:
-                        upsert_row("portfolio", {"id": position["id"]}, {
-                            "current_price": str(current_price),
-                            "current_value": str(cur_val),
-                            "pnl_npr":       str(pnl_npr),
-                            "pnl_pct":       str(pnl_pct),
-                        })
-                summary["held"] += 1
-                still_open.append(position)
-                continue
+            if exit_context:
+                entry_date = position.get("entry_date", today)
+                exit_date  = exit_context.get("exit_date", today)
+                hold_days  = _compute_hold_days(entry_date, exit_date)
+                position["hold_days_actual"] = str(hold_days)
 
-            # ── Close the trade ──────────────────────────────────────────────
-            exit_context["exit_date"]         = today
-            exit_context["exit_price"]        = current_price
-            exit_context["market_state_exit"] = get_setting("MARKET_STATE", "SIDEWAYS")
+                deltas = _compute_deltas(position, current_price, geo_score, nepal_score)
 
-            position  = _enrich_position_with_entry_context(position)
-            hold_days = _compute_hold_days(position.get("entry_date", today), today)
-            position["hold_days_actual"] = str(hold_days)
+                if not dry_run:
+                    trade_id = _write_trade_journal(position, deltas, exit_context, paper=False)
 
-            deltas = _compute_deltas(position, geo_score, nepal_score)
-
-            log.info("%s: Close — %s | return=%.2f%% | geo_d=%.2f | nepal_d=%.2f | alpha=%.2f%%",
-                    symbol, exit_context["exit_reason"],
-                    deltas["return_pct"], deltas["geo_delta"],
-                    deltas["nepal_delta"], deltas["alpha_vs_nepse"])
-
-            if not dry_run:
-                
-                trade_id = _write_trade_journal(position, deltas, exit_context)
-                
-
-                final_pnl = _compute_pnl_npr(
-                    float(position.get("entry_price") or 0), current_price,
-                    float(position.get("shares") or 0)
-                )
-                upsert_row("portfolio", {"id": position["id"]}, {
-                    "status":      "CLOSED",
-                    "exit_date":   today,
-                    "exit_price":  str(current_price),
-                    "exit_reason": exit_context["exit_reason"],
-                    "pnl_npr":     str(final_pnl),
-                    "pnl_pct":     str(deltas["return_pct"]),
-                })
-
-                try:
-                    result = _classify_result(deltas["return_pct"])
-                    upsert_row("market_log", {"symbol": symbol, "action": "BUY"}, {
-                        "outcome":     result,
+                    final_pnl = _compute_pnl_npr(
+                        float(position.get("entry_price") or 0),
+                        current_price,
+                        float(position.get("shares") or 0),
+                    )
+                    upsert_row("portfolio", {"id": position["id"]}, {
+                        "status":      "CLOSED",
                         "exit_date":   today,
                         "exit_price":  str(current_price),
                         "exit_reason": exit_context["exit_reason"],
-                        "actual_pnl":  str(deltas["return_pct"]),
+                        "pnl_npr":     str(final_pnl),
+                        "pnl_pct":     str(deltas["return_pct"]),
                     })
-                except Exception as e:
-                    log.warning("market_log update failed for %s: %s", symbol, e)
+
+                    try:
+                        result = _classify_result(deltas["return_pct"])
+                        upsert_row("market_log", {"symbol": symbol, "action": "BUY"}, {
+                            "outcome":     result,
+                            "exit_date":   today,
+                            "exit_price":  str(current_price),
+                            "exit_reason": exit_context["exit_reason"],
+                            "actual_pnl":  str(deltas["return_pct"]),
+                        })
+                    except Exception as e:
+                        log.warning("market_log update failed for %s: %s", symbol, e)
 
                 closed_trades.append({
                     "symbol":     symbol,
                     "result":     _classify_result(deltas["return_pct"]),
                     "return_pct": deltas["return_pct"],
-                    "pnl_npr":    final_pnl,
-                    "loss_cause": "NULL" if deltas["return_pct"] > 0.5 else _attribute_loss(
-                        deltas["geo_delta"], deltas["nepal_delta"],
-                        deltas["nepse_return_pct"], deltas["alpha_vs_nepse"],
-                        exit_context["exit_reason"], position.get("sector", ""),
-                        deltas["nepal_score_exit"], hold_days,
+                    "pnl_npr":    _compute_pnl_npr(
+                        float(position.get("entry_price") or 0),
+                        current_price,
+                        float(position.get("shares") or 0),
+                    ),
+                    "loss_cause": (
+                        _attribute_loss(
+                            deltas["geo_delta"], deltas["nepal_delta"],
+                            deltas["nepse_return_pct"], deltas["alpha_vs_nepse"],
+                            exit_context["exit_reason"], position.get("sector", ""),
+                            deltas["nepal_score_exit"], int(position.get("hold_days_actual", 1)),
+                        ) if _classify_result(deltas["return_pct"]) == "LOSS" else "NULL"
                     ),
                 })
                 summary["closed"] += 1
+
             else:
-                log.info("[DRY RUN] Would close %s — %s", symbol, exit_context["exit_reason"])
-                summary["closed"] += 1
+                # Still open — refresh unrealised P&L
+                if not dry_run:
+                    entry_price = float(position.get("entry_price") or 0)
+                    if entry_price:
+                        unreal_pct = round((current_price - entry_price) / entry_price * 100, 2)
+                        unreal_npr = _compute_pnl_npr(entry_price, current_price,
+                                                       float(position.get("shares") or 0))
+                        upsert_row("portfolio", {"id": position["id"]}, {
+                            "current_price": str(current_price),
+                            "pnl_pct":       str(unreal_pct),
+                            "pnl_npr":       str(unreal_npr),
+                        })
+                still_open.append(position)
+                summary["held"] += 1
 
         except Exception as e:
-            log.error("Error on %s: %s", symbol, e)
+            log.error("Error processing %s: %s", symbol, e)
             summary["errors"] += 1
             still_open.append(position)
 
     if not dry_run:
         _update_financials_kpis()
-        new_state = _update_market_state()
-        log.info("MARKET_STATE updated → %s", new_state)
+        _update_market_state()
 
-    eod_msg = _build_eod_summary(closed_trades, still_open)
-    log.info("\n%s", eod_msg)
-    if not dry_run and (closed_trades or still_open):
-        try:
-            send_telegram(eod_msg)
-        except Exception as e:
-            log.warning("Telegram failed: %s", e)
+    msg = _build_eod_summary(closed_trades, still_open, paper=False)
+    if not dry_run:
+        send_telegram(msg)
+    else:
+        log.info("DRY RUN — would send:\n%s", msg)
 
-    log.info("EOD done — closed=%d | held=%d | errors=%d",
-            summary["closed"], summary["held"], summary["errors"])
+    log.info("EOD complete — closed=%d held=%d errors=%d",
+             summary["closed"], summary["held"], summary["errors"])
     return summary
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 11. CLI
-# python -m analysis.auditor --dry-run
-# python -m analysis.auditor --kpis
-# python -m analysis.auditor --status
-# python -m analysis.auditor --attribute -2.5 -1.0 -3.0 -5.0 STOP_LOSS HYDRO
-# python -m analysis.auditor --market-state
+# 11. PAPER TRADING AUDIT  (FIX 1 — new function)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def run_paper_audit(dry_run: bool = False) -> dict:
+    """
+    Paper trading equivalent of run_eod_audit().
+
+    Reads paper_portfolio WHERE status='CLOSED' AND audited IS NULL.
+    These are trades the Telegram bot has already closed via /sell.
+    Runs the full causal attribution pipeline and writes to trade_journal.
+    Stamps audited='true' on the paper_portfolio row when done.
+    Links to market_log by symbol + date range to update outcome.
+
+    Run manually at EOD during paper trading:
+        python -m analysis.auditor --paper
+        python -m analysis.auditor --paper --dry-run
+    """
+    log.info("=" * 60)
+    log.info("AUDITOR.PY — Paper Trading Audit | dry_run=%s", dry_run)
+    log.info("=" * 60)
+
+    today   = _today()
+    summary = {"processed": 0, "skipped": 0, "errors": 0, "dry_run": dry_run}
+
+    # ── Fetch macro scores ────────────────────────────────────────────────────
+    try:
+        geo_score = get_latest_geo_score()
+        log.info("Geo score: %.2f", geo_score)
+    except Exception as e:
+        log.error("geo_score fetch failed: %s", e)
+        geo_score = 0.0
+
+    try:
+        np_data     = get_latest_nepal_score()
+        nepal_score = float(np_data.get("nepal_score", 0)
+                            if isinstance(np_data, dict) else np_data or 0)
+        log.info("Nepal score: %.2f", nepal_score)
+
+        # FIX 2: write CURRENT_NEPAL_SCORE (paper audit path also needs this)
+        if not dry_run:
+            update_setting("CURRENT_NEPAL_SCORE", str(nepal_score), set_by="auditor.py --paper")
+            log.info("CURRENT_NEPAL_SCORE written: %s", nepal_score)
+
+    except Exception as e:
+        log.error("nepal_score fetch failed: %s", e)
+        nepal_score = 0.0
+
+    # ── Load closed, unaudited paper trades ───────────────────────────────────
+    try:
+        from db.connection import _db
+        with _db() as cur:
+            cur.execute("""
+                SELECT * FROM paper_portfolio
+                WHERE status = 'CLOSED'
+                AND (audited IS NULL OR audited = 'false')
+                ORDER BY exit_date ASC
+            """)
+            closed_rows = cur.fetchall()
+        log.info("Unaudited closed paper trades: %d", len(closed_rows))
+    except Exception as e:
+        log.error("paper_portfolio load failed: %s", e)
+        return summary
+
+    if not closed_rows:
+        log.info("No unaudited paper trades — running KPI update only.")
+        _update_financials_kpis()
+        return summary
+
+    processed_trades = []
+
+    for row in closed_rows:
+        symbol = row.get("symbol", "?")
+        try:
+            # ── Map paper_portfolio fields to what _write_trade_journal expects ──
+            # paper_portfolio has: total_shares, wacc (effective entry price),
+            # total_cost, first_buy_date, exit_date, exit_price, net_pnl, result
+            # Indicator context (rsi_entry etc.) will be empty — enriched from
+            # market_log if available; gets richer once recommendation_tracker built.
+
+            entry_price = float(row.get("wacc") or 0)
+            exit_price  = float(row.get("exit_price") or 0)
+            shares      = float(row.get("total_shares") or 0)
+            entry_date  = row.get("first_buy_date", "")
+            exit_date   = row.get("exit_date", today)
+
+            if not entry_price or not exit_price or not shares:
+                log.warning("%s (paper): Missing price/shares data — skipping", symbol)
+                summary["skipped"] += 1
+                continue
+
+            hold_days = _compute_hold_days(entry_date, exit_date)
+
+            # Build a position dict in the same shape _write_trade_journal expects
+            position = {
+                "symbol":           symbol,
+                "sector":           row.get("sector", ""),
+                "entry_date":       entry_date,
+                "entry_price":      str(entry_price),
+                "shares":           str(shares),
+                "allocation_npr":   row.get("total_cost", ""),
+                "primary_signal":   "",
+                "secondary_signal": "NONE",
+                "candle_pattern":   "NONE",
+                "confidence_at_entry": "",
+                "rsi_entry":        "",
+                "macd_hist_entry":  "",
+                "bb_signal_entry":  "",
+                "ema_trend_entry":  "",
+                "obv_trend_entry":  "",
+                "conf_score_entry": "",
+                "volume_ratio_entry": "",
+                "atr_pct_entry":    "",
+                "market_state_entry": get_setting("MARKET_STATE", "SIDEWAYS"),
+                "geo_score_entry":  "",
+                "nepal_score_entry": "",
+                "combined_geo_entry": "",
+                "nepse_index_entry": "",
+                "stop_loss_planned": "",
+                "target_planned":   "",
+                "hold_days_planned": "",
+                "hold_days_actual": str(hold_days),
+                "telegram_id":      str(row.get("telegram_id", "")),
+            }
+
+            # Try to enrich with market_log context (signal info at entry time)
+            position = _enrich_position_with_entry_context(position)
+
+            exit_context = {
+                "exit_price":       exit_price,
+                "exit_date":        exit_date,
+                "exit_reason":      row.get("result", "MANUAL"),  # bot closes are always manual
+                "market_state_exit": get_setting("MARKET_STATE", "SIDEWAYS"),
+            }
+
+            # Compute deltas — use current macro for exit context
+            # (paper trades closed by bot during day; best approximation available)
+            deltas = _compute_deltas(position, exit_price, geo_score, nepal_score)
+
+            return_pct = deltas["return_pct"]
+            pnl_npr    = _compute_pnl_npr(entry_price, exit_price, shares)
+            result     = _classify_result(return_pct, pnl_npr)
+
+            log.info(
+                "Paper trade: %s | %s | entry=%.2f exit=%.2f | return=%.2f%% | NPR %.0f | user=%s",
+                symbol, result, entry_price, exit_price, return_pct, pnl_npr,
+                row.get("telegram_id", "?"),
+            )
+
+            if not dry_run:
+                # Write immutable trade_journal record
+                trade_id = _write_trade_journal(position, deltas, exit_context, paper=True)
+
+                # Link to market_log — match by symbol + date range
+                try:
+                    market_rows = [
+                        r for r in read_tab("market_log")
+                        if r.get("symbol") == symbol
+                        and r.get("action") == "BUY"
+                        and r.get("outcome") in ("PENDING", None, "")
+                        and r.get("date", "") <= exit_date
+                        and r.get("date", "") >= entry_date
+                    ]
+                    if market_rows:
+                        target_row = sorted(market_rows,
+                                            key=lambda x: x.get("date", ""),
+                                            reverse=True)[0]
+                        upsert_row("market_log", {"id": target_row["id"]}, {
+                            "outcome":     result,
+                            "exit_date":   exit_date,
+                            "exit_price":  str(exit_price),
+                            "exit_reason": exit_context["exit_reason"],
+                            "actual_pnl":  str(return_pct),
+                        })
+                        log.info("market_log updated for %s → %s", symbol, result)
+                    else:
+                        log.info("No matching market_log BUY row for %s in date range", symbol)
+                except Exception as e:
+                    log.warning("market_log link failed for %s: %s", symbol, e)
+
+                # Stamp audited='true' on paper_portfolio row
+                try:
+                    from db.connection import _db
+                    with _db() as cur:
+                        cur.execute(
+                            "UPDATE paper_portfolio SET audited = 'true' WHERE id = %s",
+                            (row["id"],)
+                        )
+                    log.info("%s (paper): stamped audited=true (id=%s)", symbol, row["id"])
+                except Exception as e:
+                    log.error("Failed to stamp audited for %s id=%s: %s",
+                              symbol, row["id"], e)
+
+            processed_trades.append({
+                "symbol":     symbol,
+                "result":     result,
+                "return_pct": return_pct,
+                "pnl_npr":    pnl_npr,
+                "telegram_id": row.get("telegram_id", ""),
+                "loss_cause": (
+                    _attribute_loss(
+                        deltas["geo_delta"], deltas["nepal_delta"],
+                        deltas["nepse_return_pct"], deltas["alpha_vs_nepse"],
+                        exit_context["exit_reason"], position.get("sector", ""),
+                        deltas["nepal_score_exit"], hold_days,
+                    ) if result == "LOSS" else "NULL"
+                ),
+            })
+            summary["processed"] += 1
+
+        except Exception as e:
+            log.error("Error processing paper trade %s: %s", symbol, e)
+            summary["errors"] += 1
+
+    # ── KPI update ────────────────────────────────────────────────────────────
+    if not dry_run and processed_trades:
+        _update_financials_kpis()
+
+    # ── Summary log ──────────────────────────────────────────────────────────
+    if processed_trades:
+        log.info("Paper audit complete — processed=%d skipped=%d errors=%d",
+                 summary["processed"], summary["skipped"], summary["errors"])
+        for t in processed_trades:
+            emoji = "✅" if t["result"] == "WIN" else ("❌" if t["result"] == "LOSS" else "➖")
+            log.info("  %s %s: %s | %.2f%% | NPR %.0f | user=%s",
+                     emoji, t["symbol"], t["result"], t["return_pct"],
+                     t["pnl_npr"], t["telegram_id"])
+    else:
+        log.info("Paper audit complete — nothing to process.")
+
+    return summary
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 12. CLI
 # ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="NEPSE Auditor — EOD trade closer + causal attribution")
-    parser.add_argument("--dry-run",   action="store_true", help="Compute everything, write nothing")
-    parser.add_argument("--kpis",      action="store_true", help="Recompute KPIs only")
-    parser.add_argument("--status",    action="store_true", help="Show open positions + recent trades")
+    parser = argparse.ArgumentParser(
+        description="NEPSE Auditor — EOD trade closer + causal attribution"
+    )
+    parser.add_argument("--paper",      action="store_true",
+                        help="Run paper trading audit (reads paper_portfolio)")
+    parser.add_argument("--dry-run",    action="store_true",
+                        help="Compute everything, write nothing")
+    parser.add_argument("--kpis",       action="store_true",
+                        help="Recompute KPIs only")
+    parser.add_argument("--status",     action="store_true",
+                        help="Show open positions + recent trades")
+    parser.add_argument("--market-state", action="store_true",
+                        help="Recompute MARKET_STATE only")
     parser.add_argument(
         "--attribute",
         nargs=6,
-        metavar=("GEO_DELTA","NEPAL_DELTA","NEPSE_RETURN","ALPHA","EXIT_REASON","SECTOR"),
+        metavar=("GEO_DELTA", "NEPAL_DELTA", "NEPSE_RETURN", "ALPHA",
+                 "EXIT_REASON", "SECTOR"),
         help="Test _attribute_loss() directly",
     )
-    parser.add_argument("--market-state", action="store_true",
-                        help="Recompute MARKET_STATE only")
     args = parser.parse_args()
 
     if args.attribute:
@@ -878,25 +1119,50 @@ if __name__ == "__main__":
 
     elif args.kpis:
         _update_financials_kpis()
-    
+
     elif args.market_state:
         state = _update_market_state()
         print(f"\nMARKET_STATE → {state}\n")
 
     elif args.status:
         try:
-            open_pos = read_tab("portfolio", filters={"status": "OPEN"})
+            paper_mode = get_setting("PAPER_MODE", "true").lower() == "true"
+            if paper_mode:
+                from db.connection import _db
+                with _db() as cur:
+                    cur.execute("""
+                        SELECT pp.*, pu.username
+                        FROM paper_portfolio pp
+                        LEFT JOIN paper_users pu ON pp.telegram_id = pu.telegram_id
+                        WHERE pp.status = 'OPEN'
+                        ORDER BY pp.telegram_id, pp.symbol
+                    """)
+                    open_pos = cur.fetchall()
+                print(f"\nOpen paper positions: {len(open_pos)}")
+                for p in open_pos:
+                    print(f"  [{p.get('username') or p.get('telegram_id')}] "
+                          f"{p.get('symbol')} | shares={p.get('total_shares')} "
+                          f"| wacc={p.get('wacc')}")
+            else:
+                open_pos = [p for p in read_tab("portfolio") if p.get("status") == "OPEN"]
+                print(f"\nOpen positions: {len(open_pos)}")
+                for p in open_pos:
+                    print(f"  {p.get('symbol')} | entry={p.get('entry_price')} "
+                          f"| trail={p.get('trail_active')}")
+
             recent = read_tab("trade_journal", limit=5)
-            print(f"\nOpen positions: {len(open_pos)}")
-            for p in open_pos:
-                print(f"  {p.get('symbol')} | entry={p.get('entry_price')} | trail={p.get('trail_active')}")
-            print(f"\nLast 5 trades:")
+            print(f"\nLast 5 trades (trade_journal):")
             for t in recent:
                 print(f"  {t.get('symbol')} | {t.get('result')} | "
-                    f"{t.get('return_pct')}% | cause={t.get('loss_cause')}")
+                      f"{t.get('return_pct')}% | cause={t.get('loss_cause')} "
+                      f"| paper={t.get('paper_mode')}")
         except Exception as e:
             print(f"Status check failed: {e}")
 
+    elif args.paper:
+        result = run_paper_audit(dry_run=args.dry_run)
+        print(f"\nPaper audit result: {result}")
+
     else:
         result = run_eod_audit(dry_run=args.dry_run)
-        print(f"\nResult: {result}")
+        print(f"\nLive audit result: {result}")

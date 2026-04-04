@@ -158,7 +158,7 @@ def get_nepse_index_on_or_before(target_date: str) -> float | None:
     rows = run_raw_sql(
         """
         SELECT current_value, date FROM nepse_indices
-        WHERE index_name ILIKE '%NEPSE%'
+        WHERE index_id='58'
           AND date <= %s
           AND current_value IS NOT NULL
         ORDER BY date DESC
