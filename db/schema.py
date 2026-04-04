@@ -37,9 +37,10 @@ TABS: dict[str, str] = {
     "fd_rate_summary": "fd_rate_summary",
     "international_prices": "international_prices",
     "share_sectors": "share_sectors",
+    "paper_users": "paper_users",
+    "paper_capital": "paper_capital",
     "paper_portfolio": "paper_portfolio",
     "paper_trade_log": "paper_trade_log",
-    "paper_capital": "paper_capital",
 }
 
 TABLE_DDL: dict[str, str] = {
@@ -202,6 +203,19 @@ TABLE_DDL: dict[str, str] = {
         dual_audit TEXT,
         gpt_verdict TEXT,
         timestamp TEXT,
+        eval_date TEXT,
+        eval_geo_score TEXT,
+        eval_nepal_score TEXT,
+        eval_nepse_index TEXT,
+        eval_market_state TEXT,
+        eval_policy_rate TEXT,
+        eval_fd_rate_pct TEXT,
+        eval_geo_delta TEXT,
+        eval_nepal_delta TEXT,
+        eval_key_news TEXT,
+        eval_price_change_pct TEXT,
+        eval_nepse_change_pct TEXT,
+        eval_alpha TEXT,
         inserted_at TIMESTAMPTZ DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS ix_market_log_symbol
@@ -944,9 +958,48 @@ TABLE_DDL: dict[str, str] = {
     );
     """,
 
+    "paper_users": """
+    CREATE TABLE IF NOT EXISTS "paper_users" (
+        id SERIAL PRIMARY KEY,
+        telegram_id TEXT NOT NULL,
+        username TEXT,
+        full_name TEXT,
+        status TEXT DEFAULT 'PENDING',
+        registered_at TEXT,
+        approved_at TEXT,
+        approved_by TEXT,
+        inserted_at TIMESTAMPTZ DEFAULT NOW(),
+        CONSTRAINT ux_paper_users_telegram_id UNIQUE (telegram_id)
+    );
+    CREATE INDEX IF NOT EXISTS ix_paper_users_status
+        ON "paper_users" (status);
+    """,
+
+    "paper_capital": """
+    CREATE TABLE IF NOT EXISTS "paper_capital" (
+        id SERIAL PRIMARY KEY,
+        telegram_id TEXT NOT NULL,
+        starting_capital TEXT DEFAULT '100000',
+        current_capital TEXT DEFAULT '100000',
+        total_realised_pnl TEXT DEFAULT '0',
+        total_fees_paid TEXT DEFAULT '0',
+        total_cgt_paid TEXT DEFAULT '0',
+        total_trades TEXT DEFAULT '0',
+        total_wins TEXT DEFAULT '0',
+        total_losses TEXT DEFAULT '0',
+        last_updated TEXT,
+        test_mode TEXT DEFAULT 'false',
+        inserted_at TIMESTAMPTZ DEFAULT NOW(),
+        CONSTRAINT ux_paper_capital_telegram_id UNIQUE (telegram_id)
+    );
+    CREATE INDEX IF NOT EXISTS ix_paper_capital_telegram_id
+        ON "paper_capital" (telegram_id);
+    """,
+
     "paper_portfolio": """
     CREATE TABLE IF NOT EXISTS "paper_portfolio" (
         id SERIAL PRIMARY KEY,
+        telegram_id TEXT NOT NULL,
         symbol TEXT NOT NULL,
         status TEXT DEFAULT 'OPEN',
         total_shares TEXT,
@@ -965,17 +1018,23 @@ TABLE_DDL: dict[str, str] = {
         result TEXT,
         created_at TEXT,
         updated_at TEXT,
+        test_mode TEXT DEFAULT 'false',
         inserted_at TIMESTAMPTZ DEFAULT NOW()
     );
+    CREATE INDEX IF NOT EXISTS ix_paper_portfolio_telegram_id
+        ON "paper_portfolio" (telegram_id);
+    CREATE INDEX IF NOT EXISTS ix_paper_portfolio_telegram_id_status
+        ON "paper_portfolio" (telegram_id, status);
     CREATE INDEX IF NOT EXISTS ix_paper_portfolio_symbol
         ON "paper_portfolio" (symbol);
-    CREATE INDEX IF NOT EXISTS ix_paper_portfolio_status
-        ON "paper_portfolio" (status);
+    CREATE INDEX IF NOT EXISTS ix_paper_portfolio_test_mode
+        ON "paper_portfolio" (test_mode);
     """,
 
     "paper_trade_log": """
     CREATE TABLE IF NOT EXISTS "paper_trade_log" (
         id SERIAL PRIMARY KEY,
+        telegram_id TEXT NOT NULL,
         symbol TEXT NOT NULL,
         action TEXT NOT NULL,
         shares TEXT,
@@ -993,34 +1052,15 @@ TABLE_DDL: dict[str, str] = {
         wacc_after TEXT,
         note TEXT,
         created_at TEXT,
+        test_mode TEXT DEFAULT 'false',
         inserted_at TIMESTAMPTZ DEFAULT NOW()
     );
+    CREATE INDEX IF NOT EXISTS ix_paper_trade_log_telegram_id
+        ON "paper_trade_log" (telegram_id);
     CREATE INDEX IF NOT EXISTS ix_paper_trade_log_symbol
         ON "paper_trade_log" (symbol);
-    CREATE INDEX IF NOT EXISTS ix_paper_trade_log_action
-        ON "paper_trade_log" (action);
-    CREATE INDEX IF NOT EXISTS ix_paper_trade_log_created_at
-        ON "paper_trade_log" (created_at);
-    """,
-
-    "paper_capital": """
-    CREATE TABLE IF NOT EXISTS "paper_capital" (
-        id SERIAL PRIMARY KEY,
-        capital_id TEXT NOT NULL,
-        starting_capital TEXT,
-        current_capital TEXT,
-        total_realised_pnl TEXT,
-        total_fees_paid TEXT,
-        total_cgt_paid TEXT,
-        total_trades TEXT,
-        total_wins TEXT,
-        total_losses TEXT,
-        last_updated TEXT,
-        inserted_at TIMESTAMPTZ DEFAULT NOW(),
-        CONSTRAINT ux_paper_capital_capital_id UNIQUE (capital_id)
-    );
-    CREATE INDEX IF NOT EXISTS ix_paper_capital_capital_id
-        ON "paper_capital" (capital_id);
+    CREATE INDEX IF NOT EXISTS ix_paper_trade_log_test_mode
+        ON "paper_trade_log" (test_mode);
     """,
 }
 
@@ -1029,7 +1069,7 @@ TABLE_COLUMNS: dict[str, list[str]] = {
     "market_breadth": ["date", "advancing", "declining", "unchanged", "new_52w_high", "new_52w_low", "total_turnover_npr", "total_volume", "breadth_score", "market_signal", "nepse_index", "nepse_change_pct", "timestamp"],
     "watchlist": ["symbol", "company", "sector", "added_date", "fundamental_score", "technical_score", "combined_score", "last_updated", "sector_momentum", "dividend_yield_pct", "pe_ratio", "eps", "npl_pct", "car_pct", "week52_high", "week52_low", "pct_from_52w_high", "notes"],
     "portfolio": ["symbol", "entry_date", "entry_price", "shares", "total_cost", "current_price", "current_value", "pnl_npr", "pnl_pct", "peak_price", "stop_type", "stop_level", "trail_active", "trail_stop", "status", "exit_date", "exit_price", "exit_reason"],
-    "market_log": ["date", "time", "symbol", "sector", "action", "confidence", "entry_price", "stop_loss", "target", "allocation_npr", "shares", "breakeven", "risk_reward", "rsi_14", "ema_20", "ema_50", "ema_200", "macd_line", "macd_signal", "volume", "volume_ratio", "obv_trend", "vwap", "atr_14", "bollinger_upper", "bollinger_lower", "support_level", "resistance_level", "candle_pattern", "conf_score", "pe_ratio", "eps", "roe", "npl_pct", "fundamental_score", "geo_score", "macro_score", "reasoning", "outcome", "actual_pnl", "exit_price", "exit_date", "exit_reason", "dual_audit", "gpt_verdict", "timestamp"],
+    "market_log": ["date", "time", "symbol", "sector", "action", "confidence", "entry_price", "stop_loss", "target", "allocation_npr", "shares", "breakeven", "risk_reward", "rsi_14", "ema_20", "ema_50", "ema_200", "macd_line", "macd_signal", "volume", "volume_ratio", "obv_trend", "vwap", "atr_14", "bollinger_upper", "bollinger_lower", "support_level", "resistance_level", "candle_pattern", "conf_score", "pe_ratio", "eps", "roe", "npl_pct", "fundamental_score", "geo_score", "macro_score", "reasoning", "outcome", "actual_pnl", "exit_price", "exit_date", "exit_reason", "dual_audit", "gpt_verdict", "timestamp", "eval_date", "eval_geo_score", "eval_nepal_score", "eval_nepse_index", "eval_market_state", "eval_policy_rate", "eval_fd_rate_pct", "eval_geo_delta", "eval_nepal_delta", "eval_key_news", "eval_price_change_pct", "eval_nepse_change_pct", "eval_alpha"],
     "indicators": ["symbol", "date", "ltp", "prev_close", "volume", "history_days", "rsi_14", "rsi_signal", "ema_20", "ema_50", "ema_200", "ema_trend", "ema_20_50_cross", "ema_50_200_cross", "macd_line", "macd_signal", "macd_histogram", "macd_cross", "bb_upper", "bb_middle", "bb_lower", "bb_width", "bb_pct_b", "bb_signal", "atr_14", "atr_pct", "obv", "obv_trend", "tech_score", "tech_signal", "timestamp"],
     "candle_patterns": ["pattern_name", "type", "tier", "nepal_win_rate_pct", "sample_size", "avg_gain_pct", "best_sector", "best_rsi_range", "volume_condition", "reliability", "notes"],
     "candle_signals": ["symbol", "date", "pattern_name", "signal", "tier", "confidence", "volume_confirmed", "candles_used", "description", "timestamp"],
@@ -1057,7 +1097,8 @@ TABLE_COLUMNS: dict[str, list[str]] = {
     "fd_rate_summary": ["fetch_date", "avg_rate_pct", "max_rate_pct", "min_rate_pct", "best_bank_name", "best_bank_rate", "best_tenure", "rate_vs_prev_pct", "rate_direction", "fd_score_signal", "total_products"],
     "international_prices": ["id", "date", "variable_name", "close_price", "source"],
     "share_sectors": ["externalid", "companyname", "symbol", "securityname", "status", "companyemail", "website", "sectorname", "regulatorybody", "instrumenttype"],
-    "paper_portfolio": ["symbol", "status", "total_shares", "wacc", "total_cost", "first_buy_date", "last_buy_date", "buy_count", "exit_date", "exit_price", "exit_shares", "gross_pnl", "sell_fees", "cgt_paid", "net_pnl", "result", "created_at", "updated_at"],
-    "paper_trade_log": ["symbol", "action", "shares", "price", "gross_amount", "brokerage", "sebon", "dp_fee", "cgt", "total_fees", "net_amount", "capital_before", "capital_after", "wacc_before", "wacc_after", "note", "created_at"],
-    "paper_capital": ["capital_id", "starting_capital", "current_capital", "total_realised_pnl", "total_fees_paid", "total_cgt_paid", "total_trades", "total_wins", "total_losses", "last_updated"],
+    "paper_users": ["telegram_id", "username", "full_name", "status", "registered_at", "approved_at", "approved_by"],
+    "paper_capital": ["telegram_id", "starting_capital", "current_capital", "total_realised_pnl", "total_fees_paid", "total_cgt_paid", "total_trades", "total_wins", "total_losses", "last_updated", "test_mode"],
+    "paper_portfolio": ["telegram_id", "symbol", "status", "total_shares", "wacc", "total_cost", "first_buy_date", "last_buy_date", "buy_count", "exit_date", "exit_price", "exit_shares", "gross_pnl", "sell_fees", "cgt_paid", "net_pnl", "result", "created_at", "updated_at", "test_mode"],
+    "paper_trade_log": ["telegram_id", "symbol", "action", "shares", "price", "gross_amount", "brokerage", "sebon", "dp_fee", "cgt", "total_fees", "net_amount", "capital_before", "capital_after", "wacc_before", "wacc_after", "note", "created_at", "test_mode"],
 }
