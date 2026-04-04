@@ -1,47 +1,72 @@
 """
 modules/telegram_bot.py
 ───────────────────────
-Nepal paper trading journal bot via Telegram.
+Nepal paper trading journal bot via Telegram — MULTI-USER EDITION.
 
 Architecture rules (project-wide):
   - from sheets import ...        ← all DB reads/writes
   - from db.connection import _db ← ONLY for multi-table atomic transactions
   - Never raw psycopg2 outside _db()
 
-Paper trading tables (add to schema.prisma, run codegen + migrations):
-  paper_portfolio   — open/closed positions with WACC averaging
-  paper_capital     — single row (id=1) capital state
-  paper_trade_log   — immutable log of every BUY/SELL event
+Multi-user model:
+  - Anyone can /register — creates a PENDING row in paper_users
+  - Admin (TELEGRAM_CHAT_ID in .env) approves via /approve <telegram_id>
+  - Approved users get isolated capital, portfolio, and trade log rows
+  - All paper tables keyed by telegram_id (TEXT) — full isolation
+  - Push alerts (BUY signals) go to ALL approved users
+  - /reset is admin-only: /reset <telegram_id>
 
-Commands
-────────
+Paper trading tables (add to schema.prisma, run codegen + migrations):
+  paper_users       — registration + approval state per telegram_id
+  paper_portfolio   — open/closed positions per telegram_id
+  paper_capital     — one row per telegram_id (capital state)
+  paper_trade_log   — immutable log of every BUY/SELL event per telegram_id
+
+Commands (all users)
+────────────────────
+  /register                   — request access
   /buy  SYMBOL SHARES PRICE   — open or average into position
   /sell SYMBOL SHARES PRICE   — close or partial sell
   /cancel                     — cancel pending confirmation
-  /status                     — open positions
-  /pnl                        — closed trades + win rate
-  /capital                    — paper capital state
+  /status                     — open positions (your own)
+  /pnl                        — closed trades + win rate (your own)
+  /capital                    — paper capital state (your own)
   /signal                     — latest AI signals from market_log
   /mode                       — PAPER or LIVE mode
-  /pause  /resume             — circuit breaker
-  /reset                      — ⚠ wipe paper tables, restart NPR 1,00,000
+  /pause  /resume             — circuit breaker (your session only)
   /help
+
+Admin-only commands (TELEGRAM_CHAT_ID only)
+───────────────────────────────────────────
+  /approve <telegram_id>      — approve a pending registration
+  /deny    <telegram_id>      — deny / revoke access
+  /users                      — list all registered users + status
+  /reset   <telegram_id>      — wipe one user's paper data, restart NPR 1L
 
 Natural language works: "bought nabil 10 at 380", "sell nabil 20 at 400"
 Gemini parses and corrects input — typos and mixed language handled.
 
 Market gate: /buy and /sell are blocked outside NEPSE trading hours
   (Sun–Thu 10:45 AM – 3:00 PM NST, non-holiday days only).
-  Uses calendar_guard.is_open() + get_status() for reason + next open time.
 
 ENV vars:
-  TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, DATABASE_URL,
-  GEMINI_API_KEY, GEMINI_MODEL, PAPER_MODE
+  TELEGRAM_BOT_TOKEN  — bot token from BotFather
+  TELEGRAM_CHAT_ID    — admin's Telegram ID (system alerts + admin commands)
+  DATABASE_URL        — Neon PostgreSQL
+  GEMINI_API_KEY      — for NLP parsing
+  GEMINI_MODEL        — default: gemini-2.5-flash
+  PAPER_MODE          — "true" | "false"
+
+  cli for sandbox
+
+  python -m modules.telegram_bot --sandbox
 """
 
 import os
+import sys
 import json
 import logging
+import argparse
 from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 from datetime import datetime, date
 from zoneinfo import ZoneInfo
@@ -54,7 +79,7 @@ from telegram.ext import (
 )
 
 from sheets import (
-    read_tab, read_tab_where, write_row, upsert_row,
+    read_tab, write_row, upsert_row,
     update_row, run_raw_sql, get_setting,
 )
 from db.connection import _db
@@ -69,9 +94,9 @@ log = logging.getLogger(__name__)
 NST              = ZoneInfo("Asia/Kathmandu")
 STARTING_CAPITAL = Decimal("100000.00")
 MAX_POSITIONS    = 15
-CGT_RATE         = Decimal("0.075")   # 7.5% on profit only
-SEBON_PCT        = Decimal("0.00015") # 0.015%
-DP_FEE           = Decimal("25")      # flat per trade
+CGT_RATE         = Decimal("0.075")    # 7.5% on profit only
+SEBON_PCT        = Decimal("0.00015")  # 0.015%
+DP_FEE           = Decimal("25")       # flat per trade
 
 # Conversation states
 CONFIRM_BUY   = 1
@@ -80,24 +105,141 @@ CONFIRM_RESET = 3
 
 # ─── ENV ─────────────────────────────────────────────────────────────────────
 TOKEN          = os.environ["TELEGRAM_BOT_TOKEN"]
-CHAT_ID        = int(os.environ.get("TELEGRAM_CHAT_ID", "0"))
+ADMIN_CHAT_ID  = int(os.environ.get("TELEGRAM_CHAT_ID", "0"))   # admin only
 PAPER_MODE     = os.environ.get("PAPER_MODE", "true").lower() == "true"
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_MODEL   = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
-_circuit_breaker = os.environ.get("CIRCUIT_BREAKER", "false").lower() == "true"
+# ─── Sandbox mode (set by --sandbox CLI flag) ────────────────────────────────
+# Bypasses calendar_guard so you can test /buy and /sell on weekends / after hours.
+# All DB writes are tagged test_mode='true' — purge with:
+#   DELETE FROM paper_trade_log  WHERE test_mode = 'true';
+#   DELETE FROM paper_portfolio  WHERE test_mode = 'true';
+#   DELETE FROM paper_capital    WHERE test_mode = 'true' AND telegram_id IN (
+#       SELECT telegram_id FROM paper_capital WHERE test_mode = 'true');
+# Run:  python modules/telegram_bot.py --sandbox
+SANDBOX_MODE: bool = False   # overwritten by parse_args() in main()
+
+# Per-session circuit breakers keyed by telegram_id
+_circuit_breakers: dict[int, bool] = {}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# USER MANAGEMENT
+# ═══════════════════════════════════════════════════════════════════════════
+
+def get_user(telegram_id: int) -> Optional[dict]:
+    """Fetch paper_users row for this telegram_id, or None."""
+    rows = run_raw_sql(
+        "SELECT * FROM paper_users WHERE telegram_id = %s",
+        (str(telegram_id),)
+    )
+    return rows[0] if rows else None
+
+def is_approved(telegram_id: int) -> bool:
+    user = get_user(telegram_id)
+    return user is not None and user.get("status") == "APPROVED"
+
+def is_admin(telegram_id: int) -> bool:
+    return telegram_id == ADMIN_CHAT_ID
+
+def get_all_approved_ids() -> list[int]:
+    """Return telegram_ids of all APPROVED users (for broadcast alerts)."""
+    rows = run_raw_sql(
+        "SELECT telegram_id FROM paper_users WHERE status = 'APPROVED'"
+    )
+    return [int(r["telegram_id"]) for r in rows]
+
+def register_user(telegram_id: int, username: str, full_name: str) -> str:
+    """
+    Register a new user as PENDING.
+    Returns: 'already_approved' | 'already_pending' | 'registered'
+    """
+    existing = get_user(telegram_id)
+    if existing:
+        if existing["status"] == "APPROVED":
+            return "already_approved"
+        if existing["status"] == "PENDING":
+            return "already_pending"
+        # BLOCKED — re-register attempt
+        return "blocked"
+    now = nst_now()
+    with _db() as cur:
+        cur.execute("""
+            INSERT INTO paper_users
+                (telegram_id, username, full_name, status,
+                 registered_at, approved_at, approved_by)
+            VALUES (%s, %s, %s, 'PENDING', %s, NULL, NULL)
+            ON CONFLICT (telegram_id) DO NOTHING
+        """, (str(telegram_id), username or "", full_name or "", now))
+    return "registered"
+
+def approve_user(telegram_id: int, approved_by: int) -> bool:
+    """Approve a PENDING user and seed their capital row. Returns True if done."""
+    user = get_user(telegram_id)
+    if not user:
+        return False
+    now = nst_now()
+    with _db() as cur:
+        cur.execute("""
+            UPDATE paper_users
+            SET status = 'APPROVED', approved_at = %s, approved_by = %s
+            WHERE telegram_id = %s
+        """, (now, str(approved_by), str(telegram_id)))
+    # Seed capital row for this user
+    _seed_capital_row(telegram_id)
+    return True
+
+def deny_user(telegram_id: int) -> bool:
+    """Set user status to BLOCKED."""
+    user = get_user(telegram_id)
+    if not user:
+        return False
+    with _db() as cur:
+        cur.execute("""
+            UPDATE paper_users SET status = 'BLOCKED'
+            WHERE telegram_id = %s
+        """, (str(telegram_id),))
+    return True
+
+
+# ─── Auth guard ─────────────────────────────────────────────────────────────
+
+async def guard(update: Update) -> bool:
+    """
+    Call at the top of every trading/status command.
+    Returns True if the user is approved and can proceed.
+    Sends an appropriate reply and returns False otherwise.
+    """
+    uid = update.effective_user.id
+    user = get_user(uid)
+    if user is None:
+        await update.message.reply_text(
+            "You are not registered.\n\nUse /register to request access."
+        )
+        return False
+    status = user.get("status")
+    if status == "PENDING":
+        await update.message.reply_text(
+            "⏳ Your registration is *pending admin approval*.\n"
+            "You will be notified when approved.",
+            parse_mode="Markdown"
+        )
+        return False
+    if status == "BLOCKED":
+        await update.message.reply_text("🚫 Your access has been denied.")
+        return False
+    return True  # APPROVED
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # GEMINI NLP PARSER
-# Parses natural language → structured trade dict
 # ═══════════════════════════════════════════════════════════════════════════
 
 PARSE_SYSTEM = """
 You are a parser for a Nepal stock market Telegram trading bot.
-The user sends a raw message — a buy or sell command — possibly with
-typos, mixed Nepali-English, abbreviations, or wrong word order.
-
+The user sends a raw message — a buy/purchase or sell command — can be at any order, formats 
+orders, laungauge. you need to make sense of it and
 Extract fields and return ONLY valid JSON. No markdown. No backticks. No explanation.
 
 For BUY:  {"action":"BUY","symbol":"NABIL","shares":10,"price":380.0,"error":null}
@@ -105,6 +247,7 @@ For SELL: {"action":"SELL","symbol":"NABIL","shares":10,"price":400.0,"error":nu
 
 Rules:
 - symbol: uppercase 2-8 chars. Fix obvious typos: "nabl"→"NABIL", "nbl"→"NABIL"
+- symbol must match symbols of listed shares in NEPSE only search if you must. if not matched with typos correction, throw error with reason accordingly.
 - shares: positive integer
 - price: positive float, NPR per share
 - "k" = ×1000  e.g. "1.2k" = 1200
@@ -114,7 +257,6 @@ Rules:
 """
 
 def parse_trade_command(raw: str) -> dict:
-    """Call Gemini to parse a natural language trade command. Returns dict."""
     if not GEMINI_API_KEY:
         return {"error": "GEMINI_API_KEY not set"}
     try:
@@ -160,7 +302,6 @@ def hold_days(date_str: str) -> int:
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _brokerage(gross: Decimal) -> Decimal:
-    """NEPSE tiered brokerage commission."""
     if gross <= Decimal("2500"):
         return Decimal("10")
     elif gross <= Decimal("50000"):
@@ -186,7 +327,7 @@ def calc_buy_fees(price: Decimal, shares: Decimal) -> dict:
         "sebon":       sebon,
         "dp_fee":      DP_FEE,
         "total_fees":  total_fees,
-        "total_cost":  gross + total_fees,   # what leaves capital
+        "total_cost":  gross + total_fees,
     }
 
 def calc_sell_fees(price: Decimal, shares: Decimal, wacc: Decimal) -> dict:
@@ -215,146 +356,109 @@ def calc_sell_fees(price: Decimal, shares: Decimal, wacc: Decimal) -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# PAPER TABLE READ HELPERS  (via sheets.py)
+# PAPER TABLE HELPERS  — all keyed by telegram_id
 # ═══════════════════════════════════════════════════════════════════════════
 
-def get_paper_capital() -> dict:
-    """Return the single paper_capital row (id=1)."""
-    rows = read_tab_where("paper_capital", {"id": "1"})
+def get_paper_capital(telegram_id: int) -> dict:
+    rows = run_raw_sql(
+        "SELECT * FROM paper_capital WHERE telegram_id = %s",
+        (str(telegram_id),)
+    )
     if not rows:
-        _seed_capital_row()
-        rows = read_tab_where("paper_capital", {"id": "1"})
+        _seed_capital_row(telegram_id)
+        rows = run_raw_sql(
+            "SELECT * FROM paper_capital WHERE telegram_id = %s",
+            (str(telegram_id),)
+        )
     return rows[0] if rows else {}
 
-def get_paper_position(symbol: str) -> Optional[dict]:
-    rows = read_tab_where("paper_portfolio", {"symbol": symbol.upper(), "status": "OPEN"})
+def get_paper_position(telegram_id: int, symbol: str) -> Optional[dict]:
+    rows = run_raw_sql(
+        "SELECT * FROM paper_portfolio WHERE telegram_id = %s AND symbol = %s AND status = 'OPEN'",
+        (str(telegram_id), symbol.upper())
+    )
     return rows[0] if rows else None
 
-def get_all_open_positions() -> list[dict]:
-    return read_tab_where("paper_portfolio", {"status": "OPEN"},
-                          order_by="id", desc=False)
+def get_all_open_positions(telegram_id: int) -> list[dict]:
+    return run_raw_sql(
+        "SELECT * FROM paper_portfolio WHERE telegram_id = %s AND status = 'OPEN' ORDER BY id",
+        (str(telegram_id),)
+    )
 
-def count_open_positions() -> int:
+def count_open_positions(telegram_id: int) -> int:
     rows = run_raw_sql(
-        "SELECT COUNT(*) AS cnt FROM paper_portfolio WHERE status = 'OPEN'"
+        "SELECT COUNT(*) AS cnt FROM paper_portfolio WHERE telegram_id = %s AND status = 'OPEN'",
+        (str(telegram_id),)
     )
     return int(rows[0]["cnt"]) if rows else 0
 
-def _seed_capital_row():
-    """Insert id=1 capital row if missing. Called on first use."""
+def lookup_symbols(query: str) -> list[str]:
+    """
+    Look up symbols in share_sectors.
+    Returns exact match as a single-item list, or partial ILIKE matches (up to 8).
+    Returns [] if nothing found.
+    """
+    exact = run_raw_sql(
+        "SELECT symbol FROM share_sectors WHERE UPPER(symbol) = UPPER(%s)",
+        (query,),
+    )
+    if exact:
+        return [r["symbol"] for r in exact]
+    partial = run_raw_sql(
+        "SELECT symbol FROM share_sectors WHERE UPPER(symbol) LIKE UPPER(%s) ORDER BY symbol LIMIT 8",
+        (f"%{query}%",),
+    )
+    return [r["symbol"] for r in partial]
+
+def _seed_capital_row(telegram_id: int):
+    """Insert capital row for a newly approved user. Safe to call multiple times."""
+    now  = nst_now()
+    tmode = "true" if SANDBOX_MODE else "false"
+    with _db() as cur:
+        cur.execute("""
+            INSERT INTO paper_capital
+                (telegram_id, starting_capital, current_capital,
+                 total_realised_pnl, total_fees_paid, total_cgt_paid,
+                 total_trades, total_wins, total_losses, last_updated, test_mode)
+            VALUES (%s,%s,%s,'0','0','0','0','0','0',%s,%s)
+            ON CONFLICT (telegram_id) DO NOTHING
+        """, (str(telegram_id), str(STARTING_CAPITAL), str(STARTING_CAPITAL), now, tmode))
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# RESET HELPER  — admin only, per user
+# ═══════════════════════════════════════════════════════════════════════════
+
+def reset_user_paper_data(telegram_id: int):
+    """
+    Wipe all paper_portfolio, paper_capital, paper_trade_log rows
+    for a specific telegram_id and re-seed capital at NPR 1,00,000.
+    Uses _db() for atomicity.
+    """
     now = nst_now()
-    # Use _db directly — upsert_row needs TABLE_COLUMNS which requires codegen first
     with _db() as cur:
+        cur.execute("DELETE FROM paper_trade_log WHERE telegram_id = %s", (str(telegram_id),))
+        cur.execute("DELETE FROM paper_portfolio WHERE telegram_id = %s", (str(telegram_id),))
+        cur.execute("DELETE FROM paper_capital WHERE telegram_id = %s", (str(telegram_id),))
         cur.execute("""
             INSERT INTO paper_capital
-                (id, starting_capital, current_capital, total_realised_pnl,
-                 total_fees_paid, total_cgt_paid, total_trades,
-                 total_wins, total_losses, last_updated)
-            VALUES (1,%s,%s,'0','0','0','0','0','0',%s)
-            ON CONFLICT (id) DO NOTHING
-        """, (str(STARTING_CAPITAL), str(STARTING_CAPITAL), now))
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# RESET HELPER
-# ═══════════════════════════════════════════════════════════════════════════
-
-def reset_paper_tables():
-    """
-    DROP and recreate paper_portfolio, paper_capital, paper_trade_log.
-    Uses _db() directly because schema.prisma manages these tables via migrations —
-    this is a destructive admin operation, not a normal write.
-    """
-    with _db() as cur:
-        cur.execute("DROP TABLE IF EXISTS paper_trade_log")
-        cur.execute("DROP TABLE IF EXISTS paper_portfolio")
-        cur.execute("DROP TABLE IF EXISTS paper_capital")
-        cur.execute("""
-            CREATE TABLE paper_capital (
-                id                  SERIAL PRIMARY KEY,
-                starting_capital    TEXT DEFAULT '100000',
-                current_capital     TEXT DEFAULT '100000',
-                total_realised_pnl  TEXT DEFAULT '0',
-                total_fees_paid     TEXT DEFAULT '0',
-                total_cgt_paid      TEXT DEFAULT '0',
-                total_trades        TEXT DEFAULT '0',
-                total_wins          TEXT DEFAULT '0',
-                total_losses        TEXT DEFAULT '0',
-                last_updated        TEXT
-            )
-        """)
-        cur.execute("""
-            CREATE TABLE paper_portfolio (
-                id              SERIAL PRIMARY KEY,
-                symbol          TEXT NOT NULL,
-                status          TEXT DEFAULT 'OPEN',
-                total_shares    TEXT,
-                wacc            TEXT,
-                total_cost      TEXT,
-                first_buy_date  TEXT,
-                last_buy_date   TEXT,
-                buy_count       TEXT DEFAULT '1',
-                exit_date       TEXT,
-                exit_price      TEXT,
-                exit_shares     TEXT,
-                gross_pnl       TEXT,
-                sell_fees       TEXT,
-                cgt_paid        TEXT,
-                net_pnl         TEXT,
-                result          TEXT,
-                created_at      TEXT,
-                updated_at      TEXT
-            )
-        """)
-        cur.execute("""
-            CREATE TABLE paper_trade_log (
-                id             SERIAL PRIMARY KEY,
-                symbol         TEXT NOT NULL,
-                action         TEXT NOT NULL,
-                shares         TEXT,
-                price          TEXT,
-                gross_amount   TEXT,
-                brokerage      TEXT,
-                sebon          TEXT,
-                dp_fee         TEXT,
-                cgt            TEXT,
-                total_fees     TEXT,
-                net_amount     TEXT,
-                capital_before TEXT,
-                capital_after  TEXT,
-                wacc_before    TEXT,
-                wacc_after     TEXT,
-                note           TEXT,
-                created_at     TEXT
-            )
-        """)
-        # Seed capital row
-        cur.execute("""
-            INSERT INTO paper_capital
-                (id, starting_capital, current_capital, total_realised_pnl,
-                 total_fees_paid, total_cgt_paid, total_trades,
-                 total_wins, total_losses, last_updated)
-            VALUES (1,%s,%s,'0','0','0','0','0','0',%s)
-        """, (str(STARTING_CAPITAL), str(STARTING_CAPITAL), nst_now()))
-    log.info("Paper tables reset. Capital = NPR 100,000.")
+                (telegram_id, starting_capital, current_capital,
+                 total_realised_pnl, total_fees_paid, total_cgt_paid,
+                 total_trades, total_wins, total_losses, last_updated)
+            VALUES (%s,%s,%s,'0','0','0','0','0','0',%s)
+        """, (str(telegram_id), str(STARTING_CAPITAL), str(STARTING_CAPITAL), now))
+    log.info("Paper data reset for telegram_id=%s", telegram_id)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # ATOMIC BUY TRANSACTION
-# Uses _db() to keep 3-table update in one commit.
 # ═══════════════════════════════════════════════════════════════════════════
 
-def execute_buy(symbol: str, shares: Decimal, price: Decimal) -> dict:
-    """
-    Opens new position or averages into existing.
-    All three table updates (paper_portfolio, paper_capital, paper_trade_log)
-    happen in one _db() transaction — atomic.
-    Raises ValueError on insufficient capital or position limit.
-    """
+def execute_buy(telegram_id: int, symbol: str, shares: Decimal, price: Decimal) -> dict:
     fees      = calc_buy_fees(price, shares)
     total_out = fees["total_cost"]
 
-    cap       = get_paper_capital()
+    cap       = get_paper_capital(telegram_id)
     available = Decimal(str(cap.get("current_capital", "0")))
 
     if total_out > available:
@@ -364,9 +468,10 @@ def execute_buy(symbol: str, shares: Decimal, price: Decimal) -> dict:
             f"Available: NPR {available:,.2f}"
         )
 
-    existing = get_paper_position(symbol)
+    existing = get_paper_position(telegram_id, symbol)
     now      = nst_now()
     today    = nst_today()
+    tmode    = "true" if SANDBOX_MODE else "false"
 
     with _db() as cur:
         if existing:
@@ -390,7 +495,7 @@ def execute_buy(symbol: str, shares: Decimal, price: Decimal) -> dict:
                   today, now, existing["id"]))
             wacc_after = new_wacc
         else:
-            if count_open_positions() >= MAX_POSITIONS:
+            if count_open_positions(telegram_id) >= MAX_POSITIONS:
                 raise ValueError(
                     f"Max {MAX_POSITIONS} open positions reached. Close one first."
                 )
@@ -402,11 +507,12 @@ def execute_buy(symbol: str, shares: Decimal, price: Decimal) -> dict:
 
             cur.execute("""
                 INSERT INTO paper_portfolio
-                    (symbol, status, total_shares, wacc, total_cost,
-                     first_buy_date, last_buy_date, buy_count, created_at, updated_at)
-                VALUES (%s,'OPEN',%s,%s,%s,%s,%s,'1',%s,%s)
-            """, (symbol, str(new_shares), str(new_wacc), str(new_cost),
-                  today, today, now, now))
+                    (telegram_id, symbol, status, total_shares, wacc, total_cost,
+                     first_buy_date, last_buy_date, buy_count, created_at, updated_at,
+                     test_mode)
+                VALUES (%s,%s,'OPEN',%s,%s,%s,%s,%s,'1',%s,%s,%s)
+            """, (str(telegram_id), symbol, str(new_shares), str(new_wacc),
+                  str(new_cost), today, today, now, now, tmode))
 
         new_capital = available - total_out
         cur.execute("""
@@ -414,22 +520,22 @@ def execute_buy(symbol: str, shares: Decimal, price: Decimal) -> dict:
                 current_capital  = %s,
                 total_fees_paid  = (total_fees_paid::numeric + %s)::text,
                 last_updated     = %s
-            WHERE id = 1
-        """, (str(new_capital), str(fees["total_fees"]), now))
+            WHERE telegram_id = %s
+        """, (str(new_capital), str(fees["total_fees"]), now, str(telegram_id)))
 
         cur.execute("""
             INSERT INTO paper_trade_log
-                (symbol, action, shares, price, gross_amount,
+                (telegram_id, symbol, action, shares, price, gross_amount,
                  brokerage, sebon, dp_fee, cgt, total_fees, net_amount,
                  capital_before, capital_after, wacc_before, wacc_after,
-                 note, created_at)
-            VALUES (%s,'BUY',%s,%s,%s,%s,%s,%s,'0',%s,%s,%s,%s,%s,%s,%s,%s)
-        """, (symbol, str(shares), str(price), str(fees["gross"]),
+                 note, created_at, test_mode)
+            VALUES (%s,%s,'BUY',%s,%s,%s,%s,%s,%s,'0',%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """, (str(telegram_id), symbol, str(shares), str(price), str(fees["gross"]),
               str(fees["brokerage"]), str(fees["sebon"]), str(DP_FEE),
               str(fees["total_fees"]), str(-total_out),
               str(available), str(new_capital),
               str(old_wacc), str(wacc_after),
-              f"BUY {shares:.0f} @ {price}", now))
+              f"BUY {shares:.0f} @ {price}", now, tmode))
 
     return {
         "symbol":    symbol,
@@ -447,13 +553,8 @@ def execute_buy(symbol: str, shares: Decimal, price: Decimal) -> dict:
 # ATOMIC SELL TRANSACTION
 # ═══════════════════════════════════════════════════════════════════════════
 
-def execute_sell(symbol: str, shares: Decimal, price: Decimal) -> dict:
-    """
-    Full or partial close. CGT deducted immediately on profit.
-    All three table updates in one _db() transaction — atomic.
-    Raises ValueError if no position or insufficient shares.
-    """
-    pos = get_paper_position(symbol)
+def execute_sell(telegram_id: int, symbol: str, shares: Decimal, price: Decimal) -> dict:
+    pos = get_paper_position(telegram_id, symbol)
     if not pos:
         raise ValueError(f"No open position for {symbol}.")
 
@@ -465,18 +566,18 @@ def execute_sell(symbol: str, shares: Decimal, price: Decimal) -> dict:
 
     wacc       = Decimal(str(pos["wacc"]))
     fees       = calc_sell_fees(price, shares, wacc)
-    cap        = get_paper_capital()
+    cap        = get_paper_capital(telegram_id)
     available  = Decimal(str(cap.get("current_capital", "0")))
     now        = nst_now()
     today      = nst_today()
     remaining  = held - shares
+    tmode      = "true" if SANDBOX_MODE else "false"
     result_str = ("WIN" if fees["net_pnl"] > 0
                   else "LOSS" if fees["net_pnl"] < 0
                   else "BREAKEVEN")
 
     with _db() as cur:
         if remaining <= 0:
-            # Full close
             cur.execute("""
                 UPDATE paper_portfolio SET
                     status      = 'CLOSED',
@@ -495,7 +596,6 @@ def execute_sell(symbol: str, shares: Decimal, price: Decimal) -> dict:
                   str(fees["cgt"]), str(fees["net_pnl"]),
                   result_str, now, pos["id"]))
         else:
-            # Partial close — reduce shares, keep WACC
             new_cost = (wacc * remaining).quantize(Decimal("0.01"), ROUND_HALF_UP)
             cur.execute("""
                 UPDATE paper_portfolio SET
@@ -519,29 +619,26 @@ def execute_sell(symbol: str, shares: Decimal, price: Decimal) -> dict:
                 total_wins         = (total_wins::int + %s)::text,
                 total_losses       = (total_losses::int + %s)::text,
                 last_updated       = %s
-            WHERE id = 1
+            WHERE telegram_id = %s
         """, (str(new_capital),
-              str(fees["net_pnl"]),
-              str(fees["total_fees"]),
-              str(fees["cgt"]),
-              1 if is_win else 0,
-              1 if is_loss else 0,
-              now))
+              str(fees["net_pnl"]), str(fees["total_fees"]), str(fees["cgt"]),
+              1 if is_win else 0, 1 if is_loss else 0,
+              now, str(telegram_id)))
 
         cur.execute("""
             INSERT INTO paper_trade_log
-                (symbol, action, shares, price, gross_amount,
+                (telegram_id, symbol, action, shares, price, gross_amount,
                  brokerage, sebon, dp_fee, cgt, total_fees, net_amount,
                  capital_before, capital_after, wacc_before, wacc_after,
-                 note, created_at)
-            VALUES (%s,'SELL',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-        """, (symbol, str(shares), str(price), str(fees["gross"]),
+                 note, created_at, test_mode)
+            VALUES (%s,%s,'SELL',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """, (str(telegram_id), symbol, str(shares), str(price), str(fees["gross"]),
               str(fees["brokerage"]), str(fees["sebon"]), str(DP_FEE),
               str(fees["cgt"]), str(fees["total_fees"]),
               str(fees["net_proceeds"]),
               str(available), str(new_capital),
               str(wacc), str(wacc),
-              f"SELL {shares:.0f} @ {price} | {result_str}", now))
+              f"SELL {shares:.0f} @ {price} | {result_str}", now, tmode))
 
     return {
         "symbol":    symbol,
@@ -560,10 +657,11 @@ def execute_sell(symbol: str, shares: Decimal, price: Decimal) -> dict:
 # ═══════════════════════════════════════════════════════════════════════════
 
 def mode_label() -> str:
-    return "📄 PAPER" if PAPER_MODE else "🔴 LIVE"
+    base = "📄 PAPER" if PAPER_MODE else "🔴 LIVE"
+    return f"{base} | 🧪 SANDBOX" if SANDBOX_MODE else base
 
-def circuit_label() -> str:
-    return "🔴 PAUSED" if _circuit_breaker else "🟢 ACTIVE"
+def circuit_label(telegram_id: int) -> str:
+    return "🔴 PAUSED" if _circuit_breakers.get(telegram_id) else "🟢 ACTIVE"
 
 def fmt_npr(val, sign=False) -> str:
     v = float(val)
@@ -577,11 +675,19 @@ def win_rate_str(cap: dict) -> str:
         return "No trades yet"
     return f"{wins}/{total} ({wins/total*100:.1f}%)"
 
+def sandbox_label() -> str:
+    return " | 🧪 SANDBOX" if SANDBOX_MODE else ""
+
 def market_gate_message() -> Optional[str]:
     """
-    Returns a human-readable block message if market is closed, else None.
-    Uses calendar_guard.get_status() for reason + next open time.
+    Returns a block message if the market is closed, else None.
+    Returns None unconditionally when SANDBOX_MODE is active —
+    all calendar checks are bypassed during sandbox testing.
+    Trades are still written to DB (tagged test_mode='true') so you
+    can purge them before official paper trading begins.
     """
+    if SANDBOX_MODE:
+        return None
     if market_is_open():
         return None
     s = market_status()
@@ -594,25 +700,240 @@ def market_gate_message() -> Optional[str]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# COMMAND HANDLERS
+# REGISTRATION COMMANDS
+# ═══════════════════════════════════════════════════════════════════════════
+
+async def cmd_register(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid      = update.effective_user.id
+    username = update.effective_user.username or ""
+    name     = update.effective_user.full_name or ""
+
+    result = register_user(uid, username, name)
+
+    if result == "already_approved":
+        await update.message.reply_text(
+            "✅ You are already approved and can trade. Use /help."
+        )
+    elif result == "already_pending":
+        await update.message.reply_text(
+            "⏳ Your registration is still *pending approval*.\n"
+            "The admin will review your request soon.",
+            parse_mode="Markdown"
+        )
+    elif result == "blocked":
+        await update.message.reply_text(
+            "🚫 Your access request has been denied. Contact the admin."
+        )
+    else:
+        await update.message.reply_text(
+            f"✅ *Registration received!*\n\n"
+            f"Your request is pending admin approval.\n"
+            f"You will be notified here once approved.\n\n"
+            f"Your Telegram ID: `{uid}`",
+            parse_mode="Markdown"
+        )
+        # Notify admin
+        if ADMIN_CHAT_ID:
+            await ctx.bot.send_message(
+                chat_id=ADMIN_CHAT_ID,
+                text=(
+                    f"📬 *New registration request*\n\n"
+                    f"Name: {name}\n"
+                    f"Username: @{username}\n"
+                    f"Telegram ID: `{uid}`\n\n"
+                    f"Use `/approve {uid}` or `/deny {uid}`"
+                ),
+                parse_mode="Markdown"
+            )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ADMIN COMMANDS
+# ═══════════════════════════════════════════════════════════════════════════
+
+async def cmd_approve(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("🚫 Admin only command.")
+        return
+    if not ctx.args:
+        await update.message.reply_text("Usage: `/approve <telegram_id>`", parse_mode="Markdown")
+        return
+    try:
+        target_id = int(ctx.args[0])
+    except ValueError:
+        await update.message.reply_text("❌ Invalid Telegram ID.")
+        return
+
+    ok = approve_user(target_id, update.effective_user.id)
+    if not ok:
+        await update.message.reply_text(f"❌ User `{target_id}` not found.", parse_mode="Markdown")
+        return
+
+    await update.message.reply_text(f"✅ User `{target_id}` approved.", parse_mode="Markdown")
+    try:
+        await ctx.bot.send_message(
+            chat_id=target_id,
+            text=(
+                "🎉 *Your registration has been approved!*\n\n"
+                f"Starting capital: NPR 1,00,000 (paper)\n\n"
+                "Use /help to see all commands.\n"
+                "Use /buy to record your first trade."
+            ),
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        log.warning("Could not notify user %s: %s", target_id, e)
+
+
+async def cmd_deny(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("🚫 Admin only command.")
+        return
+    if not ctx.args:
+        await update.message.reply_text("Usage: `/deny <telegram_id>`", parse_mode="Markdown")
+        return
+    try:
+        target_id = int(ctx.args[0])
+    except ValueError:
+        await update.message.reply_text("❌ Invalid Telegram ID.")
+        return
+
+    ok = deny_user(target_id)
+    if not ok:
+        await update.message.reply_text(f"❌ User `{target_id}` not found.", parse_mode="Markdown")
+        return
+    await update.message.reply_text(f"🚫 User `{target_id}` denied/blocked.", parse_mode="Markdown")
+    try:
+        await ctx.bot.send_message(
+            chat_id=target_id,
+            text="🚫 Your registration request has been denied."
+        )
+    except Exception:
+        pass
+
+
+async def cmd_users(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("🚫 Admin only command.")
+        return
+    rows = run_raw_sql(
+        "SELECT telegram_id, username, full_name, status, registered_at FROM paper_users ORDER BY id"
+    )
+    if not rows:
+        await update.message.reply_text("No registered users yet.")
+        return
+    lines = ["*Registered Users*\n"]
+    status_emoji = {"APPROVED": "✅", "PENDING": "⏳", "BLOCKED": "🚫"}
+    for r in rows:
+        em = status_emoji.get(r["status"], "❓")
+        lines.append(
+            f"{em} `{r['telegram_id']}` — @{r['username'] or 'no_username'}\n"
+            f"   {r['full_name']} | {r['status']} | {r['registered_at']}"
+        )
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+async def cmd_reset(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        await update.message.reply_text("🚫 Admin only command.")
+        return ConversationHandler.END
+
+    if not ctx.args:
+        await update.message.reply_text(
+            "Usage: `/reset <telegram_id>`\n\nUse /users to see all IDs.",
+            parse_mode="Markdown"
+        )
+        return ConversationHandler.END
+
+    try:
+        target_id = int(ctx.args[0])
+    except ValueError:
+        await update.message.reply_text("❌ Invalid Telegram ID.")
+        return ConversationHandler.END
+
+    user = get_user(target_id)
+    if not user:
+        await update.message.reply_text(f"❌ User `{target_id}` not found.", parse_mode="Markdown")
+        return ConversationHandler.END
+
+    ctx.user_data["reset_target_id"] = target_id
+    await update.message.reply_text(
+        f"⚠️ *This will DELETE all paper trades for user* `{target_id}` "
+        f"({user.get('full_name')}) *and reset their capital to NPR 1,00,000.*\n\n"
+        f"Type /yes to confirm or /no to cancel.",
+        parse_mode="Markdown"
+    )
+    return CONFIRM_RESET
+
+
+async def confirm_reset_yes(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    target_id = ctx.user_data.get("reset_target_id")
+    if not target_id:
+        await update.message.reply_text("No pending reset.")
+        return ConversationHandler.END
+    try:
+        reset_user_paper_data(target_id)
+        await update.message.reply_text(
+            f"✅ Paper data reset for user `{target_id}`.\n"
+            f"Capital: NPR 1,00,000. All positions cleared.",
+            parse_mode="Markdown"
+        )
+        try:
+            await ctx.bot.send_message(
+                chat_id=target_id,
+                text=(
+                    "🔄 *Your paper trading account has been reset by admin.*\n\n"
+                    "Starting capital: NPR 1,00,000\nAll positions cleared."
+                ),
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
+    except Exception as e:
+        await update.message.reply_text(f"❌ Reset failed: {e}")
+    ctx.user_data.pop("reset_target_id", None)
+    return ConversationHandler.END
+
+
+async def confirm_reset_no(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    ctx.user_data.pop("reset_target_id", None)
+    await update.message.reply_text("Reset cancelled. Nothing changed.")
+    return ConversationHandler.END
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# USER COMMANDS
 # ═══════════════════════════════════════════════════════════════════════════
 
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    admin_section = ""
+    if is_admin(uid):
+        admin_section = (
+            "\n*Admin Commands*\n"
+            "`/approve <id>` — approve a user\n"
+            "`/deny <id>` — deny/block a user\n"
+            "`/users` — list all registered users\n"
+            "`/reset <id>` — reset one user's paper data\n"
+        )
     await update.message.reply_text(
-        f"*Nepal Paper Trading Bot* | {mode_label()} | {circuit_label()}\n\n"
+        f"*Nepal Paper Trading Bot* | {mode_label()}\n\n"
+        "*Registration*\n"
+        "`/register` — request access\n\n"
         "*Trading* _(market hours only: Sun–Thu 10:45AM–3:00PM NST)_\n"
         "`/buy SYMBOL SHARES PRICE`\n"
         "`/sell SYMBOL SHARES PRICE`\n"
         "`/cancel`\n\n"
         "*Status* _(available anytime)_\n"
-        "`/status` — open positions\n"
-        "`/pnl` — closed trades + win rate\n"
-        "`/capital` — paper capital state\n"
+        "`/status` — your open positions\n"
+        "`/pnl` — your closed trades + win rate\n"
+        "`/capital` — your paper capital state\n"
         "`/signal` — latest AI signals\n\n"
         "*Control*\n"
-        "`/pause` `/resume` — circuit breaker\n"
-        "`/reset` ⚠️ — wipe paper data, restart NPR 1,00,000\n\n"
-        "_Natural language works:_\n"
+        "`/pause` `/resume` — your circuit breaker\n"
+        + admin_section +
+        "\n_Natural language works:_\n"
         "`bought nabil 10 at 380`\n"
         "`sell nabil 20 at 400`",
         parse_mode="Markdown",
@@ -620,7 +941,10 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_capital(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    cap    = get_paper_capital()
+    if not await guard(update):
+        return
+    uid = update.effective_user.id
+    cap    = get_paper_capital(uid)
     start  = Decimal(str(cap.get("starting_capital", "100000")))
     curr   = Decimal(str(cap.get("current_capital", "100000")))
     pnl    = Decimal(str(cap.get("total_realised_pnl", "0")))
@@ -629,7 +953,9 @@ async def cmd_capital(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     growth = ((curr - start) / start * 100).quantize(Decimal("0.01")) if start else Decimal("0")
 
     locked_rows = run_raw_sql(
-        "SELECT COALESCE(SUM(total_cost::numeric),0) AS lk FROM paper_portfolio WHERE status='OPEN'"
+        "SELECT COALESCE(SUM(total_cost::numeric),0) AS lk FROM paper_portfolio "
+        "WHERE telegram_id = %s AND status='OPEN'",
+        (str(uid),)
     )
     locked = Decimal(str(locked_rows[0]["lk"])) if locked_rows else Decimal("0")
 
@@ -649,8 +975,11 @@ async def cmd_capital(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    positions = get_all_open_positions()
-    cap       = get_paper_capital()
+    if not await guard(update):
+        return
+    uid       = update.effective_user.id
+    positions = get_all_open_positions(uid)
+    cap       = get_paper_capital(uid)
     curr      = Decimal(str(cap.get("current_capital", "0")))
 
     if not positions:
@@ -678,9 +1007,15 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_pnl(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    cap    = get_paper_capital()
-    trades = read_tab_where("paper_portfolio", {"status": "CLOSED"},
-                            order_by="id", desc=True, limit=20)
+    if not await guard(update):
+        return
+    uid    = update.effective_user.id
+    cap    = get_paper_capital(uid)
+    trades = run_raw_sql(
+        "SELECT * FROM paper_portfolio WHERE telegram_id = %s AND status = 'CLOSED' "
+        "ORDER BY id DESC LIMIT 20",
+        (str(uid),)
+    )
 
     lines = [
         f"*Closed Trades* | {mode_label()}\n",
@@ -707,8 +1042,11 @@ async def cmd_pnl(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_signal(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    signals = read_tab_where("market_log", {"outcome": "PENDING"},
-                             order_by="id", desc=True, limit=5)
+    if not await guard(update):
+        return
+    signals = run_raw_sql(
+        "SELECT * FROM market_log WHERE outcome = 'PENDING' ORDER BY id DESC LIMIT 5"
+    )
     if not signals:
         await update.message.reply_text("No pending signals in market_log.")
         return
@@ -724,49 +1062,27 @@ async def cmd_signal(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_mode(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"{mode_label()} | {circuit_label()}")
+    uid = update.effective_user.id
+    await update.message.reply_text(f"{mode_label()} | {circuit_label(uid)}")
 
 
 async def cmd_pause(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    global _circuit_breaker
-    _circuit_breaker = True
+    if not await guard(update):
+        return
+    uid = update.effective_user.id
+    _circuit_breakers[uid] = True
     await update.message.reply_text(
-        "🔴 *Circuit breaker ACTIVATED*\nUse /resume to deactivate.",
+        "🔴 *Circuit breaker ACTIVATED* for your session.\nUse /resume to deactivate.",
         parse_mode="Markdown"
     )
 
 
 async def cmd_resume(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    global _circuit_breaker
-    _circuit_breaker = False
+    if not await guard(update):
+        return
+    uid = update.effective_user.id
+    _circuit_breakers[uid] = False
     await update.message.reply_text("🟢 *Circuit breaker DEACTIVATED*", parse_mode="Markdown")
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# RESET FLOW
-# ═══════════════════════════════════════════════════════════════════════════
-
-async def cmd_reset(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text(
-        "⚠️ *This will DELETE all paper trades and reset capital to NPR 1,00,000.*\n\n"
-        "Type /yes to confirm or /no to cancel.",
-        parse_mode="Markdown"
-    )
-    return CONFIRM_RESET
-
-async def confirm_reset_yes(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        reset_paper_tables()
-        await update.message.reply_text(
-            "✅ Paper tables reset.\nCapital: NPR 1,00,000\nAll positions cleared."
-        )
-    except Exception as e:
-        await update.message.reply_text(f"❌ Reset failed: {e}")
-    return ConversationHandler.END
-
-async def confirm_reset_no(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("Reset cancelled. Nothing changed.")
-    return ConversationHandler.END
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -774,7 +1090,11 @@ async def confirm_reset_no(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
 # ═══════════════════════════════════════════════════════════════════════════
 
 async def cmd_buy(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    if _circuit_breaker:
+    if not await guard(update):
+        return ConversationHandler.END
+    uid = update.effective_user.id
+
+    if _circuit_breakers.get(uid):
         await update.message.reply_text("🔴 Circuit breaker ACTIVE. Use /resume first.")
         return ConversationHandler.END
 
@@ -809,10 +1129,23 @@ async def cmd_buy(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text(f"❌ Parse error: {e}")
         return ConversationHandler.END
 
+    matches = lookup_symbols(symbol)
+    if not matches:
+        await update.message.reply_text(f"❌ Symbol *{symbol}* not found in NEPSE.", parse_mode="Markdown")
+        return ConversationHandler.END
+    if matches[0].upper() != symbol:
+        suggestion = ", ".join(f"`{s}`" for s in matches)
+        await update.message.reply_text(
+            f"❌ Symbol *{symbol}* not found. Did you mean: {suggestion}?",
+            parse_mode="Markdown",
+        )
+        return ConversationHandler.END
+    symbol = matches[0]
+
     fees      = calc_buy_fees(price, shares)
     total_out = fees["total_cost"]
-    available = Decimal(str(get_paper_capital().get("current_capital", "0")))
-    existing  = get_paper_position(symbol)
+    available = Decimal(str(get_paper_capital(uid).get("current_capital", "0")))
+    existing  = get_paper_position(uid, symbol)
 
     avg_note = ""
     if existing:
@@ -850,12 +1183,14 @@ async def cmd_buy(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def confirm_buy_yes(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    uid     = update.effective_user.id
     pending = ctx.user_data.get("pending_buy")
+    log.info('buy has been set to yes')
     if not pending:
         await update.message.reply_text("No pending BUY.")
         return ConversationHandler.END
     try:
-        r = execute_buy(pending["symbol"], Decimal(pending["shares"]), Decimal(pending["price"]))
+        r = execute_buy(uid, pending["symbol"], Decimal(pending["shares"]), Decimal(pending["price"]))
         avg_txt = "_(averaged)_" if r["averaged"] else "_(new position)_"
         await update.message.reply_text(
             f"✅ *BUY recorded* {avg_txt}\n\n"
@@ -884,6 +1219,10 @@ async def confirm_buy_no(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 # ═══════════════════════════════════════════════════════════════════════════
 
 async def cmd_sell(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await guard(update):
+        return ConversationHandler.END
+    uid = update.effective_user.id
+
     gate = market_gate_message()
     if gate:
         await update.message.reply_text(gate, parse_mode="Markdown")
@@ -915,7 +1254,20 @@ async def cmd_sell(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text(f"❌ Parse error: {e}")
         return ConversationHandler.END
 
-    pos = get_paper_position(symbol)
+    matches = lookup_symbols(symbol)
+    if not matches:
+        await update.message.reply_text(f"❌ Symbol *{symbol}* not found in NEPSE.", parse_mode="Markdown")
+        return ConversationHandler.END
+    if matches[0].upper() != symbol:
+        suggestion = ", ".join(f"`{s}`" for s in matches)
+        await update.message.reply_text(
+            f"❌ Symbol *{symbol}* not found. Did you mean: {suggestion}?",
+            parse_mode="Markdown",
+        )
+        return ConversationHandler.END
+    symbol = matches[0]
+
+    pos = get_paper_position(uid, symbol)
     if not pos:
         await update.message.reply_text(
             f"❌ No open position for *{symbol}*. Use /status.",
@@ -962,12 +1314,13 @@ async def cmd_sell(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def confirm_sell_yes(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    uid     = update.effective_user.id
     pending = ctx.user_data.get("pending_sell")
     if not pending:
         await update.message.reply_text("No pending SELL.")
         return ConversationHandler.END
     try:
-        r  = execute_sell(pending["symbol"], Decimal(pending["shares"]), Decimal(pending["price"]))
+        r  = execute_sell(uid, pending["symbol"], Decimal(pending["shares"]), Decimal(pending["price"]))
         em = "🟢" if r["result"] == "WIN" else "🔴"
         partial = f"\n_{r['remaining']:.0f} shares still open_" if r["remaining"] > 0 else ""
         await update.message.reply_text(
@@ -1006,38 +1359,152 @@ async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 # ═══════════════════════════════════════════════════════════════════════════
 
 async def nlp_fallback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip().lower()
-    buy_kw  = ["buy", "bought", "purchase", "kineko", "kine"]
-    sell_kw = ["sell", "sold", "becho", "becheko"]
-    if any(k in text for k in buy_kw):
-        ctx.args = text.split()
-        return await cmd_buy(update, ctx)
-    elif any(k in text for k in sell_kw):
-        ctx.args = text.split()
-        return await cmd_sell(update, ctx)
-    else:
-        await update.message.reply_text("Use /help to see available commands.")
+    await update.message.reply_text("Use /help to see available commands.")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# PUSH ALERTS  (called externally by claude_analyst)
+# PUSH ALERTS  — broadcast to all approved users
+# Called externally by claude_analyst.py
 # ═══════════════════════════════════════════════════════════════════════════
 
-async def push_buy_signal(app: Application, symbol: str, confidence: int,
-                           entry: float, stop: float, target: float, reason: str):
-    if CHAT_ID == 0:
+async def push_buy_signal(
+    app: Application,
+    symbol: str,
+    confidence: int,
+    entry: float,
+    stop: float,
+    target: float,
+    reason: str
+):
+    """Broadcast a BUY signal alert to ALL approved users."""
+    approved_ids = get_all_approved_ids()
+    if not approved_ids:
         return
-    await app.bot.send_message(
-        chat_id=CHAT_ID,
-        text=(
-            f"🚨 *BUY Signal* | {mode_label()}\n\n"
-            f"*{symbol}* | Conf: {confidence}%\n"
-            f"Entry: {fmt_npr(entry)} | SL: {fmt_npr(stop)} | Target: {fmt_npr(target)}\n\n"
-            f"_{reason[:200]}_\n\n"
-            f"Use `/buy {symbol} <shares> {entry}` to log."
-        ),
-        parse_mode="Markdown"
+
+    text = (
+        f"🚨 *BUY Signal* | {mode_label()}\n\n"
+        f"*{symbol}* | Conf: {confidence}%\n"
+        f"Entry: {fmt_npr(entry)} | SL: {fmt_npr(stop)} | Target: {fmt_npr(target)}\n\n"
+        f"_{reason[:200]}_\n\n"
+        f"Use `/buy {symbol} <shares> {entry}` to log."
     )
+    for uid in approved_ids:
+        try:
+            await app.bot.send_message(chat_id=uid, text=text, parse_mode="Markdown")
+        except Exception as e:
+            log.warning("Could not push signal to %s: %s", uid, e)
+
+
+async def push_system_alert(app: Application, message: str):
+    """Send a system alert to admin only (circuit breaker, errors, etc.)."""
+    if ADMIN_CHAT_ID:
+        try:
+            await app.bot.send_message(
+                chat_id=ADMIN_CHAT_ID,
+                text=f"⚙️ *System Alert*\n\n{message}",
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            log.error("Could not send system alert: %s", e)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SCHEMA NOTE
+# Add these models to schema.prisma, then run codegen + migrations.
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# model paper_users {
+#   id            Serial
+#   telegram_id   Text!  @unique
+#   username      Text
+#   full_name     Text
+#   status        Text   @default("PENDING")  // PENDING | APPROVED | BLOCKED
+#   registered_at Text
+#   approved_at   Text
+#   approved_by   Text
+#   @@index([status])
+# }
+#
+# model paper_capital {
+#   id                  Serial
+#   telegram_id         Text!  @unique   // one row per approved user
+#   starting_capital    Text  @default("100000")
+#   current_capital     Text  @default("100000")
+#   total_realised_pnl  Text  @default("0")
+#   total_fees_paid     Text  @default("0")
+#   total_cgt_paid      Text  @default("0")
+#   total_trades        Text  @default("0")
+#   total_wins          Text  @default("0")
+#   total_losses        Text  @default("0")
+#   last_updated        Text
+#   test_mode           Text  @default("false")  // "true" when seeded via --sandbox
+#   @@index([telegram_id])
+# }
+#
+# model paper_portfolio {
+#   id              Serial
+#   telegram_id     Text!
+#   symbol          Text!
+#   status          Text  @default("OPEN")
+#   total_shares    Text
+#   wacc            Text
+#   total_cost      Text
+#   first_buy_date  Text
+#   last_buy_date   Text
+#   buy_count       Text  @default("1")
+#   exit_date       Text
+#   exit_price      Text
+#   exit_shares     Text
+#   gross_pnl       Text
+#   sell_fees       Text
+#   cgt_paid        Text
+#   net_pnl         Text
+#   result          Text
+#   created_at      Text
+#   updated_at      Text
+#   test_mode       Text  @default("false")  // "true" = written during --sandbox run
+#   @@index([telegram_id])
+#   @@index([telegram_id, status])
+#   @@index([symbol])
+#   @@index([test_mode])
+# }
+#
+# model paper_trade_log {
+#   id             Serial
+#   telegram_id    Text!
+#   symbol         Text!
+#   action         Text!
+#   shares         Text
+#   price          Text
+#   gross_amount   Text
+#   brokerage      Text
+#   sebon          Text
+#   dp_fee         Text
+#   cgt            Text
+#   total_fees     Text
+#   net_amount     Text
+#   capital_before Text
+#   capital_after  Text
+#   wacc_before    Text
+#   wacc_after     Text
+#   note           Text
+#   created_at     Text
+#   test_mode      Text  @default("false")  // "true" = written during --sandbox run
+#   @@index([telegram_id])
+#   @@index([symbol])
+#   @@index([test_mode])
+# }
+#
+# ── Purge sandbox data before official paper trading begins ──────────────────
+# DELETE FROM paper_trade_log WHERE test_mode = 'true';
+# DELETE FROM paper_portfolio  WHERE test_mode = 'true';
+# UPDATE paper_capital SET
+#     current_capital='100000', total_realised_pnl='0',
+#     total_fees_paid='0',      total_cgt_paid='0',
+#     total_trades='0',         total_wins='0',    total_losses='0',
+#     test_mode='false'
+# WHERE test_mode = 'true';
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1045,28 +1512,70 @@ async def push_buy_signal(app: Application, symbol: str, confidence: int,
 # ═══════════════════════════════════════════════════════════════════════════
 
 def main():
-    # Ensure capital row exists on startup
-    try:
-        _seed_capital_row()
-    except Exception as e:
-        log.warning("Could not seed capital row (tables may not exist yet): %s", e)
+    global SANDBOX_MODE
 
-    log.info("Starting bot | %s | %s", mode_label(), circuit_label())
+    parser = argparse.ArgumentParser(description="NEPSE Paper Trading Telegram Bot")
+    parser.add_argument(
+        "--sandbox",
+        action="store_true",
+        help=(
+            "Bypass calendar_guard — allow /buy and /sell outside market hours. "
+            "All DB writes are tagged test_mode='true' for easy purge before live trading. "
+            "Use this for code/flow testing only."
+        ),
+    )
+    args = parser.parse_args()
+    SANDBOX_MODE = args.sandbox
+
+    if SANDBOX_MODE:
+        log.warning("=" * 60)
+        log.warning("  SANDBOX MODE ACTIVE — calendar checks bypassed")
+        log.warning("  All trades written with test_mode='true'")
+        log.warning("  Purge before official paper trading:")
+        log.warning("    DELETE FROM paper_trade_log WHERE test_mode='true';")
+        log.warning("    DELETE FROM paper_portfolio  WHERE test_mode='true';")
+        log.warning("    UPDATE paper_capital SET")
+        log.warning("      current_capital='100000', total_realised_pnl='0',")
+        log.warning("      total_fees_paid='0', total_cgt_paid='0',")
+        log.warning("      total_trades='0', total_wins='0', total_losses='0'")
+        log.warning("    WHERE test_mode='true';")
+        log.warning("=" * 60)
+
+    log.info("Starting multi-user bot | %s", mode_label())
     app = Application.builder().token(TOKEN).build()
 
     buy_conv = ConversationHandler(
-        entry_points=[CommandHandler("buy", cmd_buy)],
+        entry_points=[
+            CommandHandler("buy", cmd_buy),
+            MessageHandler(
+                filters.TEXT & ~filters.COMMAND &
+                filters.Regex(r'(?i)\b(buy\w*|bought|purchas\w*|kineko\w*|kine\w*)'),
+                cmd_buy,
+            ),
+        ],
         states={CONFIRM_BUY: [
             CommandHandler("yes", confirm_buy_yes),
             CommandHandler("no",  confirm_buy_no),
+            MessageHandler(filters.Regex(r'(?i)^yes$'), confirm_buy_yes),
+            MessageHandler(filters.Regex(r'(?i)^no$'),  confirm_buy_no),
         ]},
         fallbacks=[CommandHandler("cancel", cmd_cancel)],
     )
+
     sell_conv = ConversationHandler(
-        entry_points=[CommandHandler("sell", cmd_sell)],
+        entry_points=[
+            CommandHandler("sell", cmd_sell),
+            MessageHandler(
+                filters.TEXT & ~filters.COMMAND &
+                filters.Regex(r'(?i)\b(sell\w*|sold|becho\w*)'),
+                cmd_sell,
+            ),
+        ],
         states={CONFIRM_SELL: [
             CommandHandler("yes", confirm_sell_yes),
             CommandHandler("no",  confirm_sell_no),
+            MessageHandler(filters.Regex(r'(?i)^yes$'), confirm_sell_yes),
+            MessageHandler(filters.Regex(r'(?i)^no$'),  confirm_sell_no),
         ]},
         fallbacks=[CommandHandler("cancel", cmd_cancel)],
     )
@@ -1075,6 +1584,8 @@ def main():
         states={CONFIRM_RESET: [
             CommandHandler("yes", confirm_reset_yes),
             CommandHandler("no",  confirm_reset_no),
+            MessageHandler(filters.Regex(r'(?i)^yes$'), confirm_reset_yes),
+            MessageHandler(filters.Regex(r'(?i)^no$'),  confirm_reset_no),
         ]},
         fallbacks=[CommandHandler("cancel", cmd_cancel)],
     )
@@ -1082,16 +1593,21 @@ def main():
     app.add_handler(buy_conv)
     app.add_handler(sell_conv)
     app.add_handler(reset_conv)
-    app.add_handler(CommandHandler("cancel",  cmd_cancel))
-    app.add_handler(CommandHandler("status",  cmd_status))
-    app.add_handler(CommandHandler("pnl",     cmd_pnl))
-    app.add_handler(CommandHandler("capital", cmd_capital))
-    app.add_handler(CommandHandler("signal",  cmd_signal))
-    app.add_handler(CommandHandler("mode",    cmd_mode))
-    app.add_handler(CommandHandler("pause",   cmd_pause))
-    app.add_handler(CommandHandler("resume",  cmd_resume))
-    app.add_handler(CommandHandler("help",    cmd_help))
-    app.add_handler(CommandHandler("start",   cmd_help))
+
+    app.add_handler(CommandHandler("register", cmd_register))
+    app.add_handler(CommandHandler("approve",  cmd_approve))
+    app.add_handler(CommandHandler("deny",     cmd_deny))
+    app.add_handler(CommandHandler("users",    cmd_users))
+    app.add_handler(CommandHandler("cancel",   cmd_cancel))
+    app.add_handler(CommandHandler("status",   cmd_status))
+    app.add_handler(CommandHandler("pnl",      cmd_pnl))
+    app.add_handler(CommandHandler("capital",  cmd_capital))
+    app.add_handler(CommandHandler("signal",   cmd_signal))
+    app.add_handler(CommandHandler("mode",     cmd_mode))
+    app.add_handler(CommandHandler("pause",    cmd_pause))
+    app.add_handler(CommandHandler("resume",   cmd_resume))
+    app.add_handler(CommandHandler("help",     cmd_help))
+    app.add_handler(CommandHandler("start",    cmd_help))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, nlp_fallback))
 
     log.info("Bot polling started...")

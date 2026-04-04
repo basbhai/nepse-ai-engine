@@ -169,6 +169,19 @@ model market_log {
   dual_audit       Text
   gpt_verdict      Text
   timestamp        Text
+  eval_date              Text   // date tracker evaluated this
+  eval_geo_score         Text   // geo score at evaluation
+  eval_nepal_score       Text   // nepal score at evaluation  
+  eval_nepse_index       Text   // NEPSE index at evaluation
+  eval_market_state      Text   // market state at evaluation
+  eval_policy_rate       Text   // NRB policy rate at evaluation
+  eval_fd_rate_pct       Text   // FD rate at evaluation
+  eval_geo_delta         Text   // geo_score_eval - geo_score_entry
+  eval_nepal_delta       Text   // nepal_score_eval - nepal_score_entry
+  eval_key_news          Text   // 2-3 line highlights from nepal_pulse.key_event
+  eval_price_change_pct  Text   // % price move from signal date to eval date
+  eval_nepse_change_pct  Text   // NEPSE % move over same period
+  eval_alpha             Text   // stock move vs NEPSE — same logic as trade_journal
 
   @@index([symbol])
   @@index([date])
@@ -939,80 +952,88 @@ model share_sectors {
 }
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-// PAPER TRADING — add these 3 models to the END of schema.prisma
-// Then run: python -m db.codegen  →  python -m db.migrations
-// ─────────────────────────────────────────────────────────────────────────────
 
-model paper_portfolio {
-  id              Serial
-  symbol          Text!
-  status          Text   @default("OPEN")   // OPEN | CLOSED
+// ═══════════════════════════════════════════════════════════════════════════
+// paper trading
+// ═══════════════════════════════════════════════════════════════════════════
+ model paper_users {
+   id            Serial
+   telegram_id   Text!  @unique
+   username      Text
+   full_name     Text
+   status        Text   @default("PENDING")  // PENDING | APPROVED | BLOCKED
+   registered_at Text
+   approved_at   Text
+   approved_by   Text
+   @@index([status])
+ }
 
-  // Position state — updated on every buy / average / partial sell
-  total_shares    Text                       // stored as numeric string
-  wacc            Text                       // WACC includes all buy fees
-  total_cost      Text                       // wacc * total_shares
+ model paper_capital {
+   id                  Serial
+   telegram_id         Text!  @unique   // one row per approved user
+   starting_capital    Text  @default("100000")
+   current_capital     Text  @default("100000")
+   total_realised_pnl  Text  @default("0")
+   total_fees_paid     Text  @default("0")
+   total_cgt_paid      Text  @default("0")
+   total_trades        Text  @default("0")
+   total_wins          Text  @default("0")
+   total_losses        Text  @default("0")
+   last_updated        Text
+   test_mode           Text  @default("false")  // "true" when seeded via --sandbox
+   @@index([telegram_id])
+ }
 
-  // Entry tracking
-  first_buy_date  Text
-  last_buy_date   Text
-  buy_count       Text   @default("1")       // number of times averaged in
+ model paper_portfolio {
+   id              Serial
+   telegram_id     Text!
+   symbol          Text!
+   status          Text  @default("OPEN")
+   total_shares    Text
+   wacc            Text
+   total_cost      Text
+   first_buy_date  Text
+   last_buy_date   Text
+   buy_count       Text  @default("1")
+   exit_date       Text
+   exit_price      Text
+   exit_shares     Text
+   gross_pnl       Text
+   sell_fees       Text
+   cgt_paid        Text
+   net_pnl         Text
+   result          Text
+   created_at      Text
+   updated_at      Text
+   test_mode       Text  @default("false")  // "true" = written during --sandbox run
+   @@index([telegram_id])
+   @@index([telegram_id, status])
+   @@index([symbol])
+   @@index([test_mode])
+ }
 
-  // Exit tracking (filled on close)
-  exit_date       Text
-  exit_price      Text
-  exit_shares     Text
-  gross_pnl       Text                       // exit gross - cost basis
-  sell_fees       Text
-  cgt_paid        Text                       // 7.5% on profit only
-  net_pnl         Text                       // after fees + CGT
-  result          Text                       // WIN | LOSS | BREAKEVEN
-
-  created_at      Text
-  updated_at      Text
-
-  @@index([symbol])
-  @@index([status])
-}
-
-model paper_trade_log {
-  id             Serial
-  symbol         Text!
-  action         Text!          // BUY | SELL
-  shares         Text
-  price          Text
-  gross_amount   Text
-  brokerage      Text
-  sebon          Text
-  dp_fee         Text
-  cgt            Text           // 0 for BUY, computed for SELL
-  total_fees     Text
-  net_amount     Text           // negative for BUY (money out), positive for SELL (money in)
-  capital_before Text
-  capital_after  Text
-  wacc_before    Text
-  wacc_after     Text
-  note           Text
-  created_at     Text
-
-  @@index([symbol])
-  @@index([action])
-  @@index([created_at])
-}
-
-model paper_capital {
-  id                  Serial
-  capital_id          Text!  @unique   // always "1" — single row
-  starting_capital    Text             // NPR 100000 — never changes
-  current_capital     Text             // available cash
-  total_realised_pnl  Text             // cumulative net P&L after CGT
-  total_fees_paid     Text
-  total_cgt_paid      Text
-  total_trades        Text             // closed trades count
-  total_wins          Text
-  total_losses        Text
-  last_updated        Text
-
-  @@index([capital_id])
-}
+ model paper_trade_log {
+   id             Serial
+   telegram_id    Text!
+   symbol         Text!
+   action         Text!
+   shares         Text
+   price          Text
+   gross_amount   Text
+   brokerage      Text
+   sebon          Text
+   dp_fee         Text
+   cgt            Text
+   total_fees     Text
+   net_amount     Text
+   capital_before Text
+   capital_after  Text
+   wacc_before    Text
+   wacc_after     Text
+   note           Text
+   created_at     Text
+   test_mode      Text  @default("false")  // "true" = written during --sandbox run
+   @@index([telegram_id])
+   @@index([symbol])
+   @@index([test_mode])
+ }
