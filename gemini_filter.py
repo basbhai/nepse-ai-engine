@@ -42,19 +42,13 @@ Feeds:     claude_analyst.py
 
 import json
 import logging
-import os
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Optional
 
-from dotenv import load_dotenv
-load_dotenv()
+from config import NST, GEMINI_API_KEY, GEMINI_MODEL
 
 logger = logging.getLogger(__name__)
-
-NST            = timezone(timedelta(hours=5, minutes=45))
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL   = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 # Max candidates to send to Gemini per run (token budget)
 MAX_CANDIDATES_TO_GEMINI = 10

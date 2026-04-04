@@ -21,7 +21,9 @@ IMPORT RULE: from sheets import ... — NEVER from db import ...
 import sys
 import argparse
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
+
+from config import NST
 
 # ── Logging ────────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -33,7 +35,6 @@ log = logging.getLogger("learning_seeder")
 
 # ── NST timestamp helper ────────────────────────────────────────────────────────
 def _nst_now() -> str:
-    NST = timezone(timedelta(hours=5, minutes=45))
     return datetime.now(NST).strftime("%Y-%m-%d %H:%M:%S")
 
 

@@ -72,11 +72,10 @@ import json
 import logging
 import os
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Optional
 
 from AI.gemini import ask_ai
-from dotenv import load_dotenv
 
 from sheets import (
     get_setting,
@@ -87,8 +86,7 @@ from sheets import (
     get_latest_pulse,
 )
 from modules.meroshare import get_portfolio_summary, PortfolioSummary
-
-load_dotenv()
+from config import NST
 
 # ══════════════════════════════════════════════════════════════════════════════
 # LOGGING
@@ -103,8 +101,6 @@ log = logging.getLogger(__name__)
 # ══════════════════════════════════════════════════════════════════════════════
 # CONSTANTS
 # ══════════════════════════════════════════════════════════════════════════════
-
-NST = timezone(timedelta(hours=5, minutes=45))
 
 
 

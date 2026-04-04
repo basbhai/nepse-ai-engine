@@ -42,15 +42,12 @@ import json
 import logging
 import os
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Optional
 
-from dotenv import load_dotenv
-load_dotenv()
+from config import NST
 
 logger = logging.getLogger(__name__)
-
-NST = timezone(timedelta(hours=5, minutes=45))
 
 # ── Fee constants (official NEPSE rates) ──────────────────────────────────────
 BROKERAGE_PCT   = 0.40    # % both buy and sell
@@ -488,7 +485,77 @@ def _kelly_local(
         "calculation_note":    note,
     }
 
-
+# ══════════════════════════════════════════════════════════════════════════════
+# get symbol betas
+# ══════════════════════════════════════════════════════════════════════════════
+def _get_symbol_beta(symbol: str, sector: str = "others") -> tuple[float, str]:
+    """
+    Get empirical beta for a symbol from fundamental_beta table.
+    Falls back to sector-level beta from SIM paper if not found or insignificant.
+ 
+    Args:
+        symbol: Stock ticker (e.g. "NABIL")
+        sector: Sector name for fallback lookup
+ 
+    Returns:
+        (beta_value, source_string)
+        source: "empirical" | "sector_fallback" | "default_fallback"
+ 
+    Rules:
+        - Use empirical beta only if: market_corr_p < 0.05 AND n_months >= 12
+        - If beta > 3.0 or beta < -2.0 → treat as outlier, use sector fallback
+        - Outlier symbols (HATHY 2.26, PLI 3.21, GMLI -1.82): sector fallback safer
+    """
+    from filter_engine import SECTOR_BETAS, DEFAULT_SECTOR_BETA
+    try:
+        from db import get_db_connection  # adjust to your actual DB import
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT beta, market_corr_p, n_months
+                    FROM fundamental_beta
+                    WHERE symbol = %s
+                    """,
+                    (symbol.upper(),)
+                )
+                row = cur.fetchone()
+ 
+        if row:
+            beta_val  = float(row["beta"]          if hasattr(row, "__getitem__") else row[0])
+            corr_p    = float(row["market_corr_p"] if hasattr(row, "__getitem__") else row[1])
+            n_months  = int(row["n_months"]        if hasattr(row, "__getitem__") else row[2])
+ 
+            # Quality checks before accepting empirical beta
+            if corr_p < 0.05 and n_months >= 12 and -2.0 <= beta_val <= 3.0:
+                logger.debug(
+                    "_get_symbol_beta(%s): empirical beta=%.4f (p=%.4f, n=%d months)",
+                    symbol, beta_val, corr_p, n_months,
+                )
+                return round(beta_val, 4), "empirical"
+ 
+            logger.debug(
+                "_get_symbol_beta(%s): empirical beta rejected "
+                "(p=%.4f, n=%d, beta=%.4f) — using sector fallback",
+                symbol, corr_p, n_months, beta_val,
+            )
+ 
+    except Exception as exc:
+        logger.debug("_get_symbol_beta(%s) DB lookup failed: %s", symbol, exc)
+ 
+    # Sector fallback
+    sector_key = sector.lower().strip()
+    sector_beta = SECTOR_BETAS.get(sector_key)
+    if sector_beta is None:
+        for key, val in SECTOR_BETAS.items():
+            if key in sector_key or sector_key in key:
+                sector_beta = val
+                break
+ 
+    if sector_beta is not None:
+        return sector_beta, "sector_fallback"
+ 
+    return DEFAULT_SECTOR_BETA, "default_fallback"
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 4 — POSITION SIZING
 # ══════════════════════════════════════════════════════════════════════════════
@@ -499,12 +566,13 @@ def size_position(
     stop_loss:   float,
     target:      float,
     confidence:  int   = 75,   # Claude confidence %
+    sector:      str   = "",   # for beta lookup
 ) -> Optional[PositionSize]:
     """
     Calculate optimal position size for a trade.
 
     Uses Kelly Criterion (via DeepSeek) for base sizing,
-    then applies confidence modifier and hard caps.
+    then applies confidence modifier, beta adjustment, and hard caps.
 
     Args:
         symbol:      Stock ticker
@@ -512,6 +580,7 @@ def size_position(
         stop_loss:   Stop loss price (must be below entry)
         target:      Price target
         confidence:  Claude confidence % (0-100)
+        sector:      Sector name for beta fallback lookup
 
     Returns:
         PositionSize dataclass or None if position should not be taken.
@@ -562,8 +631,8 @@ def size_position(
     adjusted_npr  = base_npr * conf_modifier
 
     # Hard cap: max MAX_POSITION_PCT of total capital, and max liquid
-    max_npr       = min(total_capital * MAX_POSITION_PCT / 100, liquid)
-    allocation    = min(adjusted_npr, max_npr)
+    max_npr    = min(total_capital * MAX_POSITION_PCT / 100, liquid)
+    allocation = min(adjusted_npr, max_npr)
 
     # ── Shares (floor — never exceed allocation) ───────────────────────────────
     # Account for buy fees when calculating shares
@@ -578,6 +647,31 @@ def size_position(
         logger.info("size_position(%s): allocation too small for even 1 share at %.0f", symbol, entry_price)
         return None
 
+    # ── Notes (collect all warnings before beta adjustment) ───────────────────
+    risk_per_share   = entry_price - stop_loss
+    reward_per_share = target - entry_price
+    rr = round(reward_per_share / risk_per_share, 2) if risk_per_share > 0 else 0
+
+    notes = []
+    if rr < 2:
+        notes.append(f"Low R/R={rr:.1f} — prefer >2")
+
+    # Pre-check profit warning using preliminary shares
+    _prelim_profit = calc_true_profit(entry_price, target, shares)
+    if _prelim_profit["net_profit"] < 0:
+        notes.append("Target does not cover fees — adjust target up")
+
+    if kelly["raw_kelly_fraction"] <= 0:
+        notes.append("Negative Kelly — poor expected value, reduce size")
+
+    # ── Beta adjustment ────────────────────────────────────────────────────────
+    shares, symbol_beta, beta_source = _apply_beta_to_sizing(
+        symbol, sector, shares, entry_price, notes
+    )
+    if shares <= 0:
+        logger.info("size_position(%s): shares=0 after beta adjustment", symbol)
+        return None
+
     # ── Recalculate with exact shares ─────────────────────────────────────────
     actual_allocation = shares * entry_price
 
@@ -587,19 +681,6 @@ def size_position(
     breakeven = calc_breakeven(entry_price, shares)
     profit    = calc_true_profit(entry_price, target, shares)
     risk_calc = calc_true_profit(entry_price, stop_loss, shares)
-
-    risk_per_share = entry_price - stop_loss
-    reward_per_share = target - entry_price
-    rr = round(reward_per_share / risk_per_share, 2) if risk_per_share > 0 else 0
-
-    # Warn if R/R < 2
-    notes = []
-    if rr < 2:
-        notes.append(f"Low R/R={rr:.1f} — prefer >2")
-    if profit["net_profit"] < 0:
-        notes.append("Target does not cover fees — adjust target up")
-    if kelly["raw_kelly_fraction"] <= 0:
-        notes.append("Negative Kelly — poor expected value, reduce size")
 
     result = PositionSize(
         symbol            = symbol,
@@ -632,12 +713,14 @@ def size_position(
         kelly_fraction    = kelly["raw_kelly_fraction"],
         kelly_confidence  = kelly.get("confidence", "LOW"),
 
+        symbol_beta       = symbol_beta,
+        beta_source       = beta_source,
+
         notes             = " | ".join(notes) if notes else "Clean setup",
     )
 
     logger.info("size_position(%s): %s", symbol, result.summary())
     return result
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 5 — PORTFOLIO FEE SUMMARY

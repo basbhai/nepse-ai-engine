@@ -17,19 +17,14 @@ CREDENTIALS NEEDED IN .env:
 
 import json
 import logging
-import os
 from typing import Optional
 
 from google import genai
 from google.genai import types
-from dotenv import load_dotenv
 
-load_dotenv()
+from config import GEMINI_API_KEY, GEMINI_MODEL
 
 log = logging.getLogger(__name__)
-
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL   = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 SYSTEM_PROMPT = (
     "You are a Nepal stock market financial advisor and wealth manager. "

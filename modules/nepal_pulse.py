@@ -29,15 +29,13 @@ CHANGES FROM PREVIOUS VERSION:
 
 import json
 import logging
-import os
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Optional
 
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
-from dotenv import load_dotenv
 
 from sheets import (
     get_setting,
@@ -47,8 +45,7 @@ from sheets import (
     get_macro_data,
 )
 from calendar_guard import flag_adhoc_closure, today_nst
-
-load_dotenv()
+from config import NST, GEMINI_API_KEY, GEMINI_MODEL
 
 # ══════════════════════════════════════════════════════════════════════════════
 # LOGGING
@@ -63,11 +60,6 @@ log = logging.getLogger(__name__)
 # ══════════════════════════════════════════════════════════════════════════════
 # CONSTANTS
 # ══════════════════════════════════════════════════════════════════════════════
-
-NST = timezone(timedelta(hours=5, minutes=45))
-
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL   = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 NEWS_SOURCES = [
     "https://onlinekhabar.com/feed",

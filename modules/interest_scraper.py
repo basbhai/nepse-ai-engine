@@ -22,16 +22,14 @@ import logging
 import os
 import re
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Optional
 
 import requests
-from dotenv import load_dotenv
 
-load_dotenv()
+from config import NST
 
 log = logging.getLogger(__name__)
-NST = timezone(timedelta(hours=5, minutes=45))
 
 API_URL = "https://www.bankbyaj.com/api/fd-rates"
 HEADERS = {

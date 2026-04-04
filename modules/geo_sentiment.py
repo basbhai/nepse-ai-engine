@@ -28,13 +28,14 @@ INTERPRETATION:
 
 import logging
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Optional
 
 import yfinance as yf
 
 from sheets import write_geo_snapshot, get_latest_geo
 from calendar_guard import flag_adhoc_closure, today_nst
+from config import NST
 
 # ══════════════════════════════════════════════════════════════════════════════
 # LOGGING
@@ -49,8 +50,6 @@ log = logging.getLogger(__name__)
 # ══════════════════════════════════════════════════════════════════════════════
 # CONSTANTS
 # ══════════════════════════════════════════════════════════════════════════════
-
-NST = timezone(timedelta(hours=5, minutes=45))
 
 # ONLY DXY is validated as meaningful signal (ρ=-0.1708, p<0.001, lag=7d)
 TICKERS = {

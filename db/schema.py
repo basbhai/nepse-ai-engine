@@ -42,6 +42,7 @@ TABS: dict[str, str] = {
     "paper_portfolio": "paper_portfolio",
     "paper_trade_log": "paper_trade_log",
     "fundamentals": "fundamentals",
+    "fundamental_beta": "fundamental_beta",
 }
 
 TABLE_DDL: dict[str, str] = {
@@ -1122,6 +1123,24 @@ TABLE_DDL: dict[str, str] = {
     CREATE INDEX IF NOT EXISTS ix_fundamentals_fiscal_year_quarter
         ON "fundamentals" (fiscal_year, quarter);
     """,
+
+    "fundamental_beta": """
+    CREATE TABLE IF NOT EXISTS "fundamental_beta" (
+        id TEXT NOT NULL PRIMARY KEY,
+        symbol TEXT,
+        beta TEXT,
+        market_corr TEXT,
+        market_corr_p TEXT,
+        n_months TEXT,
+        period_start TEXT,
+        period_end TEXT,
+        computed_date TEXT,
+        inserted_at TIMESTAMPTZ DEFAULT NOW(),
+        CONSTRAINT ux_fundamental_beta_symbol_computed_date UNIQUE (symbol, computed_date)
+    );
+    CREATE INDEX IF NOT EXISTS ix_fundamental_beta_symbol
+        ON "fundamental_beta" (symbol);
+    """,
 }
 
 TABLE_COLUMNS: dict[str, list[str]] = {
@@ -1162,4 +1181,5 @@ TABLE_COLUMNS: dict[str, list[str]] = {
     "paper_portfolio": ["telegram_id", "symbol", "status", "total_shares", "wacc", "total_cost", "first_buy_date", "last_buy_date", "buy_count", "exit_date", "exit_price", "exit_shares", "gross_pnl", "sell_fees", "cgt_paid", "net_pnl", "result", "created_at", "updated_at", "test_mode", "audited"],
     "paper_trade_log": ["telegram_id", "symbol", "action", "shares", "price", "gross_amount", "brokerage", "sebon", "dp_fee", "cgt", "total_fees", "net_amount", "capital_before", "capital_after", "wacc_before", "wacc_after", "note", "created_at", "test_mode"],
     "fundamentals": ["id", "symbol", "stock_id", "fiscal_year", "quarter", "eps", "net_worth", "roe", "roa", "paidup_capital", "reserve", "total_assets", "total_liabilities", "deposit", "loan", "net_interest_income", "operating_profit", "net_profit", "npl", "capital_fund_to_rwa", "cost_of_fund", "base_rate", "interest_spread", "cd_ratio", "dps", "sector_id", "promoter_shares", "public_shares", "share_registar", "is_delisted", "is_merged", "core_capital", "gram_value", "prev_quarter_profit", "growth_rate", "close", "discount_rate", "pe_ratio", "peg_value", "scraped_at"],
+    "fundamental_beta": ["id", "symbol", "beta", "market_corr", "market_corr_p", "n_months", "period_start", "period_end", "computed_date"],
 }

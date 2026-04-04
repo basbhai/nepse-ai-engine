@@ -30,14 +30,13 @@ CLI:
 """
 
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 
 from db.connection import _db
 from db.schema import TABLE_DDL, TABLE_COLUMNS, TABS
+from config import NST
 
 log = logging.getLogger(__name__)
-
-NST = timezone(timedelta(hours=5, minutes=45))
 
 
 # ─────────────────────────────────────────

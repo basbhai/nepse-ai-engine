@@ -31,18 +31,16 @@ import logging
 import os
 import smtplib
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Optional
 
 import requests
-from dotenv import load_dotenv
-load_dotenv()
+
+from config import NST
 
 logger = logging.getLogger(__name__)
-
-NST = timezone(timedelta(hours=5, minutes=45))
 
 # ── Credentials ───────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN", "")

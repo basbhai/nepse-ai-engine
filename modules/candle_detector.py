@@ -37,14 +37,14 @@ Usage:
 
 import logging
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Optional
 
 import numpy as np
 
-logger = logging.getLogger(__name__)
+from config import NST
 
-NST = timezone(timedelta(hours=5, minutes=45))
+logger = logging.getLogger(__name__)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CONSTANTS — NEPSE-tuned thresholds
@@ -90,7 +90,7 @@ class CandlePattern:
     candles_used:     int  = 1
 
     timestamp: str = field(default_factory=lambda: datetime.now(
-        tz=timezone(timedelta(hours=5, minutes=45))
+        tz=NST
     ).strftime("%Y-%m-%d %H:%M:%S"))
 
     def to_dict(self) -> dict:

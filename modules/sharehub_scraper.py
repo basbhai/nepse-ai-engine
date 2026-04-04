@@ -20,12 +20,11 @@ Usage:
 import sys
 import time
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 
 import requests
-from dotenv import load_dotenv
 
-load_dotenv()
+from config import NST
 
 logging.basicConfig(
     level=logging.INFO,
@@ -36,8 +35,6 @@ log = logging.getLogger(__name__)
 # ══════════════════════════════════════════════════════════════════════════════
 # CONSTANTS
 # ══════════════════════════════════════════════════════════════════════════════
-
-NST = timezone(timedelta(hours=5, minutes=45))
 
 API_URL      = "https://sharehubnepal.com/data/api/v1/index/date-wise-analysis"
 DEFAULT_FROM = date(2023, 10, 23)

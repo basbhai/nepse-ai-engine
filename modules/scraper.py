@@ -33,7 +33,7 @@ Column mapping from ShareSansar table (matches OmitNomis CSV structure):
 import logging
 import time
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Optional
 
 import requests
@@ -41,6 +41,7 @@ from bs4 import BeautifulSoup
 
 # Internal imports
 from modules.tms_scraper import get_session, fetch_top25, fetch_indices, dashboard_headers
+from config import NST, BROWSER_USER_AGENT
 
 logger = logging.getLogger(__name__)
 
@@ -48,16 +49,10 @@ logger = logging.getLogger(__name__)
 # CONSTANTS
 # ══════════════════════════════════════════════════════════════════════════════
 
-NST = timezone(timedelta(hours=5, minutes=45))
-
 SHARESANSAR_URL  = "https://www.sharesansar.com/today-share-price"
 SHARESANSAR_TIMEOUT = 20  # seconds
 SHARESANSAR_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/145.0.0.0 Safari/537.36"
-    ),
+    "User-Agent":      BROWSER_USER_AGENT,
     "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.5",
     "Accept-Encoding": "gzip, deflate, br",
@@ -101,7 +96,7 @@ class PriceRow:
     conf_signal:   str   = "NEUTRAL" # BULLISH / BEARISH / NEUTRAL
     source:        str   = "tms"     # tms | sharesansar | merged
     timestamp:     str   = field(default_factory=lambda: datetime.now(
-                                     tz=timezone(timedelta(hours=5, minutes=45))
+                                     tz=NST
                                  ).strftime("%Y-%m-%d %H:%M:%S"))
 
     def to_dict(self) -> dict:
@@ -582,7 +577,7 @@ def compute_market_breadth(
             nepse_change_pct = idx.get("change_pct", 0.0)
             break
 
-    nst_now = datetime.now(tz=timezone(timedelta(hours=5, minutes=45)))
+    nst_now = datetime.now(tz=NST)
 
     return {
         "Date":              nst_now.strftime("%Y-%m-%d"),

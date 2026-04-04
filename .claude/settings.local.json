@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -n \"NST = timezone\\(timedelta\" /f/project/nepse_ai/**/*.py)",
+      "Bash(find /f/project/nepse_ai -name \"*.py\" -not -path \"*/nepse_env/*\" -exec grep -l \"NST = timezone\\(timedelta\\(hours=5, minutes=45\\)\\)\" {} \\\\;)",
+      "Bash(grep -n \"from dotenv import load_dotenv\\\\|load_dotenv\\(\\)\" /f/project/nepse_ai/**/*.py)",
+      "Bash(find /f/project/nepse_ai -name \"*.py\" -not -path \"*/nepse_env/*\" -exec grep -l \"from dotenv import load_dotenv\" {} \\\\;)"
+    ]
+  }
+}

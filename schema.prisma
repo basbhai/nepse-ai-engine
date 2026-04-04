@@ -1095,3 +1095,18 @@ model share_sectors {
   @@index([symbol])
   @@index([fiscal_year, quarter])
 }
+
+model fundamental_beta {
+  id             Int      @id @default(autoincrement())
+  symbol         String   @db.VarChar(20)
+  beta           Float
+  market_corr    Float?
+  market_corr_p  Float?
+  n_months       Int?
+  period_start   DateTime?
+  period_end     DateTime?
+  computed_date  DateTime @default(now()) @db.Date
+
+  @@unique([symbol, computed_date])
+  @@index([symbol])
+}
