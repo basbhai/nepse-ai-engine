@@ -726,53 +726,52 @@ def _load_fundamental_data() -> tuple[dict, dict]:
     beta_map: dict = {}
  
     try:
-        from db import get_db_connection  # adjust to your actual DB import
-        with get_db_connection() as conn:
-            with conn.cursor() as cur:
-                # ── Latest quarter fundamentals per symbol (lag=1 safe)
-                # We grab the most recent completed quarter for each symbol.
-                # The fundamental_study uses lag=1 which means we use data
-                # published in the PREVIOUS quarter relative to today.
-                cur.execute("""
-                    SELECT DISTINCT ON (symbol)
-                        symbol, fiscal_year, quarter,
-                        npl, capital_fund_to_rwa, cd_ratio, roa, roe,
-                        interest_spread, dps, pe_ratio, peg_value,
-                        growth_rate, cost_of_fund, base_rate,
-                        net_interest_income, net_worth, net_profit,
-                        prev_quarter_profit, promoter_shares,
-                        loan, deposit
-                    FROM fundamentals
-                    ORDER BY symbol, fiscal_year DESC, quarter DESC
-                """)
-                rows = cur.fetchall()
-                for row in rows:
-                    sym = row["symbol"].upper() if hasattr(row, "__getitem__") else row[0].upper()
-                    fund_map[sym] = dict(row) if hasattr(row, "keys") else {
-                        col: val for col, val in zip(
-                            ["symbol","fiscal_year","quarter","npl","capital_fund_to_rwa",
-                             "cd_ratio","roa","roe","interest_spread","dps","pe_ratio",
-                             "peg_value","growth_rate","cost_of_fund","base_rate",
-                             "net_interest_income","net_worth","net_profit",
-                             "prev_quarter_profit","promoter_shares","loan","deposit"],
-                            row
-                        )
-                    }
- 
-                # ── Beta table
-                cur.execute("""
-                    SELECT symbol, beta, market_corr, market_corr_p, n_months
-                    FROM fundamental_beta
-                """)
-                for row in cur.fetchall():
-                    sym = (row["symbol"] if hasattr(row, "__getitem__") else row[0]).upper()
-                    beta_map[sym] = {
-                        "beta":           float(row["beta"]          if hasattr(row, "__getitem__") else row[1]),
-                        "market_corr":    float(row["market_corr"]   if hasattr(row, "__getitem__") else row[2]),
-                        "market_corr_p":  float(row["market_corr_p"] if hasattr(row, "__getitem__") else row[3]),
-                        "n_months":       int(row["n_months"]        if hasattr(row, "__getitem__") else row[4]),
-                    }
- 
+        from db.connection import _db  # adjust to your actual DB import
+        with _db() as cur:
+            # ── Latest quarter fundamentals per symbol (lag=1 safe)
+            # We grab the most recent completed quarter for each symbol.
+            # The fundamental_study uses lag=1 which means we use data
+            # published in the PREVIOUS quarter relative to today.
+            cur.execute("""
+                SELECT DISTINCT ON (symbol)
+                    symbol, fiscal_year, quarter,
+                    npl, capital_fund_to_rwa, cd_ratio, roa, roe,
+                    interest_spread, dps, pe_ratio, peg_value,
+                    growth_rate, cost_of_fund, base_rate,
+                    net_interest_income, net_worth, net_profit,
+                    prev_quarter_profit, promoter_shares,
+                    loan, deposit
+                FROM fundamentals
+                ORDER BY symbol, fiscal_year DESC, quarter DESC
+            """)
+            rows = cur.fetchall()
+            for row in rows:
+                sym = row["symbol"].upper() if hasattr(row, "__getitem__") else row[0].upper()
+                fund_map[sym] = dict(row) if hasattr(row, "keys") else {
+                    col: val for col, val in zip(
+                        ["symbol","fiscal_year","quarter","npl","capital_fund_to_rwa",
+                            "cd_ratio","roa","roe","interest_spread","dps","pe_ratio",
+                            "peg_value","growth_rate","cost_of_fund","base_rate",
+                            "net_interest_income","net_worth","net_profit",
+                            "prev_quarter_profit","promoter_shares","loan","deposit"],
+                        row
+                    )
+                }
+
+            # ── Beta table
+            cur.execute("""
+                SELECT symbol, beta, market_corr, market_corr_p, n_months
+                FROM fundamental_beta
+            """)
+            for row in cur.fetchall():
+                sym = (row["symbol"] if hasattr(row, "__getitem__") else row[0]).upper()
+                beta_map[sym] = {
+                    "beta":           float(row["beta"]          if hasattr(row, "__getitem__") else row[1]),
+                    "market_corr":    float(row["market_corr"]   if hasattr(row, "__getitem__") else row[2]),
+                    "market_corr_p":  float(row["market_corr_p"] if hasattr(row, "__getitem__") else row[3]),
+                    "n_months":       int(row["n_months"]        if hasattr(row, "__getitem__") else row[4]),
+                }
+
     except Exception as exc:
         logger.warning("_load_fundamental_data failed (%s) — fundamentals skipped", exc)
  
@@ -1053,13 +1052,13 @@ def run_filter(
     sector_map: dict[str, str] = {}
     try:
         from sheets import read_tab
-        watchlist  = read_tab("watchlist")
+        share_sectors = read_tab("share_sectors")
         sector_map = {
-            r["symbol"].upper(): r.get("sector", "").lower()
-            for r in watchlist if r.get("symbol")
+            r["symbol"].upper(): (r.get("sectorname") or "others").lower()
+            for r in share_sectors if r.get("symbol")
         }
     except Exception as exc:
-        logger.warning("Could not load watchlist: %s", exc)
+        logger.warning("Could not load share_sectors: %s", exc)
 
     # ── Score every symbol ────────────────────────────────────────────────────
     candidates:    list[FilterCandidate] = []

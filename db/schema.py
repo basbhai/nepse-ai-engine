@@ -7,7 +7,6 @@ Edit schema.prisma then run: python -m db.codegen
 TABS: dict[str, str] = {
     "price_history": "price_history",
     "market_breadth": "market_breadth",
-    "watchlist": "watchlist",
     "portfolio": "portfolio",
     "market_log": "market_log",
     "indicators": "indicators",
@@ -15,16 +14,15 @@ TABS: dict[str, str] = {
     "candle_signals": "candle_signals",
     "geo_data": "geopolitical_data",
     "nepal_pulse": "nepal_pulse",
-    "macro_data": "macro_data",
     "nrb_monthly": "nrb_monthly",
     "fundamentals": "fundamentals",
+    "fundamental_beta": "fundamental_beta",
     "sector_momentum": "sector_momentum",
     "corporate_events": "corporate_events",
     "dividend_announcements": "dividend_announcements",
     "dividend_pattern_study": "dividend_pattern_study",
     "trade_journal": "trade_journal",
     "learning_hub": "learning_hub",
-    "news_sentiment": "news_sentiment",
     "backtest_results": "backtest_results",
     "capital_allocation": "capital_allocation",
     "financial_advisor": "financial_advisor",
@@ -33,6 +31,7 @@ TABS: dict[str, str] = {
     "schema": "db_schema",
     "nepse_indices": "nepse_indices",
     "macro_stat_results": "macro_stat_results",
+    "daily_context_log": "daily_context_log",
     "fd_rates": "fd_rates",
     "fd_rate_summary": "fd_rate_summary",
     "international_prices": "international_prices",
@@ -41,8 +40,6 @@ TABS: dict[str, str] = {
     "paper_capital": "paper_capital",
     "paper_portfolio": "paper_portfolio",
     "paper_trade_log": "paper_trade_log",
-    "fundamentals": "fundamentals",
-    "fundamental_beta": "fundamental_beta",
 }
 
 TABLE_DDL: dict[str, str] = {
@@ -97,34 +94,6 @@ TABLE_DDL: dict[str, str] = {
     );
     CREATE INDEX IF NOT EXISTS ix_market_breadth_date
         ON "market_breadth" (date);
-    """,
-
-    "watchlist": """
-    CREATE TABLE IF NOT EXISTS "watchlist" (
-        id SERIAL PRIMARY KEY,
-        symbol TEXT NOT NULL,
-        company TEXT,
-        sector TEXT,
-        added_date TEXT,
-        fundamental_score TEXT,
-        technical_score TEXT,
-        combined_score TEXT,
-        last_updated TEXT,
-        sector_momentum TEXT,
-        dividend_yield_pct TEXT,
-        pe_ratio TEXT,
-        eps TEXT,
-        npl_pct TEXT,
-        car_pct TEXT,
-        week52_high TEXT,
-        week52_low TEXT,
-        pct_from_52w_high TEXT,
-        notes TEXT,
-        inserted_at TIMESTAMPTZ DEFAULT NOW(),
-        CONSTRAINT ux_watchlist_symbol UNIQUE (symbol)
-    );
-    CREATE INDEX IF NOT EXISTS ix_watchlist_sector
-        ON "watchlist" (sector);
     """,
 
     "portfolio": """
@@ -202,8 +171,6 @@ TABLE_DDL: dict[str, str] = {
         exit_price TEXT,
         exit_date TEXT,
         exit_reason TEXT,
-        dual_audit TEXT,
-        gpt_verdict TEXT,
         timestamp TEXT,
         eval_date TEXT,
         eval_geo_score TEXT,
@@ -236,8 +203,6 @@ TABLE_DDL: dict[str, str] = {
         id SERIAL PRIMARY KEY,
         symbol TEXT NOT NULL,
         date TEXT NOT NULL,
-        ltp TEXT,
-        prev_close TEXT,
         volume TEXT,
         history_days TEXT,
         rsi_14 TEXT,
@@ -349,9 +314,6 @@ TABLE_DDL: dict[str, str] = {
         time TEXT,
         policy_rate TEXT,
         policy_rate_change TEXT,
-        ccd_ratio TEXT,
-        crr TEXT,
-        slr TEXT,
         nrb_event TEXT,
         sebon_event TEXT,
         circuit_breaker TEXT,
@@ -364,7 +326,6 @@ TABLE_DDL: dict[str, str] = {
         remittance_yoy_pct TEXT,
         inflation_pct TEXT,
         forex_reserve_months TEXT,
-        trade_deficit_npr TEXT,
         bandh_today TEXT,
         bandh_detail TEXT,
         load_shedding_hrs TEXT,
@@ -377,21 +338,6 @@ TABLE_DDL: dict[str, str] = {
     );
     CREATE INDEX IF NOT EXISTS ix_nepal_pulse_date
         ON "nepal_pulse" (date);
-    """,
-
-    "macro_data": """
-    CREATE TABLE IF NOT EXISTS "macro_data" (
-        id SERIAL PRIMARY KEY,
-        indicator TEXT NOT NULL,
-        value TEXT,
-        unit TEXT,
-        direction TEXT,
-        impact TEXT,
-        last_updated TEXT,
-        source TEXT,
-        inserted_at TIMESTAMPTZ DEFAULT NOW(),
-        CONSTRAINT ux_macro_data_indicator UNIQUE (indicator)
-    );
     """,
 
     "nrb_monthly": """
@@ -427,38 +373,71 @@ TABLE_DDL: dict[str, str] = {
 
     "fundamentals": """
     CREATE TABLE IF NOT EXISTS "fundamentals" (
-        id SERIAL PRIMARY KEY,
-        symbol TEXT NOT NULL,
-        company TEXT,
-        sector TEXT,
-        quarter TEXT,
+        id TEXT NOT NULL PRIMARY KEY,
+        symbol TEXT,
+        stock_id TEXT,
         fiscal_year TEXT,
+        quarter TEXT,
         eps TEXT,
-        pe_ratio TEXT,
-        bvps TEXT,
-        pbv_ratio TEXT,
+        net_worth TEXT,
         roe TEXT,
         roa TEXT,
-        dps TEXT,
-        dividend_yield TEXT,
-        net_profit_npr TEXT,
-        revenue_npr TEXT,
-        net_profit_growth_pct TEXT,
-        revenue_growth_pct TEXT,
-        debt_to_equity TEXT,
-        market_cap_npr TEXT,
-        car_pct TEXT,
-        npl_pct TEXT,
-        nim_pct TEXT,
+        paidup_capital TEXT,
+        reserve TEXT,
+        total_assets TEXT,
+        total_liabilities TEXT,
+        deposit TEXT,
+        loan TEXT,
+        net_interest_income TEXT,
+        operating_profit TEXT,
+        net_profit TEXT,
+        npl TEXT,
+        capital_fund_to_rwa TEXT,
+        cost_of_fund TEXT,
+        base_rate TEXT,
+        interest_spread TEXT,
         cd_ratio TEXT,
-        report_date TEXT,
-        data_source TEXT,
-        inserted_at TIMESTAMPTZ DEFAULT NOW()
+        dps TEXT,
+        sector_id TEXT,
+        promoter_shares TEXT,
+        public_shares TEXT,
+        share_registar TEXT,
+        is_delisted TEXT,
+        is_merged TEXT,
+        core_capital TEXT,
+        gram_value TEXT,
+        prev_quarter_profit TEXT,
+        growth_rate TEXT,
+        close TEXT,
+        discount_rate TEXT,
+        pe_ratio TEXT,
+        peg_value TEXT,
+        scraped_at TEXT,
+        inserted_at TIMESTAMPTZ DEFAULT NOW(),
+        CONSTRAINT ux_fundamentals_symbol_fiscal_year_quarter UNIQUE (symbol, fiscal_year, quarter)
     );
     CREATE INDEX IF NOT EXISTS ix_fundamentals_symbol
         ON "fundamentals" (symbol);
-    CREATE INDEX IF NOT EXISTS ix_fundamentals_quarter_fiscal_year
-        ON "fundamentals" (quarter, fiscal_year);
+    CREATE INDEX IF NOT EXISTS ix_fundamentals_fiscal_year_quarter
+        ON "fundamentals" (fiscal_year, quarter);
+    """,
+
+    "fundamental_beta": """
+    CREATE TABLE IF NOT EXISTS "fundamental_beta" (
+        id TEXT NOT NULL PRIMARY KEY,
+        symbol TEXT,
+        beta TEXT,
+        market_corr TEXT,
+        market_corr_p TEXT,
+        n_months TEXT,
+        period_start TEXT,
+        period_end TEXT,
+        computed_date TEXT,
+        inserted_at TIMESTAMPTZ DEFAULT NOW(),
+        CONSTRAINT ux_fundamental_beta_symbol_computed_date UNIQUE (symbol, computed_date)
+    );
+    CREATE INDEX IF NOT EXISTS ix_fundamental_beta_symbol
+        ON "fundamental_beta" (symbol);
     """,
 
     "sector_momentum": """
@@ -675,6 +654,11 @@ TABLE_DDL: dict[str, str] = {
         alpha_vs_nepse_avg TEXT,
         active TEXT DEFAULT 'true',
         superseded_by TEXT,
+        supersedes_lesson_id TEXT,
+        review_week TEXT,
+        evidence_window_days TEXT,
+        market_log_ids TEXT,
+        gpt_reasoning TEXT,
         last_validated TEXT,
         validation_count TEXT,
         trade_journal_ids TEXT,
@@ -692,26 +676,6 @@ TABLE_DDL: dict[str, str] = {
         ON "learning_hub" (source);
     CREATE INDEX IF NOT EXISTS ix_learning_hub_confidence_level
         ON "learning_hub" (confidence_level);
-    """,
-
-    "news_sentiment": """
-    CREATE TABLE IF NOT EXISTS "news_sentiment" (
-        id SERIAL PRIMARY KEY,
-        date TEXT,
-        overall_score TEXT,
-        banking_score TEXT,
-        hydro_score TEXT,
-        insurance_score TEXT,
-        microfinance_score TEXT,
-        top_positive_news TEXT,
-        top_negative_news TEXT,
-        key_stock_mentions TEXT,
-        source_count TEXT,
-        timestamp TEXT,
-        inserted_at TIMESTAMPTZ DEFAULT NOW()
-    );
-    CREATE INDEX IF NOT EXISTS ix_news_sentiment_date
-        ON "news_sentiment" (date);
     """,
 
     "backtest_results": """
@@ -885,6 +849,45 @@ TABLE_DDL: dict[str, str] = {
         ON "macro_stat_results" (variable);
     CREATE INDEX IF NOT EXISTS ix_macro_stat_results_run_date
         ON "macro_stat_results" (run_date);
+    """,
+
+    "daily_context_log": """
+    CREATE TABLE IF NOT EXISTS "daily_context_log" (
+        id SERIAL PRIMARY KEY,
+        date TEXT NOT NULL,
+        geo_score_eod TEXT,
+        nepal_score_eod TEXT,
+        combined_score_eod TEXT,
+        nepse_index_eod TEXT,
+        nepse_change_pct TEXT,
+        dxy_value TEXT,
+        dxy_change_pct TEXT,
+        market_state TEXT,
+        advancing TEXT,
+        declining TEXT,
+        breadth_score TEXT,
+        total_turnover_npr TEXT,
+        policy_rate TEXT,
+        fd_rate_pct TEXT,
+        lending_rate TEXT,
+        bop_status TEXT,
+        overall_sentiment TEXT,
+        key_events_summary TEXT,
+        nepal_pulse_highlights TEXT,
+        geo_summary TEXT,
+        nrb_macro_summary TEXT,
+        signals_summary TEXT,
+        buy_count TEXT,
+        wait_count TEXT,
+        avoid_count TEXT,
+        source TEXT DEFAULT 'gemini_nightly',
+        backfilled TEXT DEFAULT 'false',
+        created_at TEXT,
+        inserted_at TIMESTAMPTZ DEFAULT NOW(),
+        CONSTRAINT ux_daily_context_log_date UNIQUE (date)
+    );
+    CREATE INDEX IF NOT EXISTS ix_daily_context_log_date
+        ON "daily_context_log" (date);
     """,
 
     "fd_rates": """
@@ -1072,98 +1075,27 @@ TABLE_DDL: dict[str, str] = {
     CREATE INDEX IF NOT EXISTS ix_paper_trade_log_test_mode
         ON "paper_trade_log" (test_mode);
     """,
-
-    "fundamentals": """
-    CREATE TABLE IF NOT EXISTS "fundamentals" (
-        id TEXT NOT NULL PRIMARY KEY,
-        symbol TEXT,
-        stock_id TEXT,
-        fiscal_year TEXT,
-        quarter TEXT,
-        eps TEXT,
-        net_worth TEXT,
-        roe TEXT,
-        roa TEXT,
-        paidup_capital TEXT,
-        reserve TEXT,
-        total_assets TEXT,
-        total_liabilities TEXT,
-        deposit TEXT,
-        loan TEXT,
-        net_interest_income TEXT,
-        operating_profit TEXT,
-        net_profit TEXT,
-        npl TEXT,
-        capital_fund_to_rwa TEXT,
-        cost_of_fund TEXT,
-        base_rate TEXT,
-        interest_spread TEXT,
-        cd_ratio TEXT,
-        dps TEXT,
-        sector_id TEXT,
-        promoter_shares TEXT,
-        public_shares TEXT,
-        share_registar TEXT,
-        is_delisted TEXT,
-        is_merged TEXT,
-        core_capital TEXT,
-        gram_value TEXT,
-        prev_quarter_profit TEXT,
-        growth_rate TEXT,
-        close TEXT,
-        discount_rate TEXT,
-        pe_ratio TEXT,
-        peg_value TEXT,
-        scraped_at TEXT,
-        inserted_at TIMESTAMPTZ DEFAULT NOW(),
-        CONSTRAINT ux_fundamentals_symbol_fiscal_year_quarter UNIQUE (symbol, fiscal_year, quarter)
-    );
-    CREATE INDEX IF NOT EXISTS ix_fundamentals_symbol
-        ON "fundamentals" (symbol);
-    CREATE INDEX IF NOT EXISTS ix_fundamentals_fiscal_year_quarter
-        ON "fundamentals" (fiscal_year, quarter);
-    """,
-
-    "fundamental_beta": """
-    CREATE TABLE IF NOT EXISTS "fundamental_beta" (
-        id TEXT NOT NULL PRIMARY KEY,
-        symbol TEXT,
-        beta TEXT,
-        market_corr TEXT,
-        market_corr_p TEXT,
-        n_months TEXT,
-        period_start TEXT,
-        period_end TEXT,
-        computed_date TEXT,
-        inserted_at TIMESTAMPTZ DEFAULT NOW(),
-        CONSTRAINT ux_fundamental_beta_symbol_computed_date UNIQUE (symbol, computed_date)
-    );
-    CREATE INDEX IF NOT EXISTS ix_fundamental_beta_symbol
-        ON "fundamental_beta" (symbol);
-    """,
 }
 
 TABLE_COLUMNS: dict[str, list[str]] = {
     "price_history": ["date", "symbol", "open", "high", "low", "close", "ltp", "volume", "turnover", "vwap", "prev_close", "transactions", "conf_score", "avg_120d", "avg_180d", "week52_high", "week52_low", "source"],
     "market_breadth": ["date", "advancing", "declining", "unchanged", "new_52w_high", "new_52w_low", "total_turnover_npr", "total_volume", "breadth_score", "market_signal", "nepse_index", "nepse_change_pct", "timestamp"],
-    "watchlist": ["symbol", "company", "sector", "added_date", "fundamental_score", "technical_score", "combined_score", "last_updated", "sector_momentum", "dividend_yield_pct", "pe_ratio", "eps", "npl_pct", "car_pct", "week52_high", "week52_low", "pct_from_52w_high", "notes"],
     "portfolio": ["symbol", "entry_date", "entry_price", "shares", "total_cost", "current_price", "current_value", "pnl_npr", "pnl_pct", "peak_price", "stop_type", "stop_level", "trail_active", "trail_stop", "status", "exit_date", "exit_price", "exit_reason"],
-    "market_log": ["date", "time", "symbol", "sector", "action", "confidence", "entry_price", "stop_loss", "target", "allocation_npr", "shares", "breakeven", "risk_reward", "rsi_14", "ema_20", "ema_50", "ema_200", "macd_line", "macd_signal", "volume", "volume_ratio", "obv_trend", "vwap", "atr_14", "bollinger_upper", "bollinger_lower", "support_level", "resistance_level", "candle_pattern", "conf_score", "pe_ratio", "eps", "roe", "npl_pct", "fundamental_score", "geo_score", "macro_score", "reasoning", "outcome", "actual_pnl", "exit_price", "exit_date", "exit_reason", "dual_audit", "gpt_verdict", "timestamp", "eval_date", "eval_geo_score", "eval_nepal_score", "eval_nepse_index", "eval_market_state", "eval_policy_rate", "eval_fd_rate_pct", "eval_geo_delta", "eval_nepal_delta", "eval_key_news", "eval_price_change_pct", "eval_nepse_change_pct", "eval_alpha", "headlines_politics", "headlines_economy", "headlines_stock"],
-    "indicators": ["symbol", "date", "ltp", "prev_close", "volume", "history_days", "rsi_14", "rsi_signal", "ema_20", "ema_50", "ema_200", "ema_trend", "ema_20_50_cross", "ema_50_200_cross", "macd_line", "macd_signal", "macd_histogram", "macd_cross", "bb_upper", "bb_middle", "bb_lower", "bb_width", "bb_pct_b", "bb_signal", "atr_14", "atr_pct", "obv", "obv_trend", "support_level", "resistance_level", "tech_score", "tech_signal", "timestamp"],
+    "market_log": ["date", "time", "symbol", "sector", "action", "confidence", "entry_price", "stop_loss", "target", "allocation_npr", "shares", "breakeven", "risk_reward", "rsi_14", "ema_20", "ema_50", "ema_200", "macd_line", "macd_signal", "volume", "volume_ratio", "obv_trend", "vwap", "atr_14", "bollinger_upper", "bollinger_lower", "support_level", "resistance_level", "candle_pattern", "conf_score", "pe_ratio", "eps", "roe", "npl_pct", "fundamental_score", "geo_score", "macro_score", "reasoning", "outcome", "actual_pnl", "exit_price", "exit_date", "exit_reason", "timestamp", "eval_date", "eval_geo_score", "eval_nepal_score", "eval_nepse_index", "eval_market_state", "eval_policy_rate", "eval_fd_rate_pct", "eval_geo_delta", "eval_nepal_delta", "eval_key_news", "eval_price_change_pct", "eval_nepse_change_pct", "eval_alpha", "headlines_politics", "headlines_economy", "headlines_stock"],
+    "indicators": ["symbol", "date", "volume", "history_days", "rsi_14", "rsi_signal", "ema_20", "ema_50", "ema_200", "ema_trend", "ema_20_50_cross", "ema_50_200_cross", "macd_line", "macd_signal", "macd_histogram", "macd_cross", "bb_upper", "bb_middle", "bb_lower", "bb_width", "bb_pct_b", "bb_signal", "atr_14", "atr_pct", "obv", "obv_trend", "support_level", "resistance_level", "tech_score", "tech_signal", "timestamp"],
     "candle_patterns": ["pattern_name", "type", "tier", "nepal_win_rate_pct", "sample_size", "avg_gain_pct", "best_sector", "best_rsi_range", "volume_condition", "reliability", "notes"],
     "candle_signals": ["symbol", "date", "pattern_name", "signal", "tier", "confidence", "volume_confirmed", "candles_used", "description", "timestamp"],
     "geopolitical_data": ["date", "time", "crude_price", "crude_change_pct", "vix", "vix_level", "nifty", "nifty_change_pct", "dxy", "gold_price", "geo_score", "status", "key_event", "timestamp"],
-    "nepal_pulse": ["date", "time", "policy_rate", "policy_rate_change", "ccd_ratio", "crr", "slr", "nrb_event", "sebon_event", "circuit_breaker", "ipo_fpo_active", "ipo_fpo_detail", "govt_stability", "political_event", "budget_season", "budget_event", "remittance_yoy_pct", "inflation_pct", "forex_reserve_months", "trade_deficit_npr", "bandh_today", "bandh_detail", "load_shedding_hrs", "nepal_score", "nepal_status", "key_event", "source", "timestamp"],
-    "macro_data": ["indicator", "value", "unit", "direction", "impact", "last_updated", "source"],
+    "nepal_pulse": ["date", "time", "policy_rate", "policy_rate_change", "nrb_event", "sebon_event", "circuit_breaker", "ipo_fpo_active", "ipo_fpo_detail", "govt_stability", "political_event", "budget_season", "budget_event", "remittance_yoy_pct", "inflation_pct", "forex_reserve_months", "bandh_today", "bandh_detail", "load_shedding_hrs", "nepal_score", "nepal_status", "key_event", "source", "timestamp"],
     "nrb_monthly": ["period", "fiscal_year", "month_number", "is_annual", "nepse_index", "policy_rate", "bank_rate", "crr_percentage", "slr_percentage", "cpi_inflation", "credit_growth_rate", "liquidity_injected_billion", "remittance_yoy_change_pct", "fx_reserve_months", "bop_overall_balance_usd_m", "bop_current_account_usd_m", "bop_status", "bop_trend", "overall_sentiment", "forward_guidance", "key_risks"],
-    "fundamentals": ["symbol", "company", "sector", "quarter", "fiscal_year", "eps", "pe_ratio", "bvps", "pbv_ratio", "roe", "roa", "dps", "dividend_yield", "net_profit_npr", "revenue_npr", "net_profit_growth_pct", "revenue_growth_pct", "debt_to_equity", "market_cap_npr", "car_pct", "npl_pct", "nim_pct", "cd_ratio", "report_date", "data_source"],
+    "fundamentals": ["id", "symbol", "stock_id", "fiscal_year", "quarter", "eps", "net_worth", "roe", "roa", "paidup_capital", "reserve", "total_assets", "total_liabilities", "deposit", "loan", "net_interest_income", "operating_profit", "net_profit", "npl", "capital_fund_to_rwa", "cost_of_fund", "base_rate", "interest_spread", "cd_ratio", "dps", "sector_id", "promoter_shares", "public_shares", "share_registar", "is_delisted", "is_merged", "core_capital", "gram_value", "prev_quarter_profit", "growth_rate", "close", "discount_rate", "pe_ratio", "peg_value", "scraped_at"],
+    "fundamental_beta": ["id", "symbol", "beta", "market_corr", "market_corr_p", "n_months", "period_start", "period_end", "computed_date"],
     "sector_momentum": ["date", "sector", "weekly_return_pct", "monthly_return_pct", "avg_volume_change_pct", "momentum_score", "status", "top_stock_1", "top_stock_2", "catalyst", "last_updated"],
     "corporate_events": ["symbol", "company", "event_type", "announcement_date", "event_date", "book_close_date", "details", "expected_impact_pct", "days_until_event", "status", "source"],
     "dividend_announcements": ["symbol", "company", "sector", "announcement_date", "fiscal_year", "dividend_type", "cash_dividend_pct", "bonus_share_pct", "total_dividend_pct", "book_close_date", "direction", "prev_dividend_pct", "source", "scraped_at"],
     "dividend_pattern_study": ["symbol", "announcement_date", "sector", "direction", "price_drift_d10", "price_drift_d6", "price_drift_d4", "price_drift_d2", "vol_ratio_d6", "vol_ratio_d4", "vol_ratio_d2", "vol_ratio_d1", "rsi_d6", "rsi_d4", "obv_trend_d6_to_d1", "atr_ratio_d6", "macd_state_d4", "return_d0", "return_d1", "return_d2_d9", "vs_nepse_d1", "pattern_detected", "pattern_type", "pattern_strength", "entry_feasible", "optimal_entry_day", "in_dividend_season", "event_type", "fiscal_year", "dividend_type", "run_date"],
     "trade_journal": ["created_at", "symbol", "sector", "paper_mode", "entry_date", "entry_price", "shares", "allocation_npr", "primary_signal", "secondary_signal", "candle_pattern", "confidence_at_entry", "rsi_entry", "macd_hist_entry", "bb_signal_entry", "ema_trend_entry", "obv_trend_entry", "conf_score_entry", "volume_ratio_entry", "atr_pct_entry", "market_state_entry", "geo_score_entry", "nepal_score_entry", "combined_geo_entry", "nepse_index_entry", "stop_loss_planned", "target_planned", "hold_days_planned", "exit_date", "exit_price", "exit_reason", "market_state_exit", "geo_score_exit", "nepal_score_exit", "combined_geo_exit", "nepse_index_exit", "hold_days_actual", "return_pct", "pnl_npr", "result", "geo_delta", "nepal_delta", "combined_geo_delta", "nepse_return_pct", "alpha_vs_nepse", "loss_cause", "lesson_ids"],
-    "learning_hub": ["created_at", "lesson_type", "source", "symbol", "sector", "applies_to", "condition", "finding", "action", "trade_count", "win_count", "loss_count", "win_rate", "avg_return_pct", "avg_pnl_npr", "confidence_level", "loss_cause_primary", "geo_delta_avg", "nepal_delta_avg", "alpha_vs_nepse_avg", "active", "superseded_by", "last_validated", "validation_count", "trade_journal_ids"],
-    "news_sentiment": ["date", "overall_score", "banking_score", "hydro_score", "insurance_score", "microfinance_score", "top_positive_news", "top_negative_news", "key_stock_mentions", "source_count", "timestamp"],
+    "learning_hub": ["created_at", "lesson_type", "source", "symbol", "sector", "applies_to", "condition", "finding", "action", "trade_count", "win_count", "loss_count", "win_rate", "avg_return_pct", "avg_pnl_npr", "confidence_level", "loss_cause_primary", "geo_delta_avg", "nepal_delta_avg", "alpha_vs_nepse_avg", "active", "superseded_by", "supersedes_lesson_id", "review_week", "evidence_window_days", "market_log_ids", "gpt_reasoning", "last_validated", "validation_count", "trade_journal_ids"],
     "backtest_results": ["test_name", "parameter_tested", "optimal_value", "win_rate_at_optimal", "sample_size", "confidence", "date_run", "notes", "sim_mode", "period_start", "period_end", "total_trades", "wins", "losses", "win_rate_pct", "profit_factor", "annual_ret_pct", "total_pnl_npr", "total_fees_npr", "sharpe_ratio", "max_drawdown_pct", "alpha_vs_nepse", "signal_breakdown"],
     "capital_allocation": ["date", "market_state", "nepse_vs_200dma", "stocks_pct", "fd_pct", "savings_pct", "od_pct", "fd_rate_used", "expected_return", "reasoning", "review_date", "status"],
     "financial_advisor": ["date", "recommendation_type", "market_phase", "confidence_pct", "capital_in_stocks_pct", "capital_in_fd_pct", "capital_in_savings_pct", "capital_in_od_pct", "three_month_outlook", "expected_return_pct", "fd_rate_used", "trigger_to_change", "review_date", "actual_outcome", "was_forecast_correct"],
@@ -1172,6 +1104,7 @@ TABLE_COLUMNS: dict[str, list[str]] = {
     "db_schema": ["migration_id", "name", "applied_at", "rolled_back_at", "status", "notes"],
     "nepse_indices": ["date", "index_id", "index_name", "current_value", "high", "low", "change_abs", "change_pct", "week52_high", "week52_low", "turnover", "volume", "transactions", "source"],
     "macro_stat_results": ["variable", "variable_label", "lag_months", "spearman_rho", "p_value", "p_corrected", "significant", "effect_size", "n_pairs", "rho_3m_forward", "p_3m_forward", "n_pairs_3m", "n_total_tests", "alpha_corrected", "run_date", "notes"],
+    "daily_context_log": ["date", "geo_score_eod", "nepal_score_eod", "combined_score_eod", "nepse_index_eod", "nepse_change_pct", "dxy_value", "dxy_change_pct", "market_state", "advancing", "declining", "breadth_score", "total_turnover_npr", "policy_rate", "fd_rate_pct", "lending_rate", "bop_status", "overall_sentiment", "key_events_summary", "nepal_pulse_highlights", "geo_summary", "nrb_macro_summary", "signals_summary", "buy_count", "wait_count", "avoid_count", "source", "backfilled", "created_at"],
     "fd_rates": ["fetch_date", "institute_code", "institute_name", "product_name", "interest_rate", "interest_pct", "tenure_label", "tenure_months", "tenure_category", "minimum_balance", "institute_type", "source"],
     "fd_rate_summary": ["fetch_date", "avg_rate_pct", "max_rate_pct", "min_rate_pct", "benchmark_rate_pct", "benchmark_products", "best_bank_name", "best_bank_rate", "best_tenure", "rate_vs_prev_pct", "rate_direction", "fd_score_signal", "total_products"],
     "international_prices": ["id", "date", "variable_name", "close_price", "source"],
@@ -1180,6 +1113,4 @@ TABLE_COLUMNS: dict[str, list[str]] = {
     "paper_capital": ["telegram_id", "starting_capital", "current_capital", "total_realised_pnl", "total_fees_paid", "total_cgt_paid", "total_trades", "total_wins", "total_losses", "last_updated", "test_mode"],
     "paper_portfolio": ["telegram_id", "symbol", "status", "total_shares", "wacc", "total_cost", "first_buy_date", "last_buy_date", "buy_count", "exit_date", "exit_price", "exit_shares", "gross_pnl", "sell_fees", "cgt_paid", "net_pnl", "result", "created_at", "updated_at", "test_mode", "audited"],
     "paper_trade_log": ["telegram_id", "symbol", "action", "shares", "price", "gross_amount", "brokerage", "sebon", "dp_fee", "cgt", "total_fees", "net_amount", "capital_before", "capital_after", "wacc_before", "wacc_after", "note", "created_at", "test_mode"],
-    "fundamentals": ["id", "symbol", "stock_id", "fiscal_year", "quarter", "eps", "net_worth", "roe", "roa", "paidup_capital", "reserve", "total_assets", "total_liabilities", "deposit", "loan", "net_interest_income", "operating_profit", "net_profit", "npl", "capital_fund_to_rwa", "cost_of_fund", "base_rate", "interest_spread", "cd_ratio", "dps", "sector_id", "promoter_shares", "public_shares", "share_registar", "is_delisted", "is_merged", "core_capital", "gram_value", "prev_quarter_profit", "growth_rate", "close", "discount_rate", "pe_ratio", "peg_value", "scraped_at"],
-    "fundamental_beta": ["id", "symbol", "beta", "market_corr", "market_corr_p", "n_months", "period_start", "period_end", "computed_date"],
 }

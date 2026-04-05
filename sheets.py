@@ -700,13 +700,20 @@ def get_pending_trades() -> list[dict]:
 
 
 def get_watchlist() -> list[dict]:
-    """Return full watchlist."""
-    return read_tab("watchlist")
+    """
+    Return share_sectors as sector reference.
+    Legacy name kept for backward compatibility.
+    Watchlist table was dropped — share_sectors is the source of truth.
+    """
+    return read_tab("share_sectors")
 
 
 def get_watchlist_symbols() -> list[str]:
-    """Return just the symbol list from watchlist."""
-    rows = get_watchlist()
+    """
+    Return all stock symbols from share_sectors.
+    Legacy name kept for backward compatibility.
+    """
+    rows = read_tab("share_sectors")
     return [r["symbol"] for r in rows if r.get("symbol")]
 
 

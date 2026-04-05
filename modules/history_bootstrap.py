@@ -776,12 +776,12 @@ def print_status() -> None:
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CLI
-#   python history_bootstrap.py --scrape
-#   python history_bootstrap.py --scrape --dry-run
-#   python history_bootstrap.py --status
-#   python history_bootstrap.py --history --from 2019-01-01 --to 2019-12-31
-#   python history_bootstrap.py --history --from 2020-01-01 --to 2020-12-31 --dry-run
-#   python history_bootstrap.py --history --from 2021-01-01 --to 2021-12-31 --force
+#   python -m modules.history_bootstrap --scrape
+#   python -m modules.history_bootstrap --scrape --dry-run
+#   python -m modules.history_bootstrap --status
+#   python -m modules.history_bootstrap --history --from 2019-01-01 --to 2019-12-31
+#   python -m modules.history_bootstrap --history --from 2020-01-01 --to 2020-12-31 --dry-run
+#   python -m modules.history_bootstrap --history --from 2021-01-01 --to 2021-12-31 --force
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _get_arg(args: list, flag: str) -> Optional[str]:
