@@ -10,3 +10,8 @@ Thumbs.db
 nrb_pdfs/
 *.csv
 research/
+
+*.sql/
+
+SQL backup/
+
