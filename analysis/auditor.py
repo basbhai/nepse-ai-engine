@@ -38,7 +38,7 @@ import sys
 from datetime import datetime, date
 from typing import Optional
 
-from sheets import get_setting, write_row, read_tab, upsert_row, update_setting
+from sheets import get_setting, write_row, read_tab, upsert_row, update_setting, update_row
 
 try:
     from modules.geo_sentiment import get_latest_geo_score
@@ -484,7 +484,7 @@ def _update_financials_kpis():
         ]
 
         for kpi_name, current_value, target_value, alert_level, status in kpis:
-            upsert_row("financials", {"kpi_name": kpi_name}, {
+            upsert_row("financials", {
                 "kpi_name":      kpi_name,
                 "current_value": current_value,
                 "target_value":  target_value or "",
@@ -492,20 +492,20 @@ def _update_financials_kpis():
                 "status":        status,
                 "last_updated":  now,
                 "notes":         f"Auto-updated by auditor.py on {now}",
-            })
+            }, ["kpi_name"])
 
         log.info("KPIs — trades=%d | win_rate=%.1f%% | pnl=NPR %.0f | loss_streak=%d",
                  total, win_rate, total_pnl, loss_streak)
 
         if loss_streak >= 7:
             log.critical("CIRCUIT BREAKER — %d consecutive losses.", loss_streak)
-            upsert_row("settings", {"key": "CIRCUIT_BREAKER"}, {
+            upsert_row("settings", {
                 "key":          "CIRCUIT_BREAKER",
                 "value":        "true",
                 "description":  f"Auto-triggered by auditor.py — {loss_streak} consecutive losses",
                 "last_updated": now,
                 "set_by":       "auditor.py",
-            })
+            }, ["key"])
             send_telegram(
                 f"🚨 CIRCUIT BREAKER TRIGGERED\n"
                 f"{loss_streak} consecutive losses.\n"
@@ -750,7 +750,7 @@ def run_eod_audit(dry_run: bool = False) -> dict:
             # Update trailing stop
             trail_updates = _update_trailing_stop(position, current_price)
             if trail_updates and not dry_run:
-                upsert_row("portfolio", {"id": position["id"]}, trail_updates)
+                update_row("portfolio", trail_updates, where={"id": position["id"]})
                 position.update(trail_updates)
 
             # Check exit conditions
@@ -772,24 +772,24 @@ def run_eod_audit(dry_run: bool = False) -> dict:
                         current_price,
                         float(position.get("shares") or 0),
                     )
-                    upsert_row("portfolio", {"id": position["id"]}, {
+                    update_row("portfolio", {
                         "status":      "CLOSED",
                         "exit_date":   today,
                         "exit_price":  str(current_price),
                         "exit_reason": exit_context["exit_reason"],
                         "pnl_npr":     str(final_pnl),
                         "pnl_pct":     str(deltas["return_pct"]),
-                    })
+                    }, where={"id": position["id"]})
 
                     try:
                         result = _classify_result(deltas["return_pct"])
-                        upsert_row("market_log", {"symbol": symbol, "action": "BUY"}, {
+                        update_row("market_log", {
                             "outcome":     result,
                             "exit_date":   today,
                             "exit_price":  str(current_price),
                             "exit_reason": exit_context["exit_reason"],
                             "actual_pnl":  str(deltas["return_pct"]),
-                        })
+                        }, where={"symbol": symbol, "action": "BUY", "outcome": "PENDING"})
                     except Exception as e:
                         log.warning("market_log update failed for %s: %s", symbol, e)
 
@@ -821,11 +821,11 @@ def run_eod_audit(dry_run: bool = False) -> dict:
                         unreal_pct = round((current_price - entry_price) / entry_price * 100, 2)
                         unreal_npr = _compute_pnl_npr(entry_price, current_price,
                                                        float(position.get("shares") or 0))
-                        upsert_row("portfolio", {"id": position["id"]}, {
+                        update_row("portfolio", {
                             "current_price": str(current_price),
                             "pnl_pct":       str(unreal_pct),
                             "pnl_npr":       str(unreal_npr),
-                        })
+                        }, where={"id": position["id"]})
                 still_open.append(position)
                 summary["held"] += 1
 
@@ -1016,13 +1016,13 @@ def run_paper_audit(dry_run: bool = False) -> dict:
                         target_row = sorted(market_rows,
                                             key=lambda x: x.get("date", ""),
                                             reverse=True)[0]
-                        upsert_row("market_log", {"id": target_row["id"]}, {
+                        update_row("market_log", {
                             "outcome":     result,
                             "exit_date":   exit_date,
                             "exit_price":  str(exit_price),
                             "exit_reason": exit_context["exit_reason"],
                             "actual_pnl":  str(return_pct),
-                        })
+                        }, where={"id": target_row["id"]})
                         log.info("market_log updated for %s → %s", symbol, result)
                     else:
                         log.info("No matching market_log BUY row for %s in date range", symbol)
