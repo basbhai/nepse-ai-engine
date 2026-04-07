@@ -881,6 +881,11 @@ model daily_context_log {
   wait_count           Text             // count of WAIT signals
   avoid_count          Text             // count of AVOID signals
 
+  gate_miss_count        Text    // how many symbols blocked today
+  gate_top_category      Text    // CONF_SCORE | TECH_SCORE | RSI_OVERBOUGHT etc
+  gate_false_block_pct   Text    // rolling 30d false block rate at summary time
+  signals_avg_confidence Text    // avg Claude confidence across all signals today
+
   // ── Metadata
   source               Text  @default("gemini_nightly")
   backfilled           Text  @default("false")  // true if generated retroactively
@@ -1056,4 +1061,70 @@ model paper_trade_log {
   @@index([telegram_id])
   @@index([symbol])
   @@index([test_mode])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Gate Missed details
+// ─────────────────────────────────────────────────────────────────────────────
+
+
+model gate_misses {
+  id                     Serial
+  date                   Text!
+  symbol                 Text!
+  sector                 Text
+  gate_reason            Text      // raw reason string: "CONF=42<50"
+  gate_category          Text      // normalized: CONF_SCORE | TECH_SCORE | etc
+  price_at_block         Text
+  market_state           Text
+  tech_score             Text
+  conf_score             Text
+  composite_score_would_be Text
+  tracking_days          Text  @default("0")
+  outcome                Text      // NULL until stamped: FALSE_BLOCK | CORRECT_BLOCK | NEUTRAL
+  outcome_return_pct     Text
+  outcome_stamped_at     Text
+
+
+  @@unique([symbol, date])
+  @@index([date])
+  @@index([outcome])
+  @@index([gate_category])
+}
+
+model gate_proposals {
+  id                Serial
+  review_week       Text
+  proposal_number   Text
+  parameter_name    Text
+  current_value     Text
+  proposed_value    Text
+  reasoning         Text
+  false_block_rate  Text
+  sample_size       Text
+  status            Text  @default("PENDING")
+  decided_at        Text
+  applied_at        Text
+
+
+  @@index([review_week])
+  @@index([status])
+}
+
+model claude_audit {
+  id                 Serial
+  review_week        Text!  @unique
+  buy_count          Text
+  buy_win_rate       Text
+  buy_avg_return     Text
+  wait_count         Text
+  wait_accuracy      Text
+  avoid_count        Text
+  avoid_accuracy     Text
+  false_avoid_rate   Text
+  missed_entry_rate  Text
+  overall_accuracy   Text
+  macro_accuracy     Text
+  audit_summary      Text
+
 }

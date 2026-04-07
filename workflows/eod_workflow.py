@@ -86,11 +86,20 @@ def run(dry_run: bool = False, skip_guard: bool = False) -> int:
 
     # ── Step 2: Auditor ───────────────────────────────────────────────────────
     def _auditor():
-        from analysis.auditor import run_eod
-        run_eod(paper_mode=paper_mode, dry_run=False)
+        from analysis.auditor import run_eod_audit, run_paper_audit
+        if paper_mode:
+            run_paper_audit(dry_run=False)
+        else:
+            run_eod_audit(dry_run=False)
     results["auditor"] = _step(
         f"auditor ({'paper' if paper_mode else 'live'})", _auditor, dry_run
     )
+
+    # Add gate miss tracker AFTER auditor
+    def _gate_tracker():
+        from analysis.gate_miss_tracker import run_eod
+        run_eod(dry_run=False)
+    results["gate_tracker"] = _step("gate_miss_tracker", _gate_tracker, dry_run)
 
     # ── Step 3: Daily context summarizer (if built) ───────────────────────────
     def _summarizer():
