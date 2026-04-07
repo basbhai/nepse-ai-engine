@@ -1,0 +1,21 @@
+[Unit]
+Description=NEPSE AI — Trading Loop (every 6 min during market hours)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=%i
+WorkingDirectory=/opt/nepse-engine
+# Default: paper mode. Change to -live when ready.
+ExecStart=/opt/nepse-engine/venv/bin/python main.py -paper
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nepse-trading
+EnvironmentFile=/opt/nepse-engine/.env
+
+# Allow up to 5 min runtime per cycle (Gemini + Claude can be slow)
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

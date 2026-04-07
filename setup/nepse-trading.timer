@@ -1,0 +1,58 @@
+[Unit]
+Description=NEPSE AI — Trading Loop Timer (every 6 min, 10:45 AM–3:00 PM NST)
+
+[Timer]
+# Market hours: 10:45 AM–3:00 PM NST = 05:00–09:15 UTC
+# Run every 6 minutes within that window.
+# calendar_guard inside main.py will exit cleanly outside market hours —
+# so it's safe to run this timer slightly wider (05:00–09:18 UTC).
+OnCalendar=Sun,Mon,Tue,Wed,Thu 05:00:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 05:06:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 05:12:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 05:18:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 05:24:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 05:30:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 05:36:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 05:42:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 05:48:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 05:54:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 06:00:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 06:06:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 06:12:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 06:18:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 06:24:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 06:30:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 06:36:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 06:42:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 06:48:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 06:54:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 07:00:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 07:06:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 07:12:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 07:18:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 07:24:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 07:30:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 07:36:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 07:42:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 07:48:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 07:54:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 08:00:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 08:06:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 08:12:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 08:18:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 08:24:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 08:30:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 08:36:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 08:42:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 08:48:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 08:54:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 09:00:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 09:06:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 09:12:00 UTC
+OnCalendar=Sun,Mon,Tue,Wed,Thu 09:18:00 UTC
+
+Persistent=false
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

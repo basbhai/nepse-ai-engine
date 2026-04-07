@@ -1,0 +1,12 @@
+[Unit]
+Description=NEPSE AI — Morning Workflow Timer (10:30 AM NST = 04:45 UTC, Sun–Thu)
+
+[Timer]
+# NST = UTC+5:45 → 10:30 AM NST = 04:45 UTC
+# Sun=0, Mon=1, Tue=2, Wed=3, Thu=4 in systemd OnCalendar
+OnCalendar=Sun,Mon,Tue,Wed,Thu 04:45:00 UTC
+Persistent=true
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

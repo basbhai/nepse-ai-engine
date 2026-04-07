@@ -226,6 +226,9 @@ class FilterCandidate:
     primary_signal:   str   = ""    # dominant trigger: MACD / BB / SMA / OBV_MOMENTUM / RSI
     suggested_hold:   int   = 17    # days, Karki 2023
 
+    fundamental_adj:  float = 0.0
+    fundamental_reason: str   = ""
+
     timestamp: str = field(default_factory=lambda:
                     datetime.now(tz=NST).strftime("%Y-%m-%d %H:%M:%S"))
 
@@ -310,8 +313,8 @@ def _load_context() -> dict:
 
 def _check_hard_gates(ctx: dict) -> tuple[bool, str]:
     """System-level gates. Returns (passed, reason)."""
-    if ctx["bandh_today"] == "YES":
-        return False, "BANDH_TODAY — zero liquidity"
+    # if ctx["bandh_today"] == "YES":
+    #     return False, "BANDH_TODAY — zero liquidity"
     if ctx["market_state"] == "CRISIS":
         return False, "MARKET_STATE=CRISIS — capital preservation"
     if ctx["combined_geo"] <= -10:
@@ -331,6 +334,12 @@ def _check_symbol_gates(
     ltp = float(price_row.ltp or price_row.close or 0)
     if ltp <= 0:
         return False, "NO_LTP"
+    sym_upper = symbol.upper()
+    if any(sym_upper.endswith(sfx) for sfx in _MUTUAL_FUND_SUFFIXES):
+        return False, f"MUTUAL_FUND_SUFFIX"
+    if sym_upper in _MUTUAL_FUND_KEYWORDS:
+        return False, f"MUTUAL_FUND_KEYWORD"
+
 
     history_days = int(ind.get("history_days", 0) or 0)
     if history_days < MIN_HISTORY_DAYS:
@@ -709,7 +718,17 @@ _DEBENTURE_SUFFIXES = (
     "D80", "D81", "D82", "D83", "D84", "D85", "D86", "D87", "D88", "D89", "D90",
     "D2082", "D2083", "D2084", "D2085",
 )
- 
+
+# Mutual fund + scheme suffixes — exclude from trading signals
+_MUTUAL_FUND_SUFFIXES = (
+    "GF", "MF", "BF", "SF", "OF",   # growth fund, mutual fund, balanced, savings, open-ended
+)
+
+# Mutual fund name keywords (belt-and-suspenders)
+_MUTUAL_FUND_KEYWORDS = (
+    "NIBLGF", "NMBSF", "NMBHF", "LBSLGF", "SIGS", "NMB50", "NMBD",
+    "GIMES1", "CMF1", "CMF2", "LEMF",
+)
  
 def _load_fundamental_data() -> tuple[dict, dict]:
     """

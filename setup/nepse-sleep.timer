@@ -1,0 +1,13 @@
+[Unit]
+Description=NEPSE AI — Sleep Scheduler Timer
+
+[Timer]
+# Weekdays (Mon–Thu): sleep at 3:45 PM NST = 10:00 UTC
+OnCalendar=Mon,Tue,Wed,Thu 10:00:00 UTC
+# Sunday: sleep at 6:15 PM NST = 12:30 UTC (after weekly review)
+OnCalendar=Sun 12:30:00 UTC
+Persistent=false
+AccuracySec=60s
+
+[Install]
+WantedBy=timers.target

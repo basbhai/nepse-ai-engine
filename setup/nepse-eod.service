@@ -1,0 +1,18 @@
+[Unit]
+Description=NEPSE AI — EOD Workflow (auditor, recommendation tracker)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=%i
+WorkingDirectory=/opt/nepse-engine
+ExecStart=/opt/nepse-engine/venv/bin/python -m workflows.eod_workflow
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nepse-eod
+EnvironmentFile=/opt/nepse-engine/.env
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
