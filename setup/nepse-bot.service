@@ -1,0 +1,23 @@
+[Unit]
+Description=NEPSE AI — Telegram Bot (persistent paper trading interface)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/opt/nepse-engine
+ExecStart=/opt/nepse-engine/venv/bin/python -m modules.telegram_bot
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nepse-bot
+EnvironmentFile=/opt/nepse-engine/.env
+
+# Auto-restart on failure — wait 10s between attempts
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Install]
+WantedBy=multi-user.target

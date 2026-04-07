@@ -133,7 +133,7 @@ def _load_relevant_lessons(symbols: list[str], limit: int = 8) -> list[str]:
             """,
             (limit,)
         )
-        for r in rows:
+        for r in (rows or []):
             sym     = r.get("symbol", "?")
             pattern = r.get("pattern", "")
             lesson  = r.get("lesson", "")[:120]

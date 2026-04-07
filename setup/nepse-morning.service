@@ -1,0 +1,17 @@
+[Unit]
+Description=NEPSE AI — Morning Workflow (history, indicators, briefing)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=%i
+WorkingDirectory=/opt/nepse-engine
+ExecStart=/opt/nepse-engine/venv/bin/python -m workflows.morning_workflow
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nepse-morning
+EnvironmentFile=/opt/nepse-engine/.env
+
+[Install]
+WantedBy=multi-user.target

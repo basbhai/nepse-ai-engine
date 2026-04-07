@@ -1,0 +1,11 @@
+[Unit]
+Description=NEPSE AI — Weekly Review Timer (Sunday 5:45 PM NST = 12:00 UTC)
+
+[Timer]
+# Sunday 5:45 PM NST = 12:00 UTC Sunday
+OnCalendar=Sun 12:00:00 UTC
+Persistent=true
+AccuracySec=120s
+
+[Install]
+WantedBy=timers.target

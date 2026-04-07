@@ -174,8 +174,8 @@ def _load_macro_context() -> dict:
     """Read NRB macro + FD rate from Neon."""
     try:
         from sheets import get_setting, run_raw_sql
-        rows   = run_raw_sql("SELECT kpi_name, current_value FROM macro_data ORDER BY updated_at DESC LIMIT 30", ())
-        macro  = {r["kpi_name"]: r["current_value"] for r in rows}
+        rows = run_raw_sql("SELECT indicator, value FROM nrb_monthly ORDER BY id DESC LIMIT 30", ())
+        macro = {r["indicator"]: r["value"] for r in rows}
         fd_rate = get_setting("FD_RATE_PCT", "8.5")
         return {
             "policy_rate":          macro.get("Policy_Rate",          "?"),
