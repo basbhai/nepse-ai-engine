@@ -40,6 +40,9 @@ TABS: dict[str, str] = {
     "paper_capital": "paper_capital",
     "paper_portfolio": "paper_portfolio",
     "paper_trade_log": "paper_trade_log",
+    "gate_misses": "gate_misses",
+    "gate_proposals": "gate_proposals",
+    "claude_audit": "claude_audit",
 }
 
 TABLE_DDL: dict[str, str] = {
@@ -880,6 +883,10 @@ TABLE_DDL: dict[str, str] = {
         buy_count TEXT,
         wait_count TEXT,
         avoid_count TEXT,
+        gate_miss_count TEXT,
+        gate_top_category TEXT,
+        gate_false_block_pct TEXT,
+        signals_avg_confidence TEXT,
         source TEXT DEFAULT 'gemini_nightly',
         backfilled TEXT DEFAULT 'false',
         created_at TEXT,
@@ -1075,6 +1082,77 @@ TABLE_DDL: dict[str, str] = {
     CREATE INDEX IF NOT EXISTS ix_paper_trade_log_test_mode
         ON "paper_trade_log" (test_mode);
     """,
+
+    "gate_misses": """
+    CREATE TABLE IF NOT EXISTS "gate_misses" (
+        id SERIAL PRIMARY KEY,
+        date TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        sector TEXT,
+        gate_reason TEXT,
+        gate_category TEXT,
+        price_at_block TEXT,
+        market_state TEXT,
+        tech_score TEXT,
+        conf_score TEXT,
+        composite_score_would_be TEXT,
+        tracking_days TEXT DEFAULT '0',
+        outcome TEXT,
+        outcome_return_pct TEXT,
+        outcome_stamped_at TEXT,
+        inserted_at TIMESTAMPTZ DEFAULT NOW(),
+        CONSTRAINT ux_gate_misses_symbol_date UNIQUE (symbol, date)
+    );
+    CREATE INDEX IF NOT EXISTS ix_gate_misses_date
+        ON "gate_misses" (date);
+    CREATE INDEX IF NOT EXISTS ix_gate_misses_outcome
+        ON "gate_misses" (outcome);
+    CREATE INDEX IF NOT EXISTS ix_gate_misses_gate_category
+        ON "gate_misses" (gate_category);
+    """,
+
+    "gate_proposals": """
+    CREATE TABLE IF NOT EXISTS "gate_proposals" (
+        id SERIAL PRIMARY KEY,
+        review_week TEXT,
+        proposal_number TEXT,
+        parameter_name TEXT,
+        current_value TEXT,
+        proposed_value TEXT,
+        reasoning TEXT,
+        false_block_rate TEXT,
+        sample_size TEXT,
+        status TEXT DEFAULT 'PENDING',
+        decided_at TEXT,
+        applied_at TEXT,
+        inserted_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS ix_gate_proposals_review_week
+        ON "gate_proposals" (review_week);
+    CREATE INDEX IF NOT EXISTS ix_gate_proposals_status
+        ON "gate_proposals" (status);
+    """,
+
+    "claude_audit": """
+    CREATE TABLE IF NOT EXISTS "claude_audit" (
+        id SERIAL PRIMARY KEY,
+        review_week TEXT NOT NULL,
+        buy_count TEXT,
+        buy_win_rate TEXT,
+        buy_avg_return TEXT,
+        wait_count TEXT,
+        wait_accuracy TEXT,
+        avoid_count TEXT,
+        avoid_accuracy TEXT,
+        false_avoid_rate TEXT,
+        missed_entry_rate TEXT,
+        overall_accuracy TEXT,
+        macro_accuracy TEXT,
+        audit_summary TEXT,
+        inserted_at TIMESTAMPTZ DEFAULT NOW(),
+        CONSTRAINT ux_claude_audit_review_week UNIQUE (review_week)
+    );
+    """,
 }
 
 TABLE_COLUMNS: dict[str, list[str]] = {
@@ -1104,7 +1182,7 @@ TABLE_COLUMNS: dict[str, list[str]] = {
     "db_schema": ["migration_id", "name", "applied_at", "rolled_back_at", "status", "notes"],
     "nepse_indices": ["date", "index_id", "index_name", "current_value", "high", "low", "change_abs", "change_pct", "week52_high", "week52_low", "turnover", "volume", "transactions", "source"],
     "macro_stat_results": ["variable", "variable_label", "lag_months", "spearman_rho", "p_value", "p_corrected", "significant", "effect_size", "n_pairs", "rho_3m_forward", "p_3m_forward", "n_pairs_3m", "n_total_tests", "alpha_corrected", "run_date", "notes"],
-    "daily_context_log": ["date", "geo_score_eod", "nepal_score_eod", "combined_score_eod", "nepse_index_eod", "nepse_change_pct", "dxy_value", "dxy_change_pct", "market_state", "advancing", "declining", "breadth_score", "total_turnover_npr", "policy_rate", "fd_rate_pct", "lending_rate", "bop_status", "overall_sentiment", "key_events_summary", "nepal_pulse_highlights", "geo_summary", "nrb_macro_summary", "signals_summary", "buy_count", "wait_count", "avoid_count", "source", "backfilled", "created_at"],
+    "daily_context_log": ["date", "geo_score_eod", "nepal_score_eod", "combined_score_eod", "nepse_index_eod", "nepse_change_pct", "dxy_value", "dxy_change_pct", "market_state", "advancing", "declining", "breadth_score", "total_turnover_npr", "policy_rate", "fd_rate_pct", "lending_rate", "bop_status", "overall_sentiment", "key_events_summary", "nepal_pulse_highlights", "geo_summary", "nrb_macro_summary", "signals_summary", "buy_count", "wait_count", "avoid_count", "gate_miss_count", "gate_top_category", "gate_false_block_pct", "signals_avg_confidence", "source", "backfilled", "created_at"],
     "fd_rates": ["fetch_date", "institute_code", "institute_name", "product_name", "interest_rate", "interest_pct", "tenure_label", "tenure_months", "tenure_category", "minimum_balance", "institute_type", "source"],
     "fd_rate_summary": ["fetch_date", "avg_rate_pct", "max_rate_pct", "min_rate_pct", "benchmark_rate_pct", "benchmark_products", "best_bank_name", "best_bank_rate", "best_tenure", "rate_vs_prev_pct", "rate_direction", "fd_score_signal", "total_products"],
     "international_prices": ["id", "date", "variable_name", "close_price", "source"],
@@ -1113,4 +1191,7 @@ TABLE_COLUMNS: dict[str, list[str]] = {
     "paper_capital": ["telegram_id", "starting_capital", "current_capital", "total_realised_pnl", "total_fees_paid", "total_cgt_paid", "total_trades", "total_wins", "total_losses", "last_updated", "test_mode"],
     "paper_portfolio": ["telegram_id", "symbol", "status", "total_shares", "wacc", "total_cost", "first_buy_date", "last_buy_date", "buy_count", "exit_date", "exit_price", "exit_shares", "gross_pnl", "sell_fees", "cgt_paid", "net_pnl", "result", "created_at", "updated_at", "test_mode", "audited"],
     "paper_trade_log": ["telegram_id", "symbol", "action", "shares", "price", "gross_amount", "brokerage", "sebon", "dp_fee", "cgt", "total_fees", "net_amount", "capital_before", "capital_after", "wacc_before", "wacc_after", "note", "created_at", "test_mode"],
+    "gate_misses": ["date", "symbol", "sector", "gate_reason", "gate_category", "price_at_block", "market_state", "tech_score", "conf_score", "composite_score_would_be", "tracking_days", "outcome", "outcome_return_pct", "outcome_stamped_at"],
+    "gate_proposals": ["review_week", "proposal_number", "parameter_name", "current_value", "proposed_value", "reasoning", "false_block_rate", "sample_size", "status", "decided_at", "applied_at"],
+    "claude_audit": ["review_week", "buy_count", "buy_win_rate", "buy_avg_return", "wait_count", "wait_accuracy", "avoid_count", "avoid_accuracy", "false_avoid_rate", "missed_entry_rate", "overall_accuracy", "macro_accuracy", "audit_summary"],
 }

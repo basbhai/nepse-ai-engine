@@ -171,22 +171,30 @@ def _load_geo_context() -> dict:
 
 
 def _load_macro_context() -> dict:
-    """Read NRB macro + FD rate from Neon."""
+    """Read NRB macro + FD rate from Neon (nrb_monthly table)."""
     try:
         from sheets import get_setting, run_raw_sql
-        rows = run_raw_sql("SELECT indicator, value FROM nrb_monthly ORDER BY id DESC LIMIT 30", ())
-        macro = {r["indicator"]: r["value"] for r in rows}
+        rows = run_raw_sql(
+            "SELECT * FROM nrb_monthly ORDER BY id DESC LIMIT 1", ()
+        )
+        row = rows[0] if rows else {}
+        _fwd = (row.get("forward_guidance") or "").upper()
+        nrb_decision = (
+            "HIKE" if _fwd == "TIGHT"
+            else "CUT" if _fwd == "LOOSE"
+            else "UNCHANGED"
+        )
         fd_rate = get_setting("FD_RATE_PCT", "8.5")
         return {
-            "policy_rate":          macro.get("Policy_Rate",          "?"),
-            "nrb_rate_decision":    macro.get("NRB_Rate_Decision",    "UNCHANGED"),
-            "inflation_pct":        macro.get("Inflation_Pct",        "?"),
-            "remittance_yoy_pct":   macro.get("Remittance_YoY_Pct",  "?"),
-            "forex_reserve_months": macro.get("Forex_Reserve_Months", "?"),
-            "lending_rate":         macro.get("Lending_Rate",         "?"),
-            "period":               macro.get("Period",               "?"),
+            "policy_rate":          row.get("policy_rate",               "?"),
+            "nrb_rate_decision":    nrb_decision,
+            "inflation_pct":        row.get("cpi_inflation",             "?"),
+            "remittance_yoy_pct":   row.get("remittance_yoy_change_pct", "?"),
+            "forex_reserve_months": row.get("fx_reserve_months",         "?"),
+            "lending_rate":         row.get("bank_rate",                 "?"),
+            "period":               row.get("period",                    "?"),
             "fd_rate":              fd_rate,
-            "fd_signal":            get_setting("FD_SCORE_SIGNAL",    "NEUTRAL"),
+            "fd_signal":            get_setting("FD_SCORE_SIGNAL",       "NEUTRAL"),
         }
     except Exception as exc:
         logger.warning("_load_macro_context failed: %s", exc)
@@ -682,21 +690,43 @@ Respond ONLY with this JSON — no markdown, no explanation outside JSON:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _call_claude(prompt: str) -> Optional[dict]:
-    """Call Claude via Anthropic SDK. Returns parsed JSON dict or None."""
+    """Call Claude via OpenRouter. Returns parsed JSON dict or None."""
+    import urllib.request
     try:
-        from anthropic import Anthropic
-        client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-        response = client.messages.create(
-            model      = "claude-sonnet-4-6",
-            max_tokens = 1200,
-            system     = (
-                "You are a senior NEPSE quantitative analyst. "
-                "You respond ONLY in valid JSON. No markdown fences. "
-                "You never recommend a trade without a clear stop loss."
-            ),
-            messages = [{"role": "user", "content": prompt}],
+        api_key = os.getenv("OPENROUTER_API_KEY", "")
+        if not api_key:
+            logger.error("OPENROUTER_API_KEY not set in environment")
+            return None
+
+        payload = json.dumps({
+            "model": "anthropic/claude-sonnet-4-6",
+            "max_tokens": 1200,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a senior NEPSE quantitative analyst. "
+                        "You respond ONLY in valid JSON. No markdown fences. "
+                        "You never recommend a trade without a clear stop loss."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+        }).encode()
+
+        req = urllib.request.Request(
+            "https://openrouter.ai/api/v1/chat/completions",
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type":  "application/json",
+            },
+            method="POST",
         )
-        raw = response.content[0].text.strip()
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read().decode())
+
+        raw = data["choices"][0]["message"]["content"].strip()
         if raw.startswith("```"):
             parts = raw.split("```")
             raw   = parts[1] if len(parts) > 1 else parts[0]
@@ -751,38 +781,178 @@ def _assemble_result(claude_json: dict, flag, geo: dict) -> AnalystResult:
     )
 
 
-def _write_to_db(result: AnalystResult) -> None:
-    """Write ALL results (BUY/WAIT/AVOID) to market_log."""
+def _load_fundamentals_for_log(symbol: str) -> dict:
+    """
+    Pull latest quarter fundamentals for market_log fields:
+    pe_ratio, eps, roe, npl (as npl_pct).
+    Returns empty dict on failure.
+    """
     try:
-        from sheets import upsert_row
-        upsert_row(
+        from sheets import run_raw_sql
+        rows = run_raw_sql(
+            """
+            SELECT pe_ratio, eps, roe, npl
+            FROM fundamentals
+            WHERE symbol = %s
+            ORDER BY fiscal_year DESC, quarter DESC
+            LIMIT 1
+            """,
+            (symbol.upper(),),
+        )
+        return dict(rows[0]) if rows else {}
+    except Exception as exc:
+        logger.debug("_load_fundamentals_for_log(%s) failed: %s", symbol, exc)
+        return {}
+
+
+def _write_to_db(result: AnalystResult, flag=None) -> None:
+    """
+    Write ALL results (BUY/WAIT/AVOID) to market_log — append-only (write_row).
+    flag (GeminiFlag) now carries the full FilterCandidate snapshot so all
+    technical columns can be populated without extra DB reads.
+    pe_ratio / eps / roe / npl pulled from fundamentals table (quarterly, cheap).
+    """
+    def _s(val) -> str:
+        if val is None:
+            return ""
+        return str(val)
+
+    try:
+        from sheets import write_row
+
+        today = datetime.now(tz=NST).strftime("%Y-%m-%d")
+        now   = datetime.now(tz=NST).strftime("%H:%M:%S")
+
+        # Fundamentals (pe/eps/roe/npl) — quarterly data, single cheap query
+        fund = _load_fundamentals_for_log(result.symbol)
+
+        # ── All technical fields from GeminiFlag (full FilterCandidate passthrough)
+        if flag:
+            rsi_14           = _s(flag.rsi_14)
+            rsi_signal       = _s(flag.rsi_signal)
+            macd_cross       = _s(flag.macd_cross)       # BULLISH/BEARISH/NONE
+            macd_histogram   = _s(flag.macd_histogram)
+            ema_trend        = _s(flag.ema_trend)
+            ema_20_50_cross  = _s(flag.ema_20_50_cross)
+            ema_50_200_cross = _s(flag.ema_50_200_cross)
+            bb_signal        = _s(flag.bb_signal)
+            bb_pct_b         = _s(flag.bb_pct_b)
+            bb_upper         = _s(flag.bb_upper)
+            bb_lower         = _s(flag.bb_lower)
+            obv_trend        = _s(flag.obv_trend)
+            atr_pct          = _s(flag.atr_pct)
+            tech_score       = _s(flag.tech_score)
+            tech_signal      = _s(flag.tech_signal)
+            conf_score       = _s(flag.conf_score)
+            candle_pat       = _s(flag.best_candle)
+            candle_tier      = _s(flag.candle_tier)
+            candle_conf      = _s(flag.candle_conf)
+            support          = _s(flag.support_level)
+            resistance       = _s(flag.resistance_level)
+            volume           = _s(flag.volume)
+            change_pct       = _s(flag.change_pct)
+            composite_score  = _s(flag.composite_score)
+            sector_mult      = _s(flag.sector_mult)
+            cstar            = _s(flag.cstar_signal)
+            fund_adj         = _s(flag.fundamental_adj)
+            fund_reason      = _s(flag.fundamental_reason)
+            geo_score        = _s(flag.geo_score)
+            nepal_score      = _s(flag.nepal_score)
+            geo_combined     = _s(flag.geo_combined)
+            bandh            = _s(flag.bandh_today)
+            crisis           = _s(flag.crisis_detected)
+            ipo_drain        = _s(flag.ipo_drain)
+        else:
+            rsi_14 = _s(result.rsi_14)
+            rsi_signal = macd_cross = macd_histogram = ""
+            ema_trend = ema_20_50_cross = ema_50_200_cross = ""
+            bb_signal = bb_pct_b = bb_upper = bb_lower = ""
+            obv_trend = atr_pct = tech_score = tech_signal = ""
+            conf_score = candle_pat = candle_tier = candle_conf = ""
+            support = _s(result.support_level)
+            resistance = _s(result.resistance_level)
+            volume = change_pct = composite_score = ""
+            sector_mult = cstar = fund_adj = fund_reason = ""
+            geo_score = nepal_score = geo_combined = ""
+            bandh = crisis = ipo_drain = ""
+
+        write_row(
             "market_log",
             {
-                "symbol":          result.symbol,
-                "date":            datetime.now(tz=NST).strftime("%Y-%m-%d"),
-                "action":          result.action,
-                "confidence":      result.confidence,
-                "entry_price":     result.entry_price,
-                "stop_loss":       result.stop_loss,
-                "target":          result.target,
-                "allocation_npr":  result.allocation_npr,
-                "shares":          result.shares,
-                "breakeven":       result.breakeven,
-                "risk_reward":     result.risk_reward,
-                "suggested_hold":  result.suggested_hold,
-                "reasoning":       result.reasoning,
-                "lesson_applied":  result.lesson_applied,
-                "primary_signal":  result.primary_signal,
-                "sector":          result.sector,
-                "geo_score":       result.geo_score,
-                "rsi_14":          result.rsi_14,
-                "candle_pattern":  result.candle_pattern,
-                "urgency":         result.urgency,
-                "gemini_reason":   result.gemini_reason,
-                "source":          "claude_analyst",
-                "timestamp":       result.timestamp,
+                # ── Core identity
+                "date":            today,
+                "time":            now,
+                "symbol":          _s(result.symbol),
+                "sector":          _s(result.sector),
+                "action":          _s(result.action),
+                "confidence":      _s(result.confidence),
+
+                # ── Trade levels (from Claude)
+                "entry_price":     _s(result.entry_price),
+                "stop_loss":       _s(result.stop_loss),
+                "target":          _s(result.target),
+                "allocation_npr":  _s(result.allocation_npr),
+                "shares":          _s(result.shares),
+                "breakeven":       _s(result.breakeven),
+                "risk_reward":     _s(result.risk_reward),
+
+                # ── Price action (from FilterCandidate via flag)
+                "volume":          volume,
+                "volume_ratio":    change_pct,    # daily % change as momentum proxy
+                "vwap":            "",             # not in FilterCandidate, left empty
+
+                # ── Technical indicators (from FilterCandidate via flag)
+                "rsi_14":          rsi_14,
+                "macd_line":       macd_cross,    # cross signal BULLISH/BEARISH/NONE
+                "macd_signal":     macd_histogram, # histogram value
+                "obv_trend":       obv_trend,
+                "ema_200":         ema_trend,      # trend label ABOVE_ALL/BELOW_ALL/MIXED
+                "atr_14":          atr_pct,        # ATR as % of close
+                "bollinger_upper": bb_upper,
+                "bollinger_lower": bb_lower,
+                "candle_pattern":  candle_pat,
+                "conf_score":      conf_score,     # ShareSansar conf, NOT Claude confidence
+
+                # ── Support / Resistance
+                "support_level":   support,
+                "resistance_level":resistance,
+
+                # ── Fundamental fields (from fundamentals table)
+                "fundamental_score": fund_adj,
+                "pe_ratio":        _s(fund.get("pe_ratio")),
+                "eps":             _s(fund.get("eps")),
+                "roe":             _s(fund.get("roe")),
+                "npl_pct":         _s(fund.get("npl")),
+
+                # ── Macro / geo scores
+                "geo_score":       geo_score,
+                "macro_score":     nepal_score,
+
+                # ── Analysis (from Claude)
+                "reasoning":       _s(result.reasoning),
+                "outcome":         "PENDING",
+                "timestamp":       _s(result.timestamp),
+
+                # ── Headlines (populated by _load_geo_context via AnalystResult)
+                "headlines_politics": _s(result.headlines_politics),
+                "headlines_economy":  _s(result.headlines_economy),
+                "headlines_stock":    _s(result.headlines_stock),
+
+                # ── Eval fields — empty on write, recommendation_tracker fills later
+                "eval_date":             "",
+                "eval_geo_score":        "",
+                "eval_nepal_score":      "",
+                "eval_nepse_index":      "",
+                "eval_market_state":     "",
+                "eval_policy_rate":      "",
+                "eval_fd_rate_pct":      "",
+                "eval_geo_delta":        "",
+                "eval_nepal_delta":      "",
+                "eval_key_news":         "",
+                "eval_price_change_pct": "",
+                "eval_nepse_change_pct": "",
+                "eval_alpha":            "",
             },
-            conflict_columns=["symbol", "date"],
         )
         logger.info("Written to market_log: %s %s", result.action, result.symbol)
     except Exception as exc:
@@ -871,7 +1041,7 @@ def run_analysis(flags: list) -> list[AnalystResult]:
 
         result = _assemble_result(claude_json, flag, geo)
         results.append(result)
-        _write_to_db(result)
+        _write_to_db(result, flag=flag)
         logger.info("Result: %s", result.summary())
 
     buys   = [r for r in results if r.action == "BUY"]

@@ -142,6 +142,66 @@ def _fetch_market_log_rows(target_date: str) -> list[dict]:
         log.warning("market_log fetch failed for %s: %s", target_date, e)
         return []
 
+def _fetch_gate_miss_day(target_date: str) -> dict:
+    """
+    Fetch gate_misses stats for target_date.
+    Returns count, top category, and rolling false_block_rate.
+    """
+    try:
+        # Count today's gate_misses
+        count_rows = run_raw_sql(
+            "SELECT COUNT(*) as cnt, gate_category FROM gate_misses WHERE date = %s GROUP BY gate_category ORDER BY cnt DESC",
+            (target_date,)
+        )
+        if not count_rows:
+            return {"gate_miss_count": 0, "gate_top_category": "", "gate_false_block_pct": ""}
+
+        total = sum(int(r["cnt"]) for r in count_rows)
+        top_cat = count_rows[0]["gate_category"] if count_rows else ""
+
+        # Rolling 30-day false block rate (all categories)
+        rate_rows = run_raw_sql(
+            """
+            SELECT 
+                COUNT(*) as total,
+                SUM(CASE WHEN outcome = 'FALSE_BLOCK' THEN 1 ELSE 0 END) as false_blocks
+            FROM gate_misses
+            WHERE date >= (DATE %s - INTERVAL '30 days')
+              AND outcome IS NOT NULL
+            """,
+            (target_date,)
+        )
+        false_block_pct = ""
+        if rate_rows and int(rate_rows[0]["total"] or 0) > 0:
+            pct = int(rate_rows[0]["false_blocks"] or 0) / int(rate_rows[0]["total"]) * 100
+            false_block_pct = str(round(pct, 1))
+
+        return {
+            "gate_miss_count":     str(total),
+            "gate_top_category":   top_cat,
+            "gate_false_block_pct": false_block_pct,
+        }
+    except Exception as e:
+        log.warning("_fetch_gate_miss_day failed: %s", e)
+        return {"gate_miss_count": "", "gate_top_category": "", "gate_false_block_pct": ""}
+
+def _fetch_signals_confidence(target_date: str) -> str:
+    """Average Claude confidence across all signals today."""
+    try:
+        rows = run_raw_sql(
+            """
+            SELECT AVG(confidence::float) as avg_conf
+            FROM market_log
+            WHERE date = %s AND action IN ('BUY','WAIT','AVOID')
+              AND confidence IS NOT NULL AND confidence != ''
+            """,
+            (target_date,)
+        )
+        if rows and rows[0]["avg_conf"]:
+            return str(round(float(rows[0]["avg_conf"]), 1))
+        return ""
+    except Exception:
+        return ""
 
 def _fetch_nrb_latest() -> dict | None:
     """Most recent nrb_monthly row."""
@@ -374,6 +434,7 @@ Be factual, specific, NEPSE-focused. No filler. Output stored in DB for GPT-4o w
 
 ━━━ DATA ━━━
 
+
 GEO/INTERNATIONAL (last intraday rows):
 {geo_compact}
 
@@ -382,6 +443,9 @@ NEPAL PULSE (last intraday rows):
 
 BREADTH: {breadth_str if breadth_str else "no data"}
 {nepse_str if nepse_str else ""}
+
+f"\nGATE BLOCKS TODAY: {gate_data.get('gate_miss_count','?')} blocked | top reason: {gate_data.get('gate_top_category','?')} | 30d false block rate: {gate_data.get('gate_false_block_pct','?')}%"
+f"\nSIGNAL CONFIDENCE AVG: {avg_conf or 'N/A'}"
 
 NRB MACRO (latest monthly):
 {nrb_str if nrb_str else "no data"}
@@ -448,6 +512,8 @@ def build_daily_context(target_date: str, dry_run: bool = False) -> dict | None:
     nrb        = _fetch_nrb_latest()
     nepse_idx  = _fetch_nepse_index(target_date)
     prev_nepse = _fetch_prev_nepse_index(target_date)
+    gate_data   = _fetch_gate_miss_day(target_date)
+    avg_conf    = _fetch_signals_confidence(target_date)
 
     # ── Check if any data exists at all for this date
     if not geo_rows and not pulse_rows and not breadth and not log_rows:
@@ -575,6 +641,12 @@ def build_daily_context(target_date: str, dry_run: bool = False) -> dict | None:
         "wait_count":             signals.get("wait_count", "0"),
         "avoid_count":            signals.get("avoid_count", "0"),
 
+
+        "gate_miss_count":        gate_data.get("gate_miss_count"),
+        "gate_top_category":      gate_data.get("gate_top_category"),
+        "gate_false_block_pct":   gate_data.get("gate_false_block_pct"),
+        "signals_avg_confidence": avg_conf or None,
+
         # Metadata
         "source":                 "gemini_nightly",
         "backfilled":             "false",
@@ -626,6 +698,22 @@ def get_prompt_for_date(target_date: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 # ENTRY POINT
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+def run() -> None:
+    """Entry point called by eod_workflow.py. Summarizes today's date."""
+    target = datetime.now(NST).strftime("%Y-%m-%d")
+    log.info("Summarizing %s", target)
+    result = build_daily_context(target, dry_run=False)
+    if result:
+        log.info(
+            "Done. geo=%.1f nepal=%.1f combined=%s",
+            _safe_float(result.get("geo_score_eod"), 0),
+            _safe_float(result.get("nepal_score_eod"), 0),
+            result.get("combined_score_eod", "N/A"),
+        )
+    else:
+        log.warning("build_daily_context returned None for %s", target)
 
 
 def main():

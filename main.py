@@ -255,6 +255,36 @@ def _write_buy_to_live_portfolio(result, dry_run: bool) -> bool:
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 7 — MAIN PIPELINE
 # ══════════════════════════════════════════════════════════════════════════════
+def _write_near_misses_to_db(near_misses: list, date_str: str, dry_run: bool) -> None:
+    """
+    Upsert near-misses to gate_misses table.
+    ON CONFLICT (symbol, date) → skip. First block of day wins.
+    6-min loop runs 28x/day — upsert prevents duplicates.
+    """
+    if dry_run or not near_misses:
+        return
+    try:
+        from sheets import upsert_row
+        from datetime import datetime, timedelta, timezone
+        nst = timezone(timedelta(hours=5, minutes=45))
+
+        for nm in near_misses:
+            upsert_row("gate_misses", {
+                "date":                     date_str,
+                "symbol":                   nm.symbol,
+                "sector":                   nm.sector,
+                "gate_reason":              nm.gate_reason,
+                "gate_category":            nm.gate_category,
+                "price_at_block":           str(nm.price_at_block),
+                "market_state":             nm.market_state,
+                "tech_score":               str(nm.tech_score),
+                "conf_score":               str(nm.conf_score),
+                "composite_score_would_be": str(nm.composite_score_would_be),
+                "tracking_days":            "0",
+
+            }, conflict_columns=["symbol", "date"])
+    except Exception as e:
+        log.warning("_write_near_misses_to_db failed (non-fatal): %s", e)
 
 def run_trading_loop(paper_mode: bool, dry_run: bool, skip_guard: bool) -> int:
     """
@@ -362,6 +392,14 @@ def run_trading_loop(paper_mode: bool, dry_run: bool, skip_guard: bool) -> int:
         from filter_engine import run_filter
         candidates = run_filter(market_data=market_data, top_n=10, date=date_str)
         log.info("%s Filter: %d candidates", label, len(candidates))
+            # Write near-misses (non-fatal — never block the trading loop)
+        try:
+            from filter_engine import get_last_near_misses
+            _write_near_misses_to_db(get_last_near_misses(), date_str, dry_run)
+            log.debug("%s Near-misses logged: %d", label, len(get_last_near_misses()))
+        except Exception as e:
+            log.warning("%s Near-miss write failed (non-fatal): %s", label, e)
+
         if candidates:
             for i, c in enumerate(candidates[:5], 1):
                 log.info("%s   #%d %s score=%.1f rsi=%.1f %s",

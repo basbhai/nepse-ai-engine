@@ -802,8 +802,8 @@ def get_latest_geo() -> Optional[dict]:
 
 def get_macro_data() -> dict[str, str]:
     """
-    Return all macro indicators as a flat {indicator: value} dict.
-    Used by filter_engine.py and signal.py.
+    Return macro indicators as a flat {indicator: value} dict.
+    Reads latest row from nrb_monthly (macro_data table was dropped Apr 5 2026).
 
     Example:
         macro = get_macro_data()
@@ -811,8 +811,32 @@ def get_macro_data() -> dict[str, str]:
     """
     try:
         with _db() as cur:
-            cur.execute("SELECT indicator, value FROM macro_data")
-            return {r["indicator"]: r["value"] for r in cur.fetchall()}
+            cur.execute(
+                "SELECT * FROM nrb_monthly ORDER BY id DESC LIMIT 1"
+            )
+            row = cur.fetchone()
+            if not row:
+                return {}
+            # Map nrb_monthly columns → legacy indicator key names used by consumers
+            _fwd = (row.get("forward_guidance") or "").upper()
+            nrb_decision = (
+                "HIKE" if _fwd == "TIGHT"
+                else "CUT" if _fwd == "LOOSE"
+                else "UNCHANGED"
+            )
+            return {
+                "Policy_Rate":         row.get("policy_rate", ""),
+                "NRB_Rate_Decision":   nrb_decision,
+                "CRR":                 row.get("crr_percentage", ""),
+                "SLR":                 row.get("slr_percentage", ""),
+                "Inflation_Pct":       row.get("cpi_inflation", ""),
+                "Remittance_YoY_Pct":  row.get("remittance_yoy_change_pct", ""),
+                "Forex_Reserve_Months": row.get("fx_reserve_months", ""),
+                "NRB_Event":           row.get("key_risks", ""),
+                "BOP_Status":          row.get("bop_status", ""),
+                "Overall_Sentiment":   row.get("overall_sentiment", ""),
+                "Forward_Guidance":    row.get("forward_guidance", ""),
+            }
     except Exception as e:
         log.error("get_macro_data failed: %s", e)
         return {}

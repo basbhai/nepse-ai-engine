@@ -234,6 +234,92 @@ def _load_nrb_macro() -> dict | None:
         log.warning("nrb_monthly load failed: %s", e)
         return None
 
+def _load_gate_miss_summary() -> dict:
+    """Gate miss outcomes summary for GPT. Calls gate_miss_tracker."""
+    try:
+        from analysis.gate_miss_tracker import get_summary_for_gpt
+        return get_summary_for_gpt(days=90)
+    except Exception as e:
+        log.warning("gate_miss_summary load failed: %s", e)
+        return {}
+
+
+def _load_macro_trend() -> list[dict]:
+    """Last 6 months of NRB data — trend matters more than snapshot."""
+    try:
+        rows = run_raw_sql(
+            """
+            SELECT period, fiscal_year, month_number, policy_rate, bank_rate,
+                   cpi_inflation, credit_growth_rate, remittance_yoy_change_pct,
+                   fx_reserve_months, bop_overall_balance_usd_m, bop_status,
+                   bop_trend, overall_sentiment, forward_guidance, key_risks
+            FROM nrb_monthly
+            WHERE is_annual = 'false'
+            ORDER BY fiscal_year DESC, month_number::int DESC
+            LIMIT 6
+            """
+        ) or []
+        rows.reverse()   # chronological order for GPT
+        return rows
+    except Exception as e:
+        log.warning("macro_trend load failed: %s", e)
+        return []
+
+
+def _load_fd_trend() -> list[dict]:
+    """Last 6 months of FD rate summaries."""
+    try:
+        rows = run_raw_sql(
+            """
+            SELECT fetch_date, avg_rate_pct, benchmark_rate_pct,
+                   rate_direction, fd_score_signal, best_bank_name, best_bank_rate
+            FROM fd_rate_summary
+            ORDER BY fetch_date DESC
+            LIMIT 6
+            """
+        ) or []
+        rows.reverse()
+        return rows
+    except Exception as e:
+        log.warning("fd_trend load failed: %s", e)
+        return []
+
+
+def _load_nepse_trend() -> list[dict]:
+    """Last 30 trading days of NEPSE composite index."""
+    try:
+        rows = run_raw_sql(
+            """
+            SELECT date, current_value, change_pct
+            FROM nepse_indices
+            WHERE index_id = '58' AND current_value IS NOT NULL
+            ORDER BY date DESC
+            LIMIT 30
+            """
+        ) or []
+        rows.reverse()
+        return rows
+    except Exception as e:
+        log.warning("nepse_trend load failed: %s", e)
+        return []
+
+
+def _load_backtest_results() -> list[dict]:
+    """Signal performance from backtester — confirmed edges."""
+    try:
+        return run_raw_sql(
+            """
+            SELECT test_name, sim_mode, win_rate_pct, profit_factor,
+                   annual_ret_pct, total_trades, signal_breakdown,
+                   period_start, period_end, notes
+            FROM backtest_results
+            ORDER BY date_run DESC
+            LIMIT 10
+            """
+        ) or []
+    except Exception as e:
+        log.warning("backtest_results load failed: %s", e)
+        return []
 # ─────────────────────────────────────────────────────────────────────────────
 # DUPLICATE REVIEW GUARD
 # ─────────────────────────────────────────────────────────────────────────────
@@ -279,13 +365,32 @@ _DAILY_CONTEXT_KEYS = (
     "nepse_index_eod", "nepse_change_pct", "dxy_value", "dxy_change_pct",
     "market_state", "advancing", "declining", "fd_rate_pct", "policy_rate",
     "bop_status", "overall_sentiment", "signals_summary", "key_events_summary",
-    "geo_summary",
+    "geo_summary","gate_miss_count", "gate_top_category", "gate_false_block_pct",
+"signals_avg_confidence",
 )
 
 _LESSON_KEYS = (
     "id", "lesson_type", "source", "symbol", "sector", "applies_to",
     "condition", "finding", "action", "confidence_level",
     "trade_count", "win_rate", "last_validated",
+)
+_GATE_MISS_KEYS = (
+    "date", "gate_category", "gate_reason", "symbol", "sector",
+    "market_state", "outcome", "outcome_return_pct", "tracking_days",
+)
+
+_MACRO_TREND_KEYS = (
+    "period", "policy_rate", "bank_rate", "cpi_inflation",
+    "credit_growth_rate", "bop_status", "bop_trend",
+    "overall_sentiment", "forward_guidance",
+)
+
+_FD_TREND_KEYS = (
+    "fetch_date", "benchmark_rate_pct", "rate_direction", "fd_score_signal",
+)
+
+_NEPSE_TREND_KEYS = (
+    "date", "current_value", "change_pct",
 )
 
 
@@ -329,6 +434,14 @@ ANTI-OVERFITTING RULES — ENFORCE STRICTLY:
 5. Single trade cannot flip HIGH confidence lesson. Need 5+ contradictions.
 6. EXPIRED outcomes = weak evidence — weight 20% of CORRECT/FALSE outcomes.
 7. Research paper seeds have HIGH base confidence — need strong contradicting live evidence.
+GATE PROPOSAL RULES:
+- Only propose threshold changes if gate_misses sample >= 20 for that category
+- Only propose if false_block_rate > 40% (filter too aggressive)
+- Proposals must be conservative: ±5 on score thresholds maximum
+- Never propose removing a gate entirely — only loosening
+- If false_block_rate < 20%: gate is working well, do not touch
+- Macro proposals: only if 3+ consecutive months of consistent directional change
+- For SIDEWAYS vs BULL market: thresholds may legitimately differ — note in reasoning
 
 LESSON TYPES:
 SIGNAL_FILTER | SECTOR_FILTER | MACRO_FILTER | ENTRY_TIMING | STOP_CALC | PORTFOLIO_RULE | DIVIDEND_PATTERN | CALENDAR_EFFECT | FAILURE_MODE
@@ -374,8 +487,32 @@ OUTPUT FORMAT — EXACTLY this JSON. No markdown, no extra text:
   "review_summary": "<2-3 sentence overview>",
   "lessons_to_deactivate": [<list of integer ids>],
   "lessons_to_write": [<list of lesson objects>]
-}"""
-
+}
+"gate_proposals": [
+  {
+    "proposal_number": 1,
+    "parameter_name": "MIN_CONF_SCORE or TECH_SCORE_THRESHOLDS.SIDEWAYS etc",
+    "current_value": "50",
+    "proposed_value": "45",
+    "reasoning": "evidence-based explanation",
+    "false_block_rate": 0.43,
+    "sample_size": 31
+  }
+],
+"claude_audit": {
+  "buy_count": number,
+  "buy_win_rate": number (0-1),
+  "buy_avg_return": number,
+  "wait_count": number,
+  "wait_accuracy": number (0-1),
+  "avoid_count": number,
+  "avoid_accuracy": number (0-1),
+  "false_avoid_rate": number (0-1),
+  "missed_entry_rate": number (0-1),
+  "overall_accuracy": number (0-1),
+  "macro_accuracy": "qualitative: did macro trend calls match outcomes",
+  "audit_summary": "2-3 sentence assessment of Claude decision quality"
+}
 
 def _build_user_prompt(
     review_week: str,
@@ -385,6 +522,11 @@ def _build_user_prompt(
     daily_context: list[dict],
     active_lessons: list[dict],
     nrb: dict | None,
+    gate_summary: dict,
+    macro_trend: list[dict],
+    fd_trend: list[dict],
+    nepse_trend: list[dict],
+    backtest: list[dict],
 ) -> str:
 
     nrb_str = json.dumps(
@@ -420,6 +562,31 @@ Active lessons: {len(active_lessons)}
 
 ━━━ NRB MACRO CONTEXT ━━━
 {nrb_str}
+
+━━━ MACRO TREND (last 6 NRB months — direction matters) ━━━
+{_serialize_compact(macro_trend, _MACRO_TREND_KEYS)}
+
+━━━ FD RATE TREND (last 6 months) ━━━
+{_serialize_compact(fd_trend, _FD_TREND_KEYS)}
+
+━━━ NEPSE INDEX TREND (last 30 trading days) ━━━
+{_serialize_compact(nepse_trend, _NEPSE_TREND_KEYS)}
+
+━━━ BACKTEST SIGNAL PERFORMANCE ━━━
+{_serialize_compact(backtest, ('test_name','sim_mode','win_rate_pct','profit_factor','signal_breakdown'))}
+
+━━━ GATE MISS ANALYSIS (last 90 days) ━━━
+Total misses tracked: {gate_summary.get('total_misses', 'N/A')}
+Total stamped: {gate_summary.get('total_stamped', 'N/A')}
+
+By category:
+{json.dumps(gate_summary.get('by_category', {}), ensure_ascii=False, indent=2)}
+
+By market state:
+{json.dumps(gate_summary.get('by_market_state', {}), ensure_ascii=False, indent=2)}
+
+Worst category: {gate_summary.get('worst_category', 'N/A')} (false block rate: {gate_summary.get('worst_false_block_rate', 'N/A')})
+
 
 ━━━ DAILY CONTEXT LOG (last {MAX_DAILY_CONTEXT} days — geo, nepal, NEPSE, signals, events) ━━━
 {_serialize_compact(daily_context, _DAILY_CONTEXT_KEYS)}
@@ -630,7 +797,10 @@ def _send_telegram_summary(
     deactivated: int,
     total_trades: int,
     total_wait_avoid: int,
-):
+    review_week, review_summary, written, deactivated,
+    total_trades, total_wait_avoid,
+    gate_proposals: list = None, 
+):list
     """Send weekly review summary to Telegram."""
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     chat_id   = os.environ.get("TELEGRAM_CHAT_ID", "")
@@ -647,7 +817,10 @@ def _send_telegram_summary(
         f"✏️ Lessons written: {written}\n"
         f"🔄 Lessons superseded: {deactivated}\n\n"
         f"_Claude will apply updated lessons from next signal cycle._"
+         f"🔧 Gate proposals: {len(gate_proposals)} pending — /gate_review to see them\n"
+if gate_proposals else ""
     )
+
 
     try:
         url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
@@ -757,7 +930,57 @@ def get_review_prompts() -> tuple[str, str]:
 # ─────────────────────────────────────────────────────────────────────────────
 # MAIN REVIEW RUNNER
 # ─────────────────────────────────────────────────────────────────────────────
+def _write_gate_proposals(proposals: list[dict], review_week: str) -> int:
+    """Write GPT gate proposals to gate_proposals table."""
+    from datetime import datetime
+    now = datetime.now(NST).strftime("%Y-%m-%d %H:%M:%S")
+    written = 0
+    for p in proposals:
+        try:
+            write_row("gate_proposals", {
+                "review_week":     review_week,
+                "proposal_number": str(p.get("proposal_number", "")),
+                "parameter_name":  p.get("parameter_name", ""),
+                "current_value":   str(p.get("current_value", "")),
+                "proposed_value":  str(p.get("proposed_value", "")),
+                "reasoning":       p.get("reasoning", ""),
+                "false_block_rate":str(p.get("false_block_rate", "")),
+                "sample_size":     str(p.get("sample_size", "")),
+                "status":          "PENDING",
+                "inserted_at":     now,
+            })
+            written += 1
+        except Exception as e:
+            log.error("Failed to write gate proposal: %s", e)
+    log.info("Gate proposals written: %d", written)
+    return written
 
+
+def _write_claude_audit(audit: dict, review_week: str) -> bool:
+    """Write Claude accuracy audit to claude_audit table."""
+    from datetime import datetime
+    now = datetime.now(NST).strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        upsert_row("claude_audit", {
+            "review_week":       review_week,
+            "buy_count":         str(audit.get("buy_count", "")),
+            "buy_win_rate":      str(audit.get("buy_win_rate", "")),
+            "buy_avg_return":    str(audit.get("buy_avg_return", "")),
+            "wait_count":        str(audit.get("wait_count", "")),
+            "wait_accuracy":     str(audit.get("wait_accuracy", "")),
+            "avoid_count":       str(audit.get("avoid_count", "")),
+            "avoid_accuracy":    str(audit.get("avoid_accuracy", "")),
+            "false_avoid_rate":  str(audit.get("false_avoid_rate", "")),
+            "missed_entry_rate": str(audit.get("missed_entry_rate", "")),
+            "overall_accuracy":  str(audit.get("overall_accuracy", "")),
+            "macro_accuracy":    audit.get("macro_accuracy", ""),
+            "audit_summary":     audit.get("audit_summary", ""),
+            "inserted_at":       now,
+        }, conflict_columns=["review_week"])
+        return True
+    except Exception as e:
+        log.error("Failed to write claude_audit: %s", e)
+        return False
 
 def run_weekly_review(dry_run: bool = False):
     """Full GPT Sunday review cycle."""
@@ -781,7 +1004,11 @@ def run_weekly_review(dry_run: bool = False):
     daily_context = _load_daily_context()
     active_lessons = _load_active_lessons()
     nrb           = _load_nrb_macro()
-
+    gate_summary  = _load_gate_miss_summary()
+    macro_trend   = _load_macro_trend()
+    fd_trend      = _load_fd_trend()
+    nepse_trend   = _load_nepse_trend()
+    backtest      = _load_backtest_results()
     # ── Build prompts
     system_prompt = _build_system_prompt()
     user_prompt   = _build_user_prompt(
@@ -826,6 +1053,15 @@ def run_weekly_review(dry_run: bool = False):
         dry_run=dry_run,
     )
 
+    # Write gate proposals
+    gate_proposals = gpt_output.get("gate_proposals", [])
+    if gate_proposals and not dry_run:
+        _write_gate_proposals(gate_proposals, review_week)
+
+    # Write claude audit
+    claude_audit = gpt_output.get("claude_audit", {})
+    if claude_audit and not dry_run:
+    _write_claude_audit(claude_audit, review_week)
     log.info("Review complete: %d lessons written, %d deactivated", written, deactivated)
 
     # ── Telegram notification

@@ -150,7 +150,7 @@ TECH_SCORE_THRESHOLDS = {
 }
 DEFAULT_TECH_THRESHOLD = 58
 
-MIN_CONF_SCORE   = 50
+MIN_CONF_SCORE   = 35
 MIN_HISTORY_DAYS = 20
 
 # Optimal hold days — Karki et al. 2023
@@ -247,9 +247,35 @@ class FilterCandidate:
         )
 
 
+@dataclass
+class NearMiss:
+    symbol:                   str
+    sector:                   str   = ""
+    date:                     str   = ""
+    gate_reason:              str   = ""   # raw: "CONF=42<50"
+    gate_category:            str   = ""   # normalized bucket
+    price_at_block:           float = 0.0
+    market_state:             str   = ""
+    tech_score:               int   = 0
+    conf_score:               float = 0.0
+    composite_score_would_be: float = 0.0
+
+
+def _categorize_gate_reason(reason: str) -> str:
+    r = reason.upper()
+    if r.startswith("CONF="):            return "CONF_SCORE"
+    if r.startswith("TECH="):            return "TECH_SCORE"
+    if "OVERBOUGHT" in r:               return "RSI_OVERBOUGHT"
+    if "OVERSOLD" in r:                 return "RSI_NO_CONFIRM"
+    if r.startswith("HISTORY="):        return "HISTORY"
+    if "MUTUAL_FUND" in r:              return "MUTUAL_FUND"
+    if "NON_EQUITY" in r:               return "NON_EQUITY"
+    return "OTHER"
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 1 — CONTEXT LOADER
 # ══════════════════════════════════════════════════════════════════════════════
+
+_last_near_misses: list[NearMiss] = []
 
 def _load_context() -> dict:
     """
@@ -1019,6 +1045,9 @@ def run_filter(
     """
     if date is None:
         date = datetime.now(tz=NST).strftime("%Y-%m-%d")
+    
+    global _last_near_misses
+    _last_near_misses = []
 
     logger.info("=" * 60)
     logger.info("filter_engine.run_filter() — %s", date)
@@ -1102,12 +1131,37 @@ def run_filter(
         if not sym_ok:
             skipped_gate += 1
             logger.debug("GATE: %s — %s", sym, sym_reason)
+            ltp = float(getattr(price_row, "ltp", 0) or getattr(price_row, "close", 0) or 0)
+            _last_near_misses.append(NearMiss(
+                symbol                   = sym,
+                sector                   = sector_map.get(sym, "others"),
+                date                     = date,
+                gate_reason              = sym_reason,
+                gate_category            = _categorize_gate_reason(sym_reason),
+                price_at_block           = ltp,
+                market_state             = ctx["market_state"],
+                tech_score               = int(ind.get("tech_score", 0) or 0),
+                conf_score               = float(getattr(price_row, "conf_score", 0) or 0),
+                composite_score_would_be = 0.0,  # not computed — gates fired before scoring
+            ))
             continue
 
         # ── Non-equity exclusion via beta (debentures/bonds) ─────────────────
         if _is_non_equity_by_beta(sym, beta_map):
             skipped_gate += 1
             logger.debug("GATE: %s — NON_EQUITY_BY_BETA", sym)
+            ltp = float(getattr(price_row, "ltp", 0) or getattr(price_row, "close", 0) or 0)
+            _last_near_misses.append(NearMiss(
+                symbol        = sym,
+                sector        = sector_map.get(sym, "others"),
+                date          = date,
+                gate_reason   = "NON_EQUITY_BY_BETA",
+                gate_category = "NON_EQUITY",
+                price_at_block= ltp,
+                market_state  = ctx["market_state"],
+                tech_score    = int(ind.get("tech_score", 0) or 0),
+                conf_score    = float(getattr(price_row, "conf_score", 0) or 0),
+            ))
             continue
 
         sector    = sector_map.get(sym) or str(ind.get("sector", "others") or "others")
@@ -1209,6 +1263,9 @@ def get_filter_context() -> dict:
     """Current context dict without running the full filter."""
     return _load_context()
 
+def get_last_near_misses() -> list[NearMiss]:
+    """Return near-misses captured during the last run_filter() call."""
+    return list(_last_near_misses)
 
 def format_candidate_for_gemini(c: FilterCandidate) -> str:
     """
