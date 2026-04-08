@@ -601,6 +601,24 @@ def _fmt(val) -> str:
 # ENTRY POINT
 # ─────────────────────────────────────────────────────────────────────────────
 
+def run(dry_run: bool = False) -> None:
+    """Entry point called by eod_workflow.py."""
+    log.info("Starting recommendation_tracker — %s", today_str())
+    evaluated = evaluate_pending(dry_run=dry_run)
+    if evaluated:
+        log.info("Evaluated %d signals:", len(evaluated))
+        for r in evaluated:
+            log.info(
+                "  %s %s → %s (price: %+.2f%%, alpha: %s%%)",
+                r["action"], r["symbol"], r["outcome"],
+                r["price_change_pct"],
+                f"{r['eval_alpha']:+.2f}" if r["eval_alpha"] is not None else "N/A",
+            )
+    else:
+        log.info("No signals ready for evaluation today.")
+    log.info("recommendation_tracker complete.")
+
+
 def main():
     parser = argparse.ArgumentParser(description="NEPSE Recommendation Tracker")
     parser.add_argument("--dry-run", action="store_true",

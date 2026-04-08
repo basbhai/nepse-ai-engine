@@ -700,6 +700,22 @@ def get_prompt_for_date(target_date: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def run() -> None:
+    """Entry point called by eod_workflow.py. Summarizes today's date."""
+    target = datetime.now(NST).strftime("%Y-%m-%d")
+    log.info("Summarizing %s", target)
+    result = build_daily_context(target, dry_run=False)
+    if result:
+        log.info(
+            "Done. geo=%.1f nepal=%.1f combined=%s",
+            _safe_float(result.get("geo_score_eod"), 0),
+            _safe_float(result.get("nepal_score_eod"), 0),
+            result.get("combined_score_eod", "N/A"),
+        )
+    else:
+        log.warning("build_daily_context returned None for %s", target)
+
+
 def main():
     parser = argparse.ArgumentParser(description="NEPSE Daily Context Summarizer")
     parser.add_argument("--date", type=str, default=None,

@@ -786,6 +786,44 @@ def run_daily_indicators(
     return results
 
 
+def run() -> None:
+    """
+    Entry point called by morning_workflow.py.
+    Loads HistoryCache, fetches live prices, computes indicators, writes to Neon.
+    """
+    from modules.scraper import get_all_market_data, PriceRow
+
+    logger.info("Loading history cache...")
+    cache = HistoryCache()
+    count = cache.load(periods=DEFAULT_LOAD_PERIODS)
+    if count == 0:
+        raise RuntimeError("HistoryCache load failed — is price_history populated?")
+    logger.info("Cache: %d symbols | %d trading days", count, len(cache.dates))
+
+    logger.info("Fetching live prices...")
+    market_data = get_all_market_data(write_breadth=False)
+    if not market_data:
+        logger.warning("Market closed — using cache close prices as today's price")
+        market_data = {}
+        for sym, closes in cache.closes.items():
+            if closes:
+                highs = cache.get_highs(sym)
+                lows  = cache.get_lows(sym)
+                market_data[sym] = PriceRow(
+                    symbol=sym, ltp=closes[-1],
+                    open_price=closes[-2] if len(closes) > 1 else closes[-1],
+                    close=closes[-1],
+                    high=highs[-1] if highs else closes[-1],
+                    low=lows[-1]   if lows  else closes[-1],
+                    prev_close=closes[-2] if len(closes) > 1 else closes[-1],
+                    volume=10000,
+                )
+    logger.info("Prices: %d symbols", len(market_data))
+
+    results = run_daily_indicators(market_data, cache)
+    logger.info("Indicators complete: %d symbols", len(results))
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # CLI
 #   python -m modules.indicators --cache-only    → test HistoryCache load

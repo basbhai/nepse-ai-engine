@@ -90,7 +90,31 @@ class GeminiFlag:
     market_state:    str        = ""
     support_level:   float      = 0.0   # lowest low over last 20 trading days
     resistance_level:float      = 0.0   # highest high over last 20 trading days
-    market_log_id:   int         = None
+    market_log_id:   int        = None
+
+    # ── Full FilterCandidate passthrough — needed for complete market_log write ─
+    change_pct:       float      = 0.0
+    volume:           int        = 0
+    rsi_signal:       str        = ""       # OVERSOLD | NEUTRAL | OVERBOUGHT
+    ema_20_50_cross:  str        = ""       # GOLDEN | DEATH | NONE
+    ema_50_200_cross: str        = ""       # GOLDEN | DEATH | NONE
+    macd_histogram:   float      = 0.0
+    bb_pct_b:         float      = 0.5
+    bb_upper:         float      = 0.0
+    bb_lower:         float      = 0.0
+    atr_pct:          float      = 0.0
+    tech_signal:      str        = ""       # STRONG_BULL | BULL | NEUTRAL | BEAR
+    conf_score:       float      = 0.0     # ShareSansar conf score (NOT Claude confidence)
+    candle_conf:      int        = 0
+    geo_score:        int        = 0       # raw geo_score (before adding nepal)
+    nepal_score:      int        = 0       # raw nepal_score
+    bandh_today:      str        = "NO"
+    crisis_detected:  str        = "NO"
+    ipo_drain:        str        = "NO"
+    sector_mult:      float      = 1.0
+    cstar_signal:     bool       = False
+    fundamental_adj:  float      = 0.0
+    fundamental_reason: str      = ""
 
     timestamp: str = field(default_factory=lambda:
                     datetime.now(tz=NST).strftime("%Y-%m-%d %H:%M:%S"))
@@ -506,6 +530,29 @@ def _assemble_flags(
             market_state     = c.market_state,
             support_level    = c.support_level,
             resistance_level = c.resistance_level,
+            # ── Full passthrough from FilterCandidate ──────────────────────
+            change_pct        = c.change_pct,
+            volume            = c.volume,
+            rsi_signal        = c.rsi_signal,
+            ema_20_50_cross   = c.ema_20_50_cross,
+            ema_50_200_cross  = c.ema_50_200_cross,
+            macd_histogram    = c.macd_histogram,
+            bb_pct_b          = c.bb_pct_b,
+            bb_upper          = float(getattr(c, "bb_upper",  0.0) or 0.0),
+            bb_lower          = float(getattr(c, "bb_lower",  0.0) or 0.0),
+            atr_pct           = c.atr_pct,
+            tech_signal       = c.tech_signal,
+            conf_score        = c.conf_score,
+            candle_conf       = c.candle_conf,
+            geo_score         = c.geo_score,
+            nepal_score       = c.nepal_score,
+            bandh_today       = c.bandh_today,
+            crisis_detected   = c.crisis_detected,
+            ipo_drain         = c.ipo_drain,
+            sector_mult       = c.sector_mult,
+            cstar_signal      = c.cstar_signal,
+            fundamental_adj   = c.fundamental_adj,
+            fundamental_reason= c.fundamental_reason,
         ))
 
     return flags

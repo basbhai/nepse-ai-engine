@@ -267,7 +267,7 @@ def _write_near_misses_to_db(near_misses: list, date_str: str, dry_run: bool) ->
         from sheets import upsert_row
         from datetime import datetime, timedelta, timezone
         nst = timezone(timedelta(hours=5, minutes=45))
-        now = datetime.now(tz=nst).strftime("%Y-%m-%d %H:%M:%S")
+
         for nm in near_misses:
             upsert_row("gate_misses", {
                 "date":                     date_str,
@@ -281,7 +281,7 @@ def _write_near_misses_to_db(near_misses: list, date_str: str, dry_run: bool) ->
                 "conf_score":               str(nm.conf_score),
                 "composite_score_would_be": str(nm.composite_score_would_be),
                 "tracking_days":            "0",
-                "inserted_at":              now,
+
             }, conflict_columns=["symbol", "date"])
     except Exception as e:
         log.warning("_write_near_misses_to_db failed (non-fatal): %s", e)
