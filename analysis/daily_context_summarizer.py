@@ -166,8 +166,8 @@ def _fetch_gate_miss_day(target_date: str) -> dict:
                 COUNT(*) as total,
                 SUM(CASE WHEN outcome = 'FALSE_BLOCK' THEN 1 ELSE 0 END) as false_blocks
             FROM gate_misses
-            WHERE date >= (DATE %s - INTERVAL '30 days')
-              AND outcome IS NOT NULL
+            WHERE date::date >= (%s::date - INTERVAL '30 days')
+            AND outcome IS NOT NULL
             """,
             (target_date,)
         )
@@ -386,6 +386,8 @@ def _build_gemini_prompt(
     nrb: dict | None,
     signals: dict,
     nepse_index: dict | None,
+    gate_data: dict | None = None,
+    avg_conf: str | None = None,
 ) -> str:
     """Build token-optimized prompt for Gemini to generate narrative summaries."""
 
@@ -577,7 +579,8 @@ def build_daily_context(target_date: str, dry_run: bool = False) -> dict | None:
 
     # ── Call Gemini for narratives
     prompt = _build_gemini_prompt(
-        target_date, geo_data, pulse_data, breadth, nrb, signals, nepse_idx
+        target_date, geo_data, pulse_data, breadth, nrb, signals, nepse_idx,
+        gate_data=gate_data, avg_conf=avg_conf
     )
     narratives = _parse_gemini_response(_call_gemini(prompt))
 
@@ -634,6 +637,9 @@ def build_daily_context(target_date: str, dry_run: bool = False) -> dict | None:
         "nepal_pulse_highlights": pulse_data.get("nepal_pulse_highlights") or None,
         "geo_summary":            narratives.get("geo_summary"),
         "nrb_macro_summary":      narratives.get("nrb_macro_summary"),
+        "headlines_political":    _join_headlines("headlines_political"),
+        "headlines_economy":      _join_headlines("headlines_economy"),
+        "headlines_nepse":        _join_headlines("headlines_nepse"),
 
         # Signals
         "signals_summary":        signals.get("signals_summary"),

@@ -1,9 +1,10 @@
 [Unit]
-Description=NEPSE AI — EOD Timer (3:15 PM NST = 09:30 UTC, Sun–Thu)
+Description=NEPSE AI — EOD Timer (3:15 PM NST = 09:30 UTC, Mon–Fri)
 
 [Timer]
 # 3:15 PM NST = 09:30 UTC
-OnCalendar=Sun,Mon,Tue,Wed,Thu 09:30:00 UTC
+# Removed Sunday, Added Friday for 2026 schedule change.
+OnCalendar=Mon,Tue,Wed,Thu,Fri 09:30:00 UTC
 Persistent=true
 AccuracySec=60s
 

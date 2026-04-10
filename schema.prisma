@@ -891,6 +891,11 @@ model daily_context_log {
   backfilled           Text  @default("false")  // true if generated retroactively
   created_at           Text
 
+  // ---headilines
+   headlines_political TEXT
+   headlines_economy   TEXT
+    headlines_nepse     TEXT
+
   @@index([date])
 }
 

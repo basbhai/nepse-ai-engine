@@ -238,16 +238,17 @@ async def guard(update: Update) -> bool:
 
 PARSE_SYSTEM = """
 You are a parser for a Nepal stock market Telegram trading bot.
-The user sends a raw message — a buy/purchase or sell command — can be at any order, formats 
-orders, laungauge. you need to make sense of it and
-Extract fields and return ONLY valid JSON. No markdown. No backticks. No explanation.
+The user sends a raw message — a buy/purchase or sell command — can be at any order, formats,
+language. You need to make sense of it and extract fields.
+Return ONLY valid JSON. No markdown. No backticks. No explanation.
 
 For BUY:  {"action":"BUY","symbol":"NABIL","shares":10,"price":380.0,"error":null}
 For SELL: {"action":"SELL","symbol":"NABIL","shares":10,"price":400.0,"error":null}
 
 Rules:
-- symbol: uppercase 2-8 chars. Fix obvious typos: "nabl"→"NABIL", "nbl"→"NABIL"
-- symbol must match symbols of listed shares in NEPSE only search if you must. if not matched with typos correction, throw error with reason accordingly.
+- symbol: uppercase 2-8 chars. Fix obvious typos only: "nabl"→"NABIL", "nbl"→"NABIL".
+  DO NOT validate whether the symbol exists in NEPSE — just clean and uppercase it.
+  Symbol validation is handled separately by the system after parsing.
 - shares: positive integer
 - price: positive float, NPR per share
 - "k" = ×1000  e.g. "1.2k" = 1200
@@ -395,20 +396,32 @@ def count_open_positions(telegram_id: int) -> int:
 def lookup_symbols(query: str) -> list[str]:
     """
     Look up symbols in share_sectors.
-    Returns exact match as a single-item list, or partial ILIKE matches (up to 8).
-    Returns [] if nothing found.
+    Returns exact match as single-item list, or partial ILIKE matches (up to 8).
+    Returns [query.upper()] as fallback if share_sectors table is empty —
+    symbol validation is best-effort, not a hard gate.
     """
-    exact = run_raw_sql(
-        "SELECT symbol FROM share_sectors WHERE UPPER(symbol) = UPPER(%s)",
-        (query,),
-    )
-    if exact:
-        return [r["symbol"] for r in exact]
-    partial = run_raw_sql(
-        "SELECT symbol FROM share_sectors WHERE UPPER(symbol) LIKE UPPER(%s) ORDER BY symbol LIMIT 8",
-        (f"%{query}%",),
-    )
-    return [r["symbol"] for r in partial]
+    try:
+        exact = run_raw_sql(
+            "SELECT symbol FROM share_sectors WHERE UPPER(symbol) = UPPER(%s)",
+            (query,),
+        )
+        if exact:
+            return [r["symbol"] for r in exact]
+        partial = run_raw_sql(
+            "SELECT symbol FROM share_sectors WHERE UPPER(symbol) LIKE UPPER(%s) ORDER BY symbol LIMIT 8",
+            (f"%{query}%",),
+        )
+        if partial:
+            return [r["symbol"] for r in partial]
+        # Check if table is empty — if so, skip validation entirely
+        count = run_raw_sql("SELECT COUNT(*) AS cnt FROM share_sectors")
+        if count and int(count[0].get("cnt", 0)) == 0:
+            log.warning("share_sectors table is empty — skipping symbol validation for %s", query)
+            return [query.upper()]
+        return []
+    except Exception as e:
+        log.warning("lookup_symbols error for %s: %s — skipping validation", query, e)
+        return [query.upper()]
 
 def _seed_capital_row(telegram_id: int):
     """Insert capital row for a newly approved user. Safe to call multiple times."""

@@ -34,7 +34,7 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from sheets import run_raw_sql, upsert_row
+from sheets import run_raw_sql, upsert_row, update_row
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LOGGING
@@ -196,10 +196,10 @@ def _increment_tracking_days(row_id: int, new_days: int, dry_run: bool) -> None:
     if dry_run:
         return
     try:
-        upsert_row(
+        update_row(
             "gate_misses",
-            {"id": str(row_id), "tracking_days": str(new_days)},
-            conflict_columns=["id"],
+            {"tracking_days": str(new_days)},
+            where={"id": row_id},
         )
     except Exception as e:
         log.warning("_increment_tracking_days failed for id=%s: %s", row_id, e)
@@ -217,16 +217,15 @@ def _stamp_outcome(
         log.info("[DRY-RUN] Would stamp id=%s → %s (%.2f%%)", row_id, outcome, return_pct)
         return
     try:
-        upsert_row(
+        update_row(
             "gate_misses",
             {
-                "id":                  str(row_id),
                 "outcome":             outcome,
                 "outcome_return_pct":  str(round(return_pct, 4)),
                 "tracking_days":       str(tracking_days),
                 "outcome_stamped_at":  today_str(),
             },
-            conflict_columns=["id"],
+            where={"id": row_id},
         )
         log.info("Stamped id=%s → %s (%.2f%%)", row_id, outcome, return_pct)
     except Exception as e:
@@ -362,6 +361,42 @@ def run_eod(dry_run: bool = False) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 # SUMMARY FOR GPT (called by learning_hub.py)
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+def _write_gate_proposals(proposals: list[dict]) -> None:
+    """
+    Upsert gate_proposals rows.
+    Conflict key: (parameter_name, review_week) — overwrites if re-run same week.
+    review_week format: "2026-W15"
+    """
+    if not proposals:
+        return
+    from sheets import upsert_row
+    review_week = datetime.now(NST).strftime("%G-W%V")   # ISO week
+    written = 0
+    for i, p in enumerate(proposals, start=1):
+        try:
+            upsert_row(
+                "gate_proposals",
+                {
+                    "review_week":      review_week,
+                    "proposal_number":  str(i),
+                    "parameter_name":   p["parameter"],
+                    "current_value":    str(p["current"]),
+                    "proposed_value":   str(p["suggested"]),
+                    "evidence":         p["evidence"],
+                    "false_block_rate": str(p["false_block_rate"]),
+                    "sample_size":      str(p["sample_size"]),
+                    "status":           "PENDING",
+                    "created_at":       datetime.now(NST).strftime("%Y-%m-%d %H:%M:%S"),
+                },
+                conflict_columns=["parameter_name", "review_week"],
+            )
+            written += 1
+        except Exception as exc:
+            log.warning("_write_gate_proposals: failed for %s — %s", p["parameter"], exc)
+    log.info("_write_gate_proposals: wrote %d/%d proposals to gate_proposals", written, len(proposals))
+
 
 def get_summary_for_gpt(days: int = 90) -> dict:
     """
@@ -536,6 +571,9 @@ def get_summary_for_gpt(days: int = 90) -> dict:
             "false_block_rate": fb_rate,
             "sample_size": n,
         })
+
+    # ── Fix 2: persist proposals to gate_proposals table ─────────────────────
+    _write_gate_proposals(proposal_candidates)
 
     return {
         "total_misses":          total_misses,

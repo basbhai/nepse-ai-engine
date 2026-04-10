@@ -496,8 +496,8 @@ def _keyword_detect(df: pd.DataFrame) -> dict:
             is_nepali = any(ord(c) > 127 for c in kw)
             if is_nepali or _is_nepal_source(source) or _has_nepal_anchor(h):
                 crisis_detected = "YES"
-                crisis_detail   = h[:120]
-                log.warning("CRISIS (keyword): %s", h[:120])
+                crisis_detail   = h[:500]
+                log.warning("CRISIS (keyword): %s", h[:500])
                 break
         if crisis_detected == "YES":
             break
@@ -780,11 +780,11 @@ def _compute_nepal_score(
     if bandh == "YES":
         key_event = f"BANDH: {scraped.get('bandh_detail', 'Nepal bandh detected')[:80]}"
     elif crisis == "YES":
-        key_event = f"CRISIS: {scraped.get('crisis_detail', 'Political crisis')[:80]}"
+        key_event = f"CRISIS: {scraped.get('crisis_detail', 'Political crisis')[:500]}"
     elif ipo == "YES":
-        key_event = f"IPO_DRAIN: {scraped.get('ipo_fpo_detail', 'IPO/FPO open today')[:80]}"
+        key_event = f"IPO_DRAIN: {scraped.get('ipo_fpo_detail', 'IPO/FPO open today')[:500]}"
     elif gemini_key:
-        key_event = gemini_key[:120]
+        key_event = gemini_key[:500]
     elif gulf != "STABLE":
         key_event = f"Gulf {gulf}: {scraped.get('gulf_detail', '')[:60]}"
     elif india_rel != "STABLE":

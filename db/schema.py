@@ -890,6 +890,9 @@ TABLE_DDL: dict[str, str] = {
         source TEXT DEFAULT 'gemini_nightly',
         backfilled TEXT DEFAULT 'false',
         created_at TEXT,
+        headlines_political TEXT,
+        headlines_economy TEXT,
+        headlines_nepse TEXT,
         inserted_at TIMESTAMPTZ DEFAULT NOW(),
         CONSTRAINT ux_daily_context_log_date UNIQUE (date)
     );
@@ -1182,7 +1185,7 @@ TABLE_COLUMNS: dict[str, list[str]] = {
     "db_schema": ["migration_id", "name", "applied_at", "rolled_back_at", "status", "notes"],
     "nepse_indices": ["date", "index_id", "index_name", "current_value", "high", "low", "change_abs", "change_pct", "week52_high", "week52_low", "turnover", "volume", "transactions", "source"],
     "macro_stat_results": ["variable", "variable_label", "lag_months", "spearman_rho", "p_value", "p_corrected", "significant", "effect_size", "n_pairs", "rho_3m_forward", "p_3m_forward", "n_pairs_3m", "n_total_tests", "alpha_corrected", "run_date", "notes"],
-    "daily_context_log": ["date", "geo_score_eod", "nepal_score_eod", "combined_score_eod", "nepse_index_eod", "nepse_change_pct", "dxy_value", "dxy_change_pct", "market_state", "advancing", "declining", "breadth_score", "total_turnover_npr", "policy_rate", "fd_rate_pct", "lending_rate", "bop_status", "overall_sentiment", "key_events_summary", "nepal_pulse_highlights", "geo_summary", "nrb_macro_summary", "signals_summary", "buy_count", "wait_count", "avoid_count", "gate_miss_count", "gate_top_category", "gate_false_block_pct", "signals_avg_confidence", "source", "backfilled", "created_at"],
+    "daily_context_log": ["date", "geo_score_eod", "nepal_score_eod", "combined_score_eod", "nepse_index_eod", "nepse_change_pct", "dxy_value", "dxy_change_pct", "market_state", "advancing", "declining", "breadth_score", "total_turnover_npr", "policy_rate", "fd_rate_pct", "lending_rate", "bop_status", "overall_sentiment", "key_events_summary", "nepal_pulse_highlights", "geo_summary", "nrb_macro_summary", "signals_summary", "buy_count", "wait_count", "avoid_count", "gate_miss_count", "gate_top_category", "gate_false_block_pct", "signals_avg_confidence", "source", "backfilled", "created_at", "headlines_political", "headlines_economy", "headlines_nepse"],
     "fd_rates": ["fetch_date", "institute_code", "institute_name", "product_name", "interest_rate", "interest_pct", "tenure_label", "tenure_months", "tenure_category", "minimum_balance", "institute_type", "source"],
     "fd_rate_summary": ["fetch_date", "avg_rate_pct", "max_rate_pct", "min_rate_pct", "benchmark_rate_pct", "benchmark_products", "best_bank_name", "best_bank_rate", "best_tenure", "rate_vs_prev_pct", "rate_direction", "fd_score_signal", "total_products"],
     "international_prices": ["id", "date", "variable_name", "close_price", "source"],
