@@ -34,7 +34,7 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from sheets import run_raw_sql, upsert_row
+from sheets import run_raw_sql, upsert_row, update_row
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LOGGING
@@ -196,10 +196,10 @@ def _increment_tracking_days(row_id: int, new_days: int, dry_run: bool) -> None:
     if dry_run:
         return
     try:
-        upsert_row(
+        update_row(
             "gate_misses",
-            {"id": str(row_id), "tracking_days": str(new_days)},
-            conflict_columns=["id"],
+            {"tracking_days": str(new_days)},
+            where={"id": row_id},
         )
     except Exception as e:
         log.warning("_increment_tracking_days failed for id=%s: %s", row_id, e)
@@ -217,16 +217,15 @@ def _stamp_outcome(
         log.info("[DRY-RUN] Would stamp id=%s → %s (%.2f%%)", row_id, outcome, return_pct)
         return
     try:
-        upsert_row(
+        update_row(
             "gate_misses",
             {
-                "id":                  str(row_id),
                 "outcome":             outcome,
                 "outcome_return_pct":  str(round(return_pct, 4)),
                 "tracking_days":       str(tracking_days),
                 "outcome_stamped_at":  today_str(),
             },
-            conflict_columns=["id"],
+            where={"id": row_id},
         )
         log.info("Stamped id=%s → %s (%.2f%%)", row_id, outcome, return_pct)
     except Exception as e:
@@ -363,6 +362,42 @@ def run_eod(dry_run: bool = False) -> dict:
 # SUMMARY FOR GPT (called by learning_hub.py)
 # ─────────────────────────────────────────────────────────────────────────────
 
+
+def _write_gate_proposals(proposals: list[dict]) -> None:
+    """
+    Upsert gate_proposals rows.
+    Conflict key: (parameter_name, review_week) — overwrites if re-run same week.
+    review_week format: "2026-W15"
+    """
+    if not proposals:
+        return
+    from sheets import upsert_row
+    review_week = datetime.now(NST).strftime("%G-W%V")   # ISO week
+    written = 0
+    for i, p in enumerate(proposals, start=1):
+        try:
+            upsert_row(
+                "gate_proposals",
+                {
+                    "review_week":      review_week,
+                    "proposal_number":  str(i),
+                    "parameter_name":   p["parameter"],
+                    "current_value":    str(p["current"]),
+                    "proposed_value":   str(p["suggested"]),
+                    "evidence":         p["evidence"],
+                    "false_block_rate": str(p["false_block_rate"]),
+                    "sample_size":      str(p["sample_size"]),
+                    "status":           "PENDING",
+                    "created_at":       datetime.now(NST).strftime("%Y-%m-%d %H:%M:%S"),
+                },
+                conflict_columns=["parameter_name", "review_week"],
+            )
+            written += 1
+        except Exception as exc:
+            log.warning("_write_gate_proposals: failed for %s — %s", p["parameter"], exc)
+    log.info("_write_gate_proposals: wrote %d/%d proposals to gate_proposals", written, len(proposals))
+
+
 def get_summary_for_gpt(days: int = 90) -> dict:
     """
     Called by learning_hub._load_gate_miss_summary().
@@ -433,14 +468,18 @@ def get_summary_for_gpt(days: int = 90) -> dict:
     stamped_rows  = [r for r in all_rows if r.get("outcome")]
     total_stamped = len(stamped_rows)
 
-    # ── By category ───────────────────────────────────────────────────────────
+    # ── By category — all rows for totals, stamped rows for outcome breakdown ─
     by_category: dict[str, dict] = defaultdict(lambda: {
-        "total": 0, "false_block": 0, "correct_block": 0, "neutral": 0,
+        "total": 0, "stamped": 0, "false_block": 0, "correct_block": 0, "neutral": 0,
     })
 
-    for row in stamped_rows:
-        cat = row.get("gate_category", "OTHER")
+    for row in all_rows:
+        cat = row.get("gate_category") or "OTHER"
         by_category[cat]["total"] += 1
+
+    for row in stamped_rows:
+        cat = row.get("gate_category") or "OTHER"
+        by_category[cat]["stamped"] += 1
         outcome = row.get("outcome", "")
         if outcome == "FALSE_BLOCK":
             by_category[cat]["false_block"] += 1
@@ -449,9 +488,9 @@ def get_summary_for_gpt(days: int = 90) -> dict:
         else:
             by_category[cat]["neutral"] += 1
 
-    # Compute rates
+    # Compute rates (based on stamped rows only)
     for cat, stats in by_category.items():
-        n = stats["total"]
+        n = stats["stamped"]
         if n > 0:
             stats["false_block_rate"]   = round(stats["false_block"]   / n, 3)
             stats["correct_block_rate"] = round(stats["correct_block"] / n, 3)
@@ -459,21 +498,25 @@ def get_summary_for_gpt(days: int = 90) -> dict:
             stats["false_block_rate"]   = 0.0
             stats["correct_block_rate"] = 0.0
 
-    # ── By market state ───────────────────────────────────────────────────────
+    # ── By market state — all rows for totals, stamped rows for outcome rates ─
     by_market_state: dict[str, dict] = defaultdict(lambda: {
-        "total": 0, "false_block": 0,
+        "total": 0, "stamped": 0, "false_block": 0,
     })
 
-    for row in stamped_rows:
-        ms = row.get("market_state", "UNKNOWN")
+    for row in all_rows:
+        ms = row.get("market_state") or "UNKNOWN"
         by_market_state[ms]["total"] += 1
+
+    for row in stamped_rows:
+        ms = row.get("market_state") or "UNKNOWN"
+        by_market_state[ms]["stamped"] += 1
         if row.get("outcome") == "FALSE_BLOCK":
             by_market_state[ms]["false_block"] += 1
 
     for ms, stats in by_market_state.items():
-        n = stats["total"]
+        n = stats["stamped"]
         stats["false_block_rate"] = round(stats["false_block"] / n, 3) if n > 0 else 0.0
-        stats["n"] = n
+        stats["n"] = stats["total"]
 
     # ── Worst category ────────────────────────────────────────────────────────
     worst_category       = None
@@ -536,6 +579,9 @@ def get_summary_for_gpt(days: int = 90) -> dict:
             "false_block_rate": fb_rate,
             "sample_size": n,
         })
+
+    # ── Fix 2: persist proposals to gate_proposals table ─────────────────────
+    _write_gate_proposals(proposal_candidates)
 
     return {
         "total_misses":          total_misses,

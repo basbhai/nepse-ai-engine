@@ -47,6 +47,7 @@ from datetime import datetime
 from typing import Optional
 
 from config import NST, GEMINI_API_KEY, GEMINI_MODEL
+from filter_engine import run_filter, get_filter_context, get_last_near_misses
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,50 @@ MAX_CANDIDATES_TO_GEMINI = 10
 
 # Max stocks Gemini can flag for Claude (keep Claude calls rare and high quality)
 MAX_FLAGS_FOR_CLAUDE = 3
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# NEAR-MISS FLUSH  (Fix 1)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def flush_near_misses_to_db() -> None:
+    """
+    Write NearMiss objects captured by the last run_filter() call to gate_misses.
+    Upsert on (symbol, date) — re-running same day overwrites, never duplicates.
+    Called automatically after every run_filter() in this module.
+    """
+    from sheets import upsert_row
+    misses = get_last_near_misses()
+    if not misses:
+        return
+    written = 0
+    for m in misses:
+        try:
+            upsert_row(
+                "gate_misses",
+                {
+                    "symbol":                   m.symbol,
+                    "sector":                   m.sector,
+                    "date":                     m.date,
+                    "gate_reason":              m.gate_reason,
+                    "gate_category":            m.gate_category,
+                    "price_at_block":           str(m.price_at_block) if m.price_at_block else None,
+                    "market_state":             m.market_state,
+                    "tech_score":               str(m.tech_score),
+                    "conf_score":               str(m.conf_score),
+                    "composite_score_would_be": str(m.composite_score_would_be),
+                    "outcome":                  None,
+                    "tracking_days":            "0",
+                },
+                conflict_columns=["symbol", "date"],
+            )
+            written += 1
+        except Exception as exc:
+            logger.warning("flush_near_misses_to_db: failed for %s — %s", m.symbol, exc)
+    logger.info(
+        "flush_near_misses_to_db: wrote %d/%d near-misses to gate_misses",
+        written, len(misses),
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -88,26 +133,28 @@ class GeminiFlag:
     suggested_hold:  int        = 17
     geo_combined:    int        = 0
     market_state:    str        = ""
-    support_level:   float      = 0.0   # lowest low over last 20 trading days
-    resistance_level:float      = 0.0   # highest high over last 20 trading days
+    support_level:   float      = 0.0
+    resistance_level:float      = 0.0
     market_log_id:   int        = None
 
-    # ── Full FilterCandidate passthrough — needed for complete market_log write ─
+    # ── Full FilterCandidate passthrough ──────────────────────────────────────
     change_pct:       float      = 0.0
     volume:           int        = 0
-    rsi_signal:       str        = ""       # OVERSOLD | NEUTRAL | OVERBOUGHT
-    ema_20_50_cross:  str        = ""       # GOLDEN | DEATH | NONE
-    ema_50_200_cross: str        = ""       # GOLDEN | DEATH | NONE
+    rsi_signal:       str        = ""
+    ema_20_50_cross:  str        = ""
+    ema_50_200_cross: str        = ""
     macd_histogram:   float      = 0.0
+    macd_line:        float      = 0.0   # MACD line value (from FilterCandidate)
+    macd_signal_line: float      = 0.0   # MACD signal line value
     bb_pct_b:         float      = 0.5
     bb_upper:         float      = 0.0
     bb_lower:         float      = 0.0
     atr_pct:          float      = 0.0
-    tech_signal:      str        = ""       # STRONG_BULL | BULL | NEUTRAL | BEAR
-    conf_score:       float      = 0.0     # ShareSansar conf score (NOT Claude confidence)
+    tech_signal:      str        = ""
+    conf_score:       float      = 0.0
     candle_conf:      int        = 0
-    geo_score:        int        = 0       # raw geo_score (before adding nepal)
-    nepal_score:      int        = 0       # raw nepal_score
+    geo_score:        int        = 0
+    nepal_score:      int        = 0
     bandh_today:      str        = "NO"
     crisis_detected:  str        = "NO"
     ipo_drain:        str        = "NO"
@@ -137,13 +184,11 @@ def _load_relevant_lessons(symbols: list[str], limit: int = 8) -> list[str]:
     """
     Load recent Learning Hub lessons relevant to the candidate symbols.
     Gemini uses these to avoid repeating past mistakes.
-    Returns list of lesson strings.
     """
     lessons = []
     try:
         from sheets import run_raw_sql
 
-        # Get lessons for specific symbols first, then recent general lessons
         sym_list = "', '".join(symbols)
         rows = run_raw_sql(
             f"""
@@ -158,10 +203,10 @@ def _load_relevant_lessons(symbols: list[str], limit: int = 8) -> list[str]:
             (limit,)
         )
         for r in (rows or []):
-            sym     = r.get("symbol", "?")
-            pattern = r.get("pattern", "")
-            lesson  = r.get("lesson", "")[:120]
-            outcome = r.get("outcome", "")
+            sym      = r.get("symbol", "?")
+            pattern  = r.get("pattern", "")
+            lesson   = r.get("lesson", "")[:120]
+            outcome  = r.get("outcome", "")
             win_rate = r.get("win_when_applied", "")
             applied  = r.get("applied_count", "")
             lessons.append(
@@ -180,20 +225,15 @@ def _load_relevant_lessons(symbols: list[str], limit: int = 8) -> list[str]:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _load_open_positions() -> list[str]:
-    """
-    Load currently open positions from portfolio table.
-    Gemini uses this to avoid recommending stocks already held
-    and to enforce max 3 simultaneous positions rule.
-    """
+    """Load currently open positions from portfolio table."""
     try:
         from sheets import read_tab
         rows = read_tab("portfolio")
-        open_syms = [
+        return [
             r["symbol"].upper()
             for r in rows
             if r.get("status", "").upper() == "OPEN" and r.get("symbol")
         ]
-        return open_syms
     except Exception as exc:
         logger.warning("Could not load open positions: %s", exc)
         return []
@@ -219,10 +259,6 @@ def _build_prompt(
     open_positions: list[str],
     total_capital:  float,
 ) -> str:
-    """
-    Build the Gemini Flash screening prompt.
-    Compact but complete — Gemini needs context to make good decisions.
-    """
     from filter_engine import format_candidate_for_gemini
 
     nst_now      = datetime.now(tz=NST)
@@ -232,17 +268,14 @@ def _build_prompt(
     ipo_drain    = context.get("ipo_drain", "NO")
     crisis       = context.get("crisis_detected", "NO")
 
-    # Open positions section
-    positions_str = ", ".join(open_positions) if open_positions else "None"
-    slots_remaining = 999 #max(0, 3 - len(open_positions)) for test
+    positions_str   = ", ".join(open_positions) if open_positions else "None"
+    slots_remaining = 999  # max(0, 3 - len(open_positions)) for test
 
-    # Candidates section
     candidates_str = "\n".join(
         f"{i+1}. {format_candidate_for_gemini(c)}"
         for i, c in enumerate(candidates[:MAX_CANDIDATES_TO_GEMINI])
     )
 
-    # Learning Hub lessons section
     lessons_str = "\n".join(f"  - {l}" for l in lessons) if lessons else "  No lessons yet"
 
     prompt = f"""You are a NEPSE stock screener AI. Today is {nst_now.strftime('%Y-%m-%d %H:%M')} NST.
@@ -319,7 +352,6 @@ Return ONLY this JSON — no markdown, no explanation, no extra text:
       "action": "ANALYZE",
       "urgency": "NORMAL or HIGH or URGENT",
       "reason": "one sentence — why this stock is worth deep analysis",
-      
       "risk": "one sentence — key risk to watch",
       "primary_signal": "MACD or BB or SMA or OBV_MOMENTUM"
     }}
@@ -341,10 +373,7 @@ Return ONLY this JSON — no markdown, no explanation, no extra text:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _call_gemini(prompt: str) -> Optional[dict]:
-    """
-    Send prompt to Gemini Flash. Returns parsed JSON dict or None on failure.
-    Uses google.genai (new SDK — google.generativeai is deprecated).
-    """
+    """Send prompt to Gemini Flash. Returns parsed JSON dict or None on failure."""
     if not GEMINI_API_KEY:
         logger.error("GEMINI_API_KEY not set in .env")
         return None
@@ -354,7 +383,6 @@ def _call_gemini(prompt: str) -> Optional[dict]:
         from google.genai import types
 
         client = genai.Client(api_key=GEMINI_API_KEY)
-
         logger.info("Calling Gemini Flash (%s)...", GEMINI_MODEL)
 
         response = client.models.generate_content(
@@ -368,13 +396,11 @@ def _call_gemini(prompt: str) -> Optional[dict]:
                     "You return only valid JSON — no markdown, no fences, no explanation."
                 ),
                 response_mime_type = "application/json",
-                temperature        = 0.2,   # low = consistent screening decisions
+                temperature        = 0.2,
             ),
         )
 
         raw = response.text.strip()
-
-        # Strip code fences if Gemini adds them despite mime type
         if raw.startswith("```"):
             raw = raw.split("```")[1]
             if raw.startswith("json"):
@@ -400,20 +426,14 @@ def _call_gemini(prompt: str) -> Optional[dict]:
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 5 — KEYWORD FALLBACK
-# If Gemini unavailable, use rule-based fallback to still produce flags.
-# Maintains pipeline continuity when API is down.
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _keyword_fallback(
-    candidates:     list,
-    open_positions: list[str],
+    candidates:      list,
+    open_positions:  list[str],
     slots_remaining: int,
 ) -> dict:
-    """
-    Rule-based fallback when Gemini is unavailable.
-    Applies the same screening rules mechanically.
-    Returns same structure as Gemini JSON response.
-    """
+    """Rule-based fallback when Gemini is unavailable."""
     logger.info("Using keyword fallback for Gemini screening")
 
     flags   = []
@@ -422,27 +442,22 @@ def _keyword_fallback(
     for c in candidates[:MAX_CANDIDATES_TO_GEMINI]:
         sym = c.symbol
 
-        # Rule 1: skip open positions
         if sym in open_positions:
             skipped.append({"symbol": sym, "reason": "already in open positions"})
             continue
 
-        # Rule 2: portfolio full
         if slots_remaining == 0 and len(open_positions) >= 99:
             skipped.append({"symbol": sym, "reason": "portfolio full (3/3 positions)"})
             continue
 
-        # Rule 3: prefer MACD/BB as primary signal
         if c.primary_signal == "RSI":
             skipped.append({"symbol": sym, "reason": "RSI as primary signal — lost money standalone in NEPSE"})
             continue
 
-        # Build flag
         if len(flags) >= MAX_FLAGS_FOR_CLAUDE:
             skipped.append({"symbol": sym, "reason": "max flags reached for this run"})
             continue
 
-        # Urgency
         if c.macd_cross == "BULLISH" and c.candle_tier == 1:
             urgency = "URGENT"
         elif c.macd_cross == "BULLISH" or c.bb_signal == "LOWER_TOUCH":
@@ -467,13 +482,13 @@ def _keyword_fallback(
         })
 
     return {
-        "run_time":       datetime.now(tz=NST).strftime("%Y-%m-%d %H:%M"),
-        "market_state":   candidates[0].market_state if candidates else "UNKNOWN",
+        "run_time":        datetime.now(tz=NST).strftime("%Y-%m-%d %H:%M"),
+        "market_state":    candidates[0].market_state if candidates else "UNKNOWN",
         "slots_remaining": slots_remaining,
-        "flags":          flags,
-        "skipped":        skipped,
-        "market_comment": "Gemini unavailable — keyword fallback used",
-        "fallback_used":  True,
+        "flags":           flags,
+        "skipped":         skipped,
+        "market_comment":  "Gemini unavailable — keyword fallback used",
+        "fallback_used":   True,
     }
 
 
@@ -485,14 +500,10 @@ def _assemble_flags(
     gemini_result: dict,
     candidates:    list,
 ) -> list[GeminiFlag]:
-    """
-    Convert Gemini JSON response into GeminiFlag objects.
-    Enriches with full candidate data for claude_analyst.py.
-    """
-    # Build candidate lookup
+    """Convert Gemini JSON response into GeminiFlag objects."""
     cand_map = {c.symbol: c for c in candidates}
-
     flags = []
+
     for f in gemini_result.get("flags", []):
         sym = str(f.get("symbol", "")).upper()
         if not sym:
@@ -530,29 +541,30 @@ def _assemble_flags(
             market_state     = c.market_state,
             support_level    = c.support_level,
             resistance_level = c.resistance_level,
-            # ── Full passthrough from FilterCandidate ──────────────────────
-            change_pct        = c.change_pct,
-            volume            = c.volume,
-            rsi_signal        = c.rsi_signal,
-            ema_20_50_cross   = c.ema_20_50_cross,
-            ema_50_200_cross  = c.ema_50_200_cross,
-            macd_histogram    = c.macd_histogram,
-            bb_pct_b          = c.bb_pct_b,
-            bb_upper          = float(getattr(c, "bb_upper",  0.0) or 0.0),
-            bb_lower          = float(getattr(c, "bb_lower",  0.0) or 0.0),
-            atr_pct           = c.atr_pct,
-            tech_signal       = c.tech_signal,
-            conf_score        = c.conf_score,
-            candle_conf       = c.candle_conf,
-            geo_score         = c.geo_score,
-            nepal_score       = c.nepal_score,
-            bandh_today       = c.bandh_today,
-            crisis_detected   = c.crisis_detected,
-            ipo_drain         = c.ipo_drain,
-            sector_mult       = c.sector_mult,
-            cstar_signal      = c.cstar_signal,
-            fundamental_adj   = c.fundamental_adj,
-            fundamental_reason= c.fundamental_reason,
+            change_pct       = c.change_pct,
+            volume           = c.volume,
+            rsi_signal       = c.rsi_signal,
+            ema_20_50_cross  = c.ema_20_50_cross,
+            ema_50_200_cross = c.ema_50_200_cross,
+            macd_histogram   = c.macd_histogram,
+            bb_pct_b         = c.bb_pct_b,
+            bb_upper         = float(getattr(c, "bb_upper",  0.0) or 0.0),
+            bb_lower         = float(getattr(c, "bb_lower",  0.0) or 0.0),
+            macd_line        = float(getattr(c, "macd_line",        0.0) or 0.0),
+            macd_signal_line = float(getattr(c, "macd_signal_line", 0.0) or 0.0),
+            atr_pct          = c.atr_pct,
+            tech_signal      = c.tech_signal,
+            conf_score       = c.conf_score,
+            candle_conf      = c.candle_conf,
+            geo_score        = c.geo_score,
+            nepal_score      = c.nepal_score,
+            bandh_today      = c.bandh_today,
+            crisis_detected  = c.crisis_detected,
+            ipo_drain        = c.ipo_drain,
+            sector_mult      = c.sector_mult,
+            cstar_signal     = c.cstar_signal,
+            fundamental_adj  = c.fundamental_adj,
+            fundamental_reason = c.fundamental_reason,
         ))
 
     return flags
@@ -569,20 +581,15 @@ def _write_log(
 ) -> None:
     """
     Write Gemini screening run to market_log table for audit trail.
-    One row per flagged stock. Reuses existing GEMINI_FLAG row if already
-    written today — never reuses Claude BUY/WAIT/AVOID rows.
- 
-    FIX: existing check now filters to action LIKE 'GEMINI_FLAG%' only.
-    Old code used symbol+date only — accidentally matched Claude rows written
-    earlier today, causing claude_analyst to overwrite a real signal.
+    Conflict key: action LIKE 'GEMINI_FLAG%' + symbol + date — never
+    overwrites Claude BUY/WAIT/AVOID rows written earlier today.
     """
     try:
         from sheets import write_row, run_raw_sql
         nst_now = datetime.now(tz=NST)
         today   = nst_now.strftime("%Y-%m-%d")
- 
+
         for flag in flags:
-            # FIX: only match GEMINI_FLAG rows — never match Claude rows
             existing = run_raw_sql(
                 """
                 SELECT id FROM market_log
@@ -594,16 +601,15 @@ def _write_log(
                 """,
                 (flag.symbol, today)
             )
- 
+
             if existing:
                 flag.market_log_id = existing[0]["id"]
                 logger.debug(
                     "%s: GEMINI_FLAG row already exists today (id=%s) — reusing",
                     flag.symbol, flag.market_log_id,
                 )
-                continue  # skip insert — Claude will UPDATE this row
- 
-            # No existing GEMINI_FLAG row — write a new one
+                continue
+
             write_row("market_log", {
                 "date":           today,
                 "time":           nst_now.strftime("%H:%M:%S"),
@@ -623,8 +629,7 @@ def _write_log(
                 "candle_pattern": flag.best_candle,
                 "timestamp":      flag.timestamp,
             })
- 
-            # Fetch id of the row just inserted — filter to GEMINI_FLAG
+
             rows = run_raw_sql(
                 """
                 SELECT id FROM market_log
@@ -637,48 +642,28 @@ def _write_log(
                 (flag.symbol, today)
             )
             flag.market_log_id = rows[0]["id"] if rows else None
-            logger.debug(
-                "%s: GEMINI_FLAG row written (id=%s)",
-                flag.symbol, flag.market_log_id,
-            )
- 
-        skipped = gemini_result.get("skipped", [])
-        if skipped:
-            logger.debug(
-                "Gemini skipped: %s",
-                ", ".join(s["symbol"] for s in skipped if s.get("symbol")),
-            )
- 
+            logger.debug("%s: GEMINI_FLAG row written (id=%s)", flag.symbol, flag.market_log_id)
+
         market_comment = gemini_result.get("market_comment", "")
         if market_comment:
             logger.info("Gemini market comment: %s", market_comment)
- 
+
     except Exception as exc:
         logger.warning("_write_log failed: %s", exc)
- 
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 8 — MAIN RUNNER
 # ══════════════════════════════════════════════════════════════════════════════
 
 def run_gemini_filter(
-    candidates: list   = None,
+    candidates:  list  = None,
     market_data: dict  = None,
     date:        str   = None,
 ) -> list[GeminiFlag]:
     """
     Main entry point. Called every 6 min by trading.yml
     after filter_engine.run_filter().
-
-    Args:
-        candidates:  list[FilterCandidate] from filter_engine.run_filter()
-                     If None, runs filter_engine automatically.
-        market_data: dict[symbol, PriceRow] — passed to filter_engine if
-                     candidates is None.
-        date:        Override date YYYY-MM-DD (default: today NST).
-
-    Returns:
-        list[GeminiFlag] — stocks to send to claude_analyst.py
-        Empty list if nothing worth analyzing today.
     """
     if date is None:
         date = datetime.now(tz=NST).strftime("%Y-%m-%d")
@@ -689,11 +674,19 @@ def run_gemini_filter(
     # ── Get candidates from filter_engine if not provided ────────────────────
     if candidates is None:
         try:
-            from filter_engine import run_filter, get_filter_context
-            candidates = run_filter(market_data=market_data, top_n=MAX_CANDIDATES_TO_GEMINI, date=date)
+            candidates = run_filter(
+                market_data=market_data,
+                top_n=MAX_CANDIDATES_TO_GEMINI,
+                date=date,
+            )
+            flush_near_misses_to_db()   # Fix 1 — always flush after run_filter()
         except Exception as exc:
             logger.error("filter_engine failed: %s", exc)
             return []
+    else:
+        # candidates were provided externally — still flush whatever run_filter
+        # captured in its last call (trading loop may have called it separately)
+        flush_near_misses_to_db()       # Fix 1
 
     if not candidates:
         logger.info("No candidates from filter_engine — nothing to screen")
@@ -703,14 +696,13 @@ def run_gemini_filter(
 
     # ── Context ───────────────────────────────────────────────────────────────
     try:
-        from filter_engine import get_filter_context
         context = get_filter_context()
     except Exception:
         context = {}
 
-    # ── Portfolio + Learning Hub ──────────────────────────────────────────────
+    # ── Portfolio ─────────────────────────────────────────────────────────────
     open_positions  = _load_open_positions()
-    slots_remaining =  99#max(0, 3 - len(open_positions))
+    slots_remaining = 999  # max(0, 3 - len(open_positions)) for test
     total_capital   = _load_total_capital()
     symbols         = [c.symbol for c in candidates]
     lessons         = _load_relevant_lessons(symbols)
@@ -720,8 +712,7 @@ def run_gemini_filter(
         len(open_positions), slots_remaining, total_capital, len(lessons),
     )
 
-    # ── Portfolio full check ──────────────────────────────────────────────────
-    if slots_remaining == 0 and len(open_positions) >= 99:  #temp disable
+    if slots_remaining == 0 and len(open_positions) >= 99:
         logger.info("Portfolio full (3/3 positions) — no new signals needed")
         return []
 
@@ -736,19 +727,16 @@ def run_gemini_filter(
 
     gemini_result = _call_gemini(prompt)
 
-    # ── Fallback if Gemini unavailable ────────────────────────────────────────
     if gemini_result is None:
         logger.warning("Gemini unavailable — using keyword fallback")
         gemini_result = _keyword_fallback(candidates, open_positions, slots_remaining)
 
-    # ── Assemble flags ────────────────────────────────────────────────────────
+    # ── Assemble + log ────────────────────────────────────────────────────────
     flags = _assemble_flags(gemini_result, candidates)
 
-    # ── Write audit log ───────────────────────────────────────────────────────
     if flags:
         _write_log(gemini_result, flags, candidates)
 
-    # ── Summary ───────────────────────────────────────────────────────────────
     fallback_note = " [FALLBACK]" if gemini_result.get("fallback_used") else ""
     logger.info(
         "gemini_filter done%s: %d flagged for Claude | %d skipped | comment: %s",
@@ -757,7 +745,6 @@ def run_gemini_filter(
         len(gemini_result.get("skipped", [])),
         gemini_result.get("market_comment", "—")[:80],
     )
-
     for f in flags:
         logger.info("  FLAG: %s", f.summary())
 
@@ -769,10 +756,6 @@ def run_gemini_filter(
 # ══════════════════════════════════════════════════════════════════════════════
 
 def format_flag_for_claude(flag: GeminiFlag) -> str:
-    """
-    Compact summary of a GeminiFlag for inclusion in Claude analyst prompt.
-    Claude gets this as pre-context before doing deep analysis.
-    """
     candle = f"{flag.best_candle}(T{flag.candle_tier})" if flag.best_candle else "none"
     return (
         f"SYMBOL:{flag.symbol} SECTOR:{flag.sector} LTP:{flag.ltp:.2f} "
@@ -806,11 +789,8 @@ if __name__ == "__main__":
     print("  NEPSE AI — gemini_filter.py")
     print("=" * 70)
 
-    # ── Get candidates ────────────────────────────────────────────────────────
     print("\n[1/3] Running filter_engine...")
     try:
-        from filter_engine import run_filter, get_filter_context
-
         if dry_run:
             from modules.indicators import HistoryCache, DEFAULT_LOAD_PERIODS
             from modules.scraper import PriceRow as PR
@@ -835,10 +815,10 @@ if __name__ == "__main__":
             md = get_all_market_data(write_breadth=False)
             candidates = run_filter(market_data=md, top_n=MAX_CANDIDATES_TO_GEMINI)
 
+        flush_near_misses_to_db()  # Fix 1
         print(f"  ✅ {len(candidates)} candidates from filter_engine")
-        if candidates:
-            for c in candidates[:5]:
-                print(f"     {c.summary()}")
+        for c in candidates[:5]:
+            print(f"     {c.summary()}")
 
     except Exception as e:
         print(f"  ❌ filter_engine failed: {e}")
@@ -848,24 +828,22 @@ if __name__ == "__main__":
         print("\n  No candidates — nothing to screen today")
         sys.exit(0)
 
-    # ── Load context ──────────────────────────────────────────────────────────
     print("\n[2/3] Loading context...")
     context         = get_filter_context()
     open_positions  = _load_open_positions()
-    slots_remaining =  999            #max(0, 3 - len(open_positions)) for testing
+    slots_remaining = 999
     total_capital   = _load_total_capital()
     lessons         = _load_relevant_lessons([c.symbol for c in candidates])
 
-    print(f"  Open positions: {open_positions or 'None'}")
+    print(f"  Open positions:  {open_positions or 'None'}")
     print(f"  Slots remaining: {slots_remaining}")
-    print(f"  Capital: NPR {total_capital:,.0f}")
-    print(f"  Lessons loaded: {len(lessons)}")
+    print(f"  Capital:         NPR {total_capital:,.0f}")
+    print(f"  Lessons loaded:  {len(lessons)}")
 
     if slots_remaining == 0:
         print("\n  Portfolio full — no new signals needed")
         sys.exit(0)
 
-    # ── Gemini screening ──────────────────────────────────────────────────────
     print(f"\n[3/3] {'Keyword fallback (--no-gemini)' if no_gemini else 'Gemini Flash screening'}...")
 
     if no_gemini:
@@ -879,29 +857,28 @@ if __name__ == "__main__":
 
     flags = _assemble_flags(gemini_result, candidates)
 
-    # ── Results ───────────────────────────────────────────────────────────────
     print(f"\n  Market comment: {gemini_result.get('market_comment', '—')}")
     print()
 
     if flags:
         print(f"  ✅ {len(flags)} stock(s) flagged for Claude analysis:\n")
         for f in flags:
-            print(f"  {'🚨' if f.urgency == 'URGENT' else '⚡' if f.urgency == 'HIGH' else '📊'} "
-                  f"{f.symbol} [{f.urgency}]")
+            print(
+                f"  {'🚨' if f.urgency == 'URGENT' else '⚡' if f.urgency == 'HIGH' else '📊'} "
+                f"{f.symbol} [{f.urgency}]"
+            )
             print(f"     Signal:  {f.primary_signal} | Score: {f.composite_score:.1f} | "
                   f"Tech: {f.tech_score} | RSI: {f.rsi_14:.1f}")
             print(f"     Reason:  {f.gemini_reason}")
             print(f"     Risk:    {f.gemini_risk}")
             print(f"     Hold:    ~{f.suggested_hold} days")
             print()
-
-        print(f"  Claude-ready format:")
+        print("  Claude-ready format:")
         print("  " + "─" * 60)
         for f in flags:
             print(f"  {format_flag_for_claude(f)}")
     else:
         print("  No stocks flagged for Claude today.")
-        print("  Skipped:")
         for s in gemini_result.get("skipped", [])[:5]:
             print(f"    {s.get('symbol','?')}: {s.get('reason','')}")
 

@@ -199,6 +199,13 @@ class FilterCandidate:
     support_level:    float = 0.0   # lowest low over last 20 trading days
     resistance_level: float = 0.0   # highest high over last 20 trading days
 
+#
+#     # Bollinger Band price levels (from indicators table)
+    bb_upper:         float = 0.0   # upper band price level
+    bb_lower:         float = 0.0   # lower band price level
+    macd_line:        float = 0.0   # MACD line value (not cross string)
+    macd_signal_line: float = 0.0   # MACD signal line value
+
     # ShareSansar conf score (live from scraper)
     conf_score:       float = 0.0
     conf_signal:      str   = ""
@@ -1204,8 +1211,13 @@ def run_filter(
             ema_50_200_cross = str(ind.get("ema_50_200_cross",   "")  or ""),
             macd_cross       = str(ind.get("macd_cross",     "NONE") or "NONE"),
             macd_histogram   = float(ind.get("macd_histogram",   0)   or 0),
+            macd_line        = float(ind.get("macd_line",         0)   or 0),
+            macd_signal_line = float(ind.get("macd_signal",       0)   or 0),
             bb_signal        = str(ind.get("bb_signal",  "NEUTRAL")   or "NEUTRAL"),
             bb_pct_b         = float(ind.get("bb_pct_b",        0.5)  or 0.5),
+            bb_upper         = float(ind.get("bb_upper",          0)   or 0),
+            bb_lower         = float(ind.get("bb_lower",          0)   or 0),
+            
             obv_trend        = str(ind.get("obv_trend",    "FLAT")    or "FLAT"),
             atr_pct          = float(ind.get("atr_pct",          0)   or 0),
             tech_score       = int(ind.get("tech_score",         0)   or 0),

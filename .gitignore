@@ -15,3 +15,8 @@ research/
 
 SQL backup/
 
+*.bak
+
+*.sql
+*.dump
+

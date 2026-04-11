@@ -123,15 +123,22 @@ model market_log {
   ema_20           Text
   ema_50           Text
   ema_200          Text
+  primary_signal   Text   // top signal that triggered recommendation
   macd_line        Text
   macd_signal      Text
+  macd_histogram   Text   // MACD histogram at signal time
+  bb_pct_b         Text   // Bollinger %B at signal time
+  bb_upper         Text   // Bollinger upper band
+  bb_lower         Text   // Bollinger lower band
+  bollinger_upper  Text
+  bollinger_lower  Text
+  ema_20_50_cross  Text   // EMA 20/50 crossover signal
+  ema_50_200_cross Text   // EMA 50/200 crossover signal
   volume           Text
   volume_ratio     Text
   obv_trend        Text
   vwap             Text
   atr_14           Text
-  bollinger_upper  Text
-  bollinger_lower  Text
   support_level    Text
   resistance_level Text
   candle_pattern   Text
@@ -143,6 +150,11 @@ model market_log {
   fundamental_score Text
   geo_score        Text
   macro_score      Text
+  sector_mult      Text   // sector multiplier applied at decision time
+  cstar_signal     Text   // c-star composite signal
+  market_state     Text   // BULLISH | BEARISH | SIDEWAYS at signal time
+  gemini_reason    Text   // Gemini rationale for recommendation
+  gemini_risk      Text   // Gemini identified risk factors
   reasoning        Text
   outcome          Text  @default("PENDING")
   actual_pnl       Text
@@ -312,6 +324,9 @@ model nepal_pulse {
   source               Text
   timestamp            Text
 
+  headlines_politics  Text
+  headlines_economy   Text
+  headlines_stock     Text
   @@index([date])
 }
 
@@ -890,6 +905,11 @@ model daily_context_log {
   source               Text  @default("gemini_nightly")
   backfilled           Text  @default("false")  // true if generated retroactively
   created_at           Text
+
+  // ---headilines
+   headlines_political TEXT
+   headlines_economy   TEXT
+    headlines_nepse     TEXT
 
   @@index([date])
 }

@@ -1,19 +1,20 @@
+# -*- coding: utf-8 -*-
 """
-learning_hub.py — NEPSE AI Engine
+learning_hub.py  -  NEPSE AI Engine
 ===================================
 GPT-5o weekly learning review. Runs every Sunday at ~5:45 PM NST.
 
 Reads:
-  - trade_journal         — all BUY trade outcomes with full causal attribution
-  - market_log            — all evaluated WAIT/AVOID outcomes from recommendation_tracker
-  - daily_context_log     — one clean row per trading day (Gemini nightly summary)
-  - learning_hub          — all currently active lessons (for GPT to decide what to supersede)
+  - trade_journal          -  all BUY trade outcomes with full causal attribution
+  - market_log             -  all evaluated WAIT/AVOID outcomes from recommendation_tracker
+  - daily_context_log      -  one clean row per trading day (Gemini nightly summary)
+  - learning_hub           -  all currently active lessons (for GPT to decide what to supersede)
 
-Writes (Option B — supersede, never overwrite):
+Writes (Option B  -  supersede, never overwrite):
   - New lessons:     insert new row, active=true
   - Updated lessons: set old row active=false + superseded_by=new_id,
                      insert new row with supersedes_lesson_id=old_id
-  - No lesson is ever deleted — full audit trail preserved
+  - No lesson is ever deleted  -  full audit trail preserved
 
 Anti-overfitting gates enforced in prompt:
   - BLOCK_ENTRY only after 25+ trades supporting the pattern
@@ -58,7 +59,7 @@ log = logging.getLogger(__name__)
 NST = ZoneInfo("Asia/Kathmandu")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# TOKEN BUDGET — controls how much data we send to GPT
+# TOKEN BUDGET  -  controls how much data we send to GPT
 # ─────────────────────────────────────────────────────────────────────────────
 
 MAX_TRADES        = 80     # most recent trades (GPT sees aggregate stats for older)
@@ -84,7 +85,7 @@ def _call_gpt(system_prompt: str, user_prompt: str, max_tokens: int = MAX_GPT_TO
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type":  "application/json",
         "HTTP-Referer":  "https://github.com/nepse-ai-engine",
-        "X-Title":       "NEPSE AI Engine — Learning Hub",
+        "X-Title":       "NEPSE AI Engine  -  Learning Hub",
     }
     payload = {
         "model":      GPT_MODEL,
@@ -106,7 +107,7 @@ def _call_gpt(system_prompt: str, user_prompt: str, max_tokens: int = MAX_GPT_TO
         return ""
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DATA LOADERS — with token-aware limits
+# DATA LOADERS  -  with token-aware limits
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -117,7 +118,7 @@ def _load_trade_journal() -> tuple[list[dict], dict]:
     Aggregate stats cover ALL trades for orientation.
     """
     try:
-        # Aggregate stats — all time
+        # Aggregate stats  -  all time
         agg_rows = run_raw_sql(
             """
             SELECT
@@ -149,7 +150,13 @@ def _load_trade_journal() -> tuple[list[dict], dict]:
 
 
 def _load_wait_avoid_outcomes() -> list[dict]:
-    """All evaluated (non-PENDING) WAIT/AVOID rows from market_log, limited."""
+    """
+    All WAIT/AVOID/BUY rows from market_log for GPT review.
+    Includes PENDING rows -- GPT needs the full picture, not just evaluated ones.
+    AVOID rows are CLOSED immediately on write (no hold period).
+    WAIT rows expire after 5 calendar days.
+    BUY rows are stamped by evaluate_buy_signals() after hold period.
+    """
     try:
         rows = run_raw_sql(
             f"""
@@ -160,19 +167,102 @@ def _load_wait_avoid_outcomes() -> list[dict]:
                    eval_nepse_index, eval_market_state, eval_policy_rate,
                    eval_fd_rate_pct, eval_geo_delta, eval_nepal_delta,
                    eval_price_change_pct, eval_nepse_change_pct, eval_alpha,
-                   eval_key_news
+                   eval_key_news,
+                   entry_price, stop_loss, target_price, primary_signal
             FROM market_log
-            WHERE action IN ('WAIT', 'AVOID')
-              AND outcome != 'PENDING'
+            WHERE action IN ('WAIT', 'AVOID', 'BUY')
             ORDER BY date DESC
             LIMIT {MAX_WAIT_AVOID}
             """
         ) or []
         rows.reverse()
-        log.info("Loaded %d evaluated WAIT/AVOID rows", len(rows))
+        log.info("Loaded %d market_log rows (all actions, all outcomes) for GPT", len(rows))
         return rows
     except Exception as e:
-        log.error("market_log WAIT/AVOID load failed: %s", e)
+        log.error("market_log load failed: %s", e)
+        return []
+
+
+def _load_buy_decisions() -> list[dict]:
+    """
+    Load BUY rows from market_log with full signal context.
+    Cross-references trade_journal to attach final outcome where available.
+    Covers three cases GPT currently cannot see:
+      1. Closed BUYs - signal context at decision time (confidence, reasoning,
+         all technical fields) that trade_journal doesn't carry
+      2. Open BUYs   - currently held positions, tracking vs target/stop
+      3. BUYs the user chose not to trade - sitting in market_log with no
+         matching trade_journal entry
+    Ordered oldest-first (chronological) so GPT reads trend direction naturally.
+    """
+    try:
+        rows = run_raw_sql(
+            f"""
+            SELECT
+                ml.id,
+                ml.date,
+                ml.symbol,
+                ml.sector,
+                ml.action,
+                ml.confidence,
+                ml.reasoning,
+                ml.entry_price,
+                ml.stop_loss,
+                ml.target_price,
+                ml.hold_days,
+                ml.primary_signal,
+                ml.rsi_14,
+                ml.macd_line,
+                ml.macd_signal,
+                ml.macd_histogram,
+                ml.bb_pct_b,
+                ml.bb_upper,
+                ml.bb_lower,
+                ml.ema_20_50_cross,
+                ml.ema_50_200_cross,
+                ml.atr_14,
+                ml.volume,
+                ml.conf_score,
+                ml.geo_score,
+                ml.macro_score,
+                ml.fundamental_score,
+                ml.pe_ratio,
+                ml.eps,
+                ml.roe,
+                ml.npl_pct,
+                ml.sector_mult,
+                ml.cstar_signal,
+                ml.candle_pattern,
+                ml.market_state,
+                ml.gemini_reason,
+                ml.gemini_risk,
+                ml.headlines_politics,
+                ml.headlines_economy,
+                ml.headlines_stock,
+                ml.outcome,
+                -- cross-reference trade_journal for final outcome
+                tj.result          AS tj_result,
+                tj.return_pct      AS tj_return_pct,
+                tj.pnl_npr         AS tj_pnl_npr,
+                tj.hold_days_actual AS tj_hold_days_actual,
+                tj.exit_date       AS tj_exit_date,
+                tj.exit_reason     AS tj_exit_reason,
+                tj.loss_cause      AS tj_loss_cause,
+                tj.alpha_vs_nepse  AS tj_alpha
+            FROM market_log ml
+            LEFT JOIN trade_journal tj
+                ON tj.symbol = ml.symbol
+               AND tj.entry_date::date = ml.date::date
+            WHERE ml.action = 'BUY'
+            ORDER BY ml.date DESC
+            LIMIT 80
+            """
+        ) or []
+        rows.reverse()   # chronological for GPT
+        log.info("Loaded %d BUY decision rows from market_log", len(rows))
+        return rows
+    except Exception as e:
+        log.error("market_log BUY load failed: %s", e)
         return []
 
 
@@ -245,7 +335,7 @@ def _load_gate_miss_summary() -> dict:
 
 
 def _load_macro_trend() -> list[dict]:
-    """Last 6 months of NRB data — trend matters more than snapshot."""
+    """Last 6 months of NRB data  -  trend matters more than snapshot."""
     try:
         rows = run_raw_sql(
             """
@@ -305,7 +395,7 @@ def _load_nepse_trend() -> list[dict]:
 
 
 def _load_backtest_results() -> list[dict]:
-    """Signal performance from backtester — confirmed edges."""
+    """Signal performance from backtester  -  confirmed edges."""
     try:
         return run_raw_sql(
             """
@@ -319,6 +409,31 @@ def _load_backtest_results() -> list[dict]:
         ) or []
     except Exception as e:
         log.warning("backtest_results load failed: %s", e)
+        return []
+
+
+def _load_claude_audit_history() -> list[dict]:
+    """
+    Load last 12 weeks of claude_audit rows so GPT can track accuracy trends
+    over time (e.g. declining avoid_accuracy, improving buy_win_rate).
+    Ordered oldest-first so GPT reads trend direction naturally.
+    """
+    try:
+        rows = run_raw_sql(
+            """
+            SELECT review_week, buy_count, buy_win_rate, buy_avg_return,
+                   wait_count, wait_accuracy, avoid_count, avoid_accuracy,
+                   false_avoid_rate, missed_entry_rate, overall_accuracy,
+                   macro_accuracy, audit_summary
+            FROM claude_audit
+            ORDER BY review_week DESC
+            LIMIT 12
+            """
+        ) or []
+        rows.reverse()   # oldest first → GPT reads trend direction naturally
+        return rows
+    except Exception as e:
+        log.warning("claude_audit_history load failed: %s", e)
         return []
 # ─────────────────────────────────────────────────────────────────────────────
 # DUPLICATE REVIEW GUARD
@@ -338,10 +453,10 @@ def _check_review_already_done(review_week: str) -> bool:
         cnt = int(rows[0].get("cnt", 0)) if rows else 0
         return cnt > 0
     except Exception:
-        return False  # fail open — better to potentially duplicate than skip
+        return False  # fail open  -  better to potentially duplicate than skip
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SERIALIZERS — token-optimized JSON for GPT
+# SERIALIZERS  -  token-optimized JSON for GPT
 # ─────────────────────────────────────────────────────────────────────────────
 
 _TRADE_KEYS = (
@@ -393,6 +508,27 @@ _NEPSE_TREND_KEYS = (
     "date", "current_value", "change_pct",
 )
 
+_CLAUDE_AUDIT_KEYS = (
+    "review_week", "buy_count", "buy_win_rate", "buy_avg_return",
+    "wait_count", "wait_accuracy", "avoid_count", "avoid_accuracy",
+    "false_avoid_rate", "missed_entry_rate", "overall_accuracy",
+    "macro_accuracy", "audit_summary",
+)
+
+_BUY_DECISION_KEYS = (
+    "id", "date", "symbol", "sector", "confidence", "reasoning",
+    "entry_price", "stop_loss", "target_price", "hold_days", "primary_signal",
+    "rsi_14", "macd_histogram", "bb_pct_b", "ema_20_50_cross",
+    "conf_score", "geo_score", "macro_score", "fundamental_score",
+    "pe_ratio", "eps", "roe", "npl_pct",
+    "sector_mult", "cstar_signal", "candle_pattern", "market_state",
+    "gemini_reason", "gemini_risk",
+    "outcome",
+    # trade_journal cross-ref
+    "tj_result", "tj_return_pct", "tj_pnl_npr", "tj_hold_days_actual",
+    "tj_exit_date", "tj_exit_reason", "tj_loss_cause", "tj_alpha",
+)
+
 
 def _serialize_compact(rows: list[dict], keys: tuple) -> str:
     """Compact JSON rows keeping only specified keys. Strips nulls."""
@@ -411,37 +547,37 @@ def _serialize_compact(rows: list[dict], keys: tuple) -> str:
 
 
 def _build_system_prompt() -> str:
-    return """You are the NEPSE AI Engine's weekly learning coach — GPT-5o.
+    return """You are the NEPSE AI Engine's weekly learning coach  -  GPT-5o.
 
-Your job: review trading evidence and update the learning_hub — a database of lessons
+Your job: review trading evidence and update the learning_hub  -  a database of lessons
 that Claude Sonnet reads before every BUY/WAIT/AVOID decision.
 
 NEPSE context:
 - Nepal Stock Exchange trades Sun-Thu (NST). Very illiquid vs global markets.
 - Fees ~1.24% round-trip. Only high profit-factor signals survive.
 - BB_LOWER_TOUCH: only confirmed edge (WR=55%, PF=1.66). MACD PF=0.88 in backtest.
-- RSI: context only — never standalone trigger (-4.81% annualized standalone).
+- RSI: context only  -  never standalone trigger (-4.81% annualized standalone).
 - DXY: only validated international signal (Spearman ρ=-0.1708, 7-day lag via remittance).
-- Herding threshold: RSI > 72 (not 65 — no evidence for 65).
+- Herding threshold: RSI > 72 (not 65  -  no evidence for 65).
 - Max 3 positions. Circuit breaker after 7-loss streak.
 - Geo combined < -3 = auto block.
 
-ANTI-OVERFITTING RULES — ENFORCE STRICTLY:
+ANTI-OVERFITTING RULES  -  ENFORCE STRICTLY:
 1. BLOCK_ENTRY requires 25+ trades supporting the pattern. Below 25: REDUCE_CONFIDENCE only.
 2. Sector-level blocks need sector-level trade count.
 3. Signal-level blocks need signal-level trade count.
 4. LOW confidence = inform only. Never block on LOW.
 5. Single trade cannot flip HIGH confidence lesson. Need 5+ contradictions.
-6. EXPIRED outcomes = weak evidence — weight 20% of CORRECT/FALSE outcomes.
-7. Research paper seeds have HIGH base confidence — need strong contradicting live evidence.
+6. EXPIRED outcomes = weak evidence  -  weight 20% of CORRECT/FALSE outcomes.
+7. Research paper seeds have HIGH base confidence  -  need strong contradicting live evidence.
 GATE PROPOSAL RULES:
 - Only propose threshold changes if gate_misses sample >= 20 for that category
 - Only propose if false_block_rate > 40% (filter too aggressive)
 - Proposals must be conservative: ±5 on score thresholds maximum
-- Never propose removing a gate entirely — only loosening
+- Never propose removing a gate entirely  -  only loosening
 - If false_block_rate < 20%: gate is working well, do not touch
 - Macro proposals: only if 3+ consecutive months of consistent directional change
-- For SIDEWAYS vs BULL market: thresholds may legitimately differ — note in reasoning
+- For SIDEWAYS vs BULL market: thresholds may legitimately differ  -  note in reasoning
 
 LESSON TYPES:
 SIGNAL_FILTER | SECTOR_FILTER | MACRO_FILTER | ENTRY_TIMING | STOP_CALC | PORTFOLIO_RULE | DIVIDEND_PATTERN | CALENDAR_EFFECT | FAILURE_MODE
@@ -479,10 +615,10 @@ SUPERSEDE LOGIC:
 - Do NOT modify existing lessons. Instead:
   1. Mark old lesson id in lessons_to_deactivate.
   2. Write NEW lesson with supersedes_lesson_id = old id.
-- If lesson is still valid — leave it alone.
-- If evidence too thin — write nothing.
+- If lesson is still valid  -  leave it alone.
+- If evidence too thin  -  write nothing.
 
-OUTPUT FORMAT — EXACTLY this JSON. No markdown, no extra text:
+OUTPUT FORMAT  -  EXACTLY this JSON. No markdown, no extra text:
 {
   "review_summary": "<2-3 sentence overview>",
   "lessons_to_deactivate": [<list of integer ids>],
@@ -513,12 +649,14 @@ OUTPUT FORMAT — EXACTLY this JSON. No markdown, no extra text:
   "macro_accuracy": "qualitative: did macro trend calls match outcomes",
   "audit_summary": "2-3 sentence assessment of Claude decision quality"
 }
+"""
 
 def _build_user_prompt(
     review_week: str,
     trades: list[dict],
     trade_agg: dict,
     wait_avoid: list[dict],
+    buy_decisions: list[dict],
     daily_context: list[dict],
     active_lessons: list[dict],
     nrb: dict | None,
@@ -527,6 +665,7 @@ def _build_user_prompt(
     fd_trend: list[dict],
     nepse_trend: list[dict],
     backtest: list[dict],
+    claude_audit_history: list[dict],
 ) -> str:
 
     nrb_str = json.dumps(
@@ -534,7 +673,7 @@ def _build_user_prompt(
         ensure_ascii=False,
     ) if nrb else "No NRB data available"
 
-    # Aggregate stats — all time (not just windowed)
+    # Aggregate stats  -  all time (not just windowed)
     total_all  = int(trade_agg.get("total", 0) or 0)
     wins_all   = int(trade_agg.get("wins", 0) or 0)
     losses_all = int(trade_agg.get("losses", 0) or 0)
@@ -548,34 +687,40 @@ def _build_user_prompt(
     missed_entries = sum(1 for r in wait_avoid if r.get("outcome") == "MISSED_ENTRY")
     correct_waits  = sum(1 for r in wait_avoid if r.get("outcome") == "CORRECT_WAIT")
 
-    return f"""WEEKLY LEARNING REVIEW — Week {review_week}
+    # BUY decision stats
+    buys_with_outcome  = sum(1 for b in buy_decisions if b.get("tj_result"))
+    buys_open          = sum(1 for b in buy_decisions if not b.get("tj_result") and b.get("outcome") not in ("WIN", "LOSS"))
+    buys_not_traded    = sum(1 for b in buy_decisions if not b.get("tj_result") and b.get("outcome") in (None, "", "PENDING"))
+
+    return f"""WEEKLY LEARNING REVIEW  -  Week {review_week}
 Review date: {datetime.now(NST).strftime("%Y-%m-%d %H:%M NST")}
 
-━━━ EVIDENCE SUMMARY ━━━
+=== EVIDENCE SUMMARY ===
 ALL-TIME trades: {total_all} ({wins_all} W, {losses_all} L)
 Recent trades shown below: {len(trades)} ({wins_w} W, {losses_w} L)
+BUY decisions shown: {len(buy_decisions)} ({buys_with_outcome} closed, {buys_open} open, {buys_not_traded} not traded)
 Evaluated WAIT/AVOID shown: {len(wait_avoid)}
   CORRECT_AVOID: {correct_avoids} | FALSE_AVOID: {false_avoids}
   MISSED_ENTRY: {missed_entries} | CORRECT_WAIT: {correct_waits}
 Daily context rows: {len(daily_context)} trading days
 Active lessons: {len(active_lessons)}
 
-━━━ NRB MACRO CONTEXT ━━━
+=== NRB MACRO CONTEXT ===
 {nrb_str}
 
-━━━ MACRO TREND (last 6 NRB months — direction matters) ━━━
+=== MACRO TREND (last 6 NRB months  -  direction matters) ===
 {_serialize_compact(macro_trend, _MACRO_TREND_KEYS)}
 
-━━━ FD RATE TREND (last 6 months) ━━━
+=== FD RATE TREND (last 6 months) ===
 {_serialize_compact(fd_trend, _FD_TREND_KEYS)}
 
-━━━ NEPSE INDEX TREND (last 30 trading days) ━━━
+=== NEPSE INDEX TREND (last 30 trading days) ===
 {_serialize_compact(nepse_trend, _NEPSE_TREND_KEYS)}
 
-━━━ BACKTEST SIGNAL PERFORMANCE ━━━
+=== BACKTEST SIGNAL PERFORMANCE ===
 {_serialize_compact(backtest, ('test_name','sim_mode','win_rate_pct','profit_factor','signal_breakdown'))}
 
-━━━ GATE MISS ANALYSIS (last 90 days) ━━━
+=== GATE MISS ANALYSIS (last 90 days) ===
 Total misses tracked: {gate_summary.get('total_misses', 'N/A')}
 Total stamped: {gate_summary.get('total_stamped', 'N/A')}
 
@@ -588,24 +733,35 @@ By market state:
 Worst category: {gate_summary.get('worst_category', 'N/A')} (false block rate: {gate_summary.get('worst_false_block_rate', 'N/A')})
 
 
-━━━ DAILY CONTEXT LOG (last {MAX_DAILY_CONTEXT} days — geo, nepal, NEPSE, signals, events) ━━━
+=== DAILY CONTEXT LOG (last {MAX_DAILY_CONTEXT} days  -  geo, nepal, NEPSE, signals, events) ===
 {_serialize_compact(daily_context, _DAILY_CONTEXT_KEYS)}
 
-━━━ RECENT TRADES (trade_journal — BUY outcomes with causal attribution) ━━━
+=== RECENT TRADES (trade_journal  -  BUY outcomes with causal attribution) ===
 {_serialize_compact(trades, _TRADE_KEYS)}
 
-━━━ EVALUATED WAIT/AVOID OUTCOMES (recommendation_tracker stamped) ━━━
+=== BUY DECISIONS (market_log  -  full signal context + trade_journal cross-ref) ===
+Rows with tj_result = WIN/LOSS are closed trades. Rows with tj_result empty are
+either open positions or signals the user chose not to trade. Use these to review
+Claude's full reasoning, confidence calibration, and whether signals matched outcomes.
+{_serialize_compact(buy_decisions, _BUY_DECISION_KEYS)}
+
+=== EVALUATED WAIT/AVOID OUTCOMES (recommendation_tracker stamped) ===
 {_serialize_compact(wait_avoid, _WAIT_AVOID_KEYS)}
 
-━━━ ACTIVE LESSONS (what Claude reads before every decision) ━━━
+=== ACTIVE LESSONS (what Claude reads before every decision) ===
 Review each: still valid? needs strengthening/weakening? supersede?
 {_serialize_compact(active_lessons, _LESSON_KEYS)}
 
-━━━ YOUR TASK ━━━
+=== CLAUDE ACCURACY AUDIT  -  LAST {len(claude_audit_history)} WEEKS ===
+Use this to spot trends: is BUY accuracy improving or degrading? Is false_avoid_rate rising?
+Are macro calls consistently off? Trend direction matters more than any single week.
+{_serialize_compact(claude_audit_history, _CLAUDE_AUDIT_KEYS) if claude_audit_history else "No prior audit history yet  -  this is the first review."}
+
+=== YOUR TASK ===
 1. Analyse trade + WAIT/AVOID outcomes + daily context.
 2. Find patterns: which signals work, which fail, in which conditions/sectors.
 3. Cross-reference: did macro explain the outcome? Alpha near 0 = macro caused it.
-4. Review each active lesson — still valid, strengthen, or supersede?
+4. Review each active lesson  -  still valid, strengthen, or supersede?
 5. Write new lessons only with sufficient evidence (anti-overfitting rules).
 6. Output JSON as specified. No markdown."""
 
@@ -620,12 +776,12 @@ def _validate_lesson(lesson: dict, index: int) -> bool:
     """Validate a single lesson object from GPT output. Returns True if valid."""
     missing = _REQUIRED_LESSON_FIELDS - set(lesson.keys())
     if missing:
-        log.warning("Lesson #%d missing required fields: %s — skipping", index, missing)
+        log.warning("Lesson #%d missing required fields: %s  -  skipping", index, missing)
         return False
 
     # Validate confidence_level
     if lesson.get("confidence_level") not in ("LOW", "MEDIUM", "HIGH"):
-        log.warning("Lesson #%d has invalid confidence_level: %s — skipping",
+        log.warning("Lesson #%d has invalid confidence_level: %s  -  skipping",
                      index, lesson.get("confidence_level"))
         return False
 
@@ -636,7 +792,7 @@ def _validate_lesson(lesson: dict, index: int) -> bool:
         "WAIT_FOR_CONFIRMATION", "TIGHTEN_STOP", "BLOCK_ENTRY",
     }
     if lesson.get("action") not in valid_actions:
-        log.warning("Lesson #%d has invalid action: %s — skipping",
+        log.warning("Lesson #%d has invalid action: %s  -  skipping",
                      index, lesson.get("action"))
         return False
 
@@ -645,7 +801,7 @@ def _validate_lesson(lesson: dict, index: int) -> bool:
         try:
             tc = int(lesson.get("trade_count", 0) or 0)
             if tc < 25:
-                log.warning("Lesson #%d: BLOCK_ENTRY with only %d trades — "
+                log.warning("Lesson #%d: BLOCK_ENTRY with only %d trades  -  "
                            "downgrading to REDUCE_CONFIDENCE_BY_25", index, tc)
                 lesson["action"] = "REDUCE_CONFIDENCE_BY_25"
                 lesson["gpt_reasoning"] = (
@@ -658,7 +814,7 @@ def _validate_lesson(lesson: dict, index: int) -> bool:
     return True
 
 # ─────────────────────────────────────────────────────────────────────────────
-# LESSON WRITER — Option B: supersede, never overwrite
+# LESSON WRITER  -  Option B: supersede, never overwrite
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -797,28 +953,30 @@ def _send_telegram_summary(
     deactivated: int,
     total_trades: int,
     total_wait_avoid: int,
-    review_week, review_summary, written, deactivated,
-    total_trades, total_wait_avoid,
-    gate_proposals: list = None, 
-):list
+    gate_proposals: list = None,
+) -> None:
     """Send weekly review summary to Telegram."""
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     chat_id   = os.environ.get("TELEGRAM_CHAT_ID", "")
     if not bot_token or not chat_id:
-        log.warning("Telegram not configured — skipping notification")
+        log.warning("Telegram not configured  -  skipping notification")
         return
 
+    gate_line = (
+        f"🔧 Gate proposals: {len(gate_proposals)} pending  -  /gate_review to see them\n"
+        if gate_proposals else ""
+    )
+
     msg = (
-        f"🧠 *Learning Hub — Week {review_week}*\n\n"
+        f"🧠 *Learning Hub  -  Week {review_week}*\n\n"
         f"{review_summary}\n\n"
         f"📊 Evidence reviewed:\n"
         f"  • Completed trades: {total_trades}\n"
         f"  • WAIT/AVOID outcomes: {total_wait_avoid}\n\n"
         f"✏️ Lessons written: {written}\n"
         f"🔄 Lessons superseded: {deactivated}\n\n"
+        f"{gate_line}"
         f"_Claude will apply updated lessons from next signal cycle._"
-         f"🔧 Gate proposals: {len(gate_proposals)} pending — /gate_review to see them\n"
-if gate_proposals else ""
     )
 
 
@@ -852,7 +1010,7 @@ def print_status():
     inactive = [l for l in all_lessons if l.get("active") != "true"]
 
     print(f"\n{'=' * 70}")
-    print(f"LEARNING HUB STATUS — {datetime.now(NST).strftime('%Y-%m-%d %H:%M NST')}")
+    print(f"LEARNING HUB STATUS  -  {datetime.now(NST).strftime('%Y-%m-%d %H:%M NST')}")
     print(f"{'=' * 70}")
     print(f"\nActive lessons: {len(active)} | Superseded: {len(inactive)}")
 
@@ -916,13 +1074,22 @@ def get_review_prompts() -> tuple[str, str]:
 
     trades, trade_agg = _load_trade_journal()
     wait_avoid    = _load_wait_avoid_outcomes()
+    buy_decisions = _load_buy_decisions()
     daily_context = _load_daily_context()
     active_lessons = _load_active_lessons()
     nrb           = _load_nrb_macro()
+    gate_summary  = _load_gate_miss_summary()
+    macro_trend   = _load_macro_trend()
+    fd_trend      = _load_fd_trend()
+    nepse_trend   = _load_nepse_trend()
+    backtest      = _load_backtest_results()
+    claude_audit_history = _load_claude_audit_history()
 
     system_prompt = _build_system_prompt()
     user_prompt   = _build_user_prompt(
-        review_week, trades, trade_agg, wait_avoid, daily_context, active_lessons, nrb
+        review_week, trades, trade_agg, wait_avoid, buy_decisions, daily_context,
+        active_lessons, nrb, gate_summary, macro_trend, fd_trend, nepse_trend,
+        backtest, claude_audit_history,
     )
 
     return system_prompt, user_prompt
@@ -989,18 +1156,19 @@ def run_weekly_review(dry_run: bool = False):
     iso_cal = now.isocalendar()
     review_week = f"{iso_cal.year}-W{iso_cal.week:02d}"
 
-    log.info("Starting weekly learning review — %s (dry_run=%s)", review_week, dry_run)
+    log.info("Starting weekly learning review  -  %s (dry_run=%s)", review_week, dry_run)
 
     # ── Duplicate guard
     if not dry_run and _check_review_already_done(review_week):
-        log.warning("Review for %s already exists in learning_hub — aborting to prevent duplicates",
+        log.warning("Review for %s already exists in learning_hub  -  aborting to prevent duplicates",
                      review_week)
         log.warning("Use --dry-run to preview, or manually delete existing rows to re-run")
         return None
 
-    # ── Load all data
+    # -- Load all data
     trades, trade_agg = _load_trade_journal()
     wait_avoid    = _load_wait_avoid_outcomes()
+    buy_decisions = _load_buy_decisions()
     daily_context = _load_daily_context()
     active_lessons = _load_active_lessons()
     nrb           = _load_nrb_macro()
@@ -1009,10 +1177,13 @@ def run_weekly_review(dry_run: bool = False):
     fd_trend      = _load_fd_trend()
     nepse_trend   = _load_nepse_trend()
     backtest      = _load_backtest_results()
-    # ── Build prompts
+    claude_audit_history = _load_claude_audit_history()
+    # -- Build prompts
     system_prompt = _build_system_prompt()
     user_prompt   = _build_user_prompt(
-        review_week, trades, trade_agg, wait_avoid, daily_context, active_lessons, nrb
+        review_week, trades, trade_agg, wait_avoid, buy_decisions, daily_context,
+        active_lessons, nrb, gate_summary, macro_trend, fd_trend, nepse_trend,
+        backtest, claude_audit_history,
     )
 
     log.info("Calling GPT-5o for weekly review (prompt ~%d tokens)...",
@@ -1020,7 +1191,7 @@ def run_weekly_review(dry_run: bool = False):
     raw_response = _call_gpt(system_prompt, user_prompt, max_tokens=MAX_GPT_TOKENS)
 
     if not raw_response:
-        log.error("GPT returned empty response — aborting review")
+        log.error("GPT returned empty response  -  aborting review")
         return None
 
     # ── Parse GPT response
@@ -1061,7 +1232,7 @@ def run_weekly_review(dry_run: bool = False):
     # Write claude audit
     claude_audit = gpt_output.get("claude_audit", {})
     if claude_audit and not dry_run:
-    _write_claude_audit(claude_audit, review_week)
+        _write_claude_audit(claude_audit, review_week)
     log.info("Review complete: %d lessons written, %d deactivated", written, deactivated)
 
     # ── Telegram notification
@@ -1070,6 +1241,7 @@ def run_weekly_review(dry_run: bool = False):
             review_week, review_summary,
             written, deactivated,
             int(trade_agg.get("total", 0) or 0), len(wait_avoid),
+            gate_proposals=gate_proposals,
         )
 
     return {
@@ -1087,7 +1259,7 @@ def run_weekly_review(dry_run: bool = False):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="NEPSE Learning Hub — GPT Weekly Review")
+    parser = argparse.ArgumentParser(description="NEPSE Learning Hub  -  GPT Weekly Review")
     parser.add_argument("--dry-run", action="store_true",
                         help="Compute and print lessons but do not write to DB")
     parser.add_argument("--status", action="store_true",
