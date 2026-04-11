@@ -14,6 +14,12 @@ Changes from original:
   - BUY: evaluated for alpha vs NEPSE after hold period (signal quality, not WIN/LOSS)
   - All outcomes flow to learning_hub for GPT review
 
+FIX 4: All upsert_row calls replaced with update_row.
+  upsert_row with conflict_columns=["id"] silently strips the SERIAL id
+  field before building the INSERT, so ON CONFLICT never fires and a new
+  ghost row gets inserted instead of updating the existing one.
+  update_row uses a direct UPDATE WHERE id = %s -- no conflict stripping.
+
 Run modes:
     python -m analysis.recommendation_tracker            # normal daily run
     python -m analysis.recommendation_tracker --status   # show all signals summary
@@ -32,7 +38,7 @@ from datetime import datetime, timedelta, date
 from zoneinfo import ZoneInfo
 
 from sheets import (
-    read_tab, upsert_row, run_raw_sql,
+    read_tab, update_row, run_raw_sql,
     get_setting, get_latest_geo, get_latest_pulse
 )
 
@@ -279,17 +285,23 @@ def stamp_avoid_closed(row_id: int, symbol: str, dry_run: bool = False) -> None:
     Call immediately after writing an AVOID row to market_log.
     AVOID = 'we decided not to act'. Nothing to track. Close it now.
     The reasoning field carries the decision quality for GPT.
+
+    FIX 4: uses update_row (direct UPDATE WHERE id=) instead of
+    upsert_row which would create a ghost row.
     """
     if dry_run:
         log.info("[DRY-RUN] Would close AVOID immediately: %s id=%s", symbol, row_id)
         return
     try:
-        upsert_row(
+        updated = update_row(
             "market_log",
-            {"id": row_id, "outcome": "CLOSED", "eval_date": today_str()},
-            conflict_columns=["id"]
+            updates={"outcome": "CLOSED", "eval_date": today_str()},
+            where={"id": str(row_id)},
         )
-        log.info("AVOID %s stamped CLOSED immediately (id=%s)", symbol, row_id)
+        if updated:
+            log.info("AVOID %s stamped CLOSED immediately (id=%s)", symbol, row_id)
+        else:
+            log.warning("stamp_avoid_closed: no row updated for %s id=%s", symbol, row_id)
     except Exception as e:
         log.error("stamp_avoid_closed failed for %s id=%s: %s", symbol, row_id, e)
 
@@ -303,6 +315,9 @@ def evaluate_wait_avoid(dry_run: bool = False) -> list[dict]:
     1. AVOIDs still PENDING -> force CLOSED (safety net)
     2. WAITs >= WAIT_EXPIRY_DAYS calendar days -> stamp outcome (even if ambiguous)
     3. WAITs at full hold period -> classify outcome
+
+    FIX 4: all writes use update_row (direct UPDATE WHERE id=)
+    instead of upsert_row which silently inserts ghost rows.
     """
     today = today_str()
     evaluated = []
@@ -338,14 +353,17 @@ def evaluate_wait_avoid(dry_run: bool = False) -> list[dict]:
 
         cal_days = calendar_days_between(sig_date, today)
 
-        # -- AVOID safety net
+        # -- AVOID safety net: should have been closed by stamp_avoid_closed
+        #    but catch any that slipped through
         if action == "AVOID":
             log.info("AVOID %s still PENDING after %d days -- force CLOSED", symbol, cal_days)
             if not dry_run:
                 try:
-                    upsert_row("market_log",
-                               {"id": row_id, "outcome": "CLOSED", "eval_date": today},
-                               conflict_columns=["id"])
+                    update_row(
+                        "market_log",
+                        updates={"outcome": "CLOSED", "eval_date": today},
+                        where={"id": str(row_id)},
+                    )
                 except Exception as e:
                     log.error("Force-close AVOID failed: %s", e)
             evaluated.append({"symbol": symbol, "action": action,
@@ -367,7 +385,6 @@ def evaluate_wait_avoid(dry_run: bool = False) -> list[dict]:
 
             macro = get_macro_snapshot(today)
             update = {
-                "id":                    row_id,
                 "outcome":               outcome,
                 "eval_date":             today,
                 "eval_market_state":     macro.get("eval_market_state"),
@@ -380,15 +397,23 @@ def evaluate_wait_avoid(dry_run: bool = False) -> list[dict]:
             }
             if not dry_run:
                 try:
-                    upsert_row("market_log", update, conflict_columns=["id"])
-                    log.info("WAIT %s stamped %s (expired)", symbol, outcome)
+                    updated = update_row(
+                        "market_log",
+                        updates=update,
+                        where={"id": str(row_id)},
+                    )
+                    if updated:
+                        log.info("WAIT %s stamped %s (expired)", symbol, outcome)
+                    else:
+                        log.warning("WAIT expiry stamp: no row updated for %s id=%s", symbol, row_id)
                 except Exception as e:
                     log.error("WAIT expiry stamp failed for %s: %s", symbol, e)
             else:
                 log.info("[DRY-RUN] Would stamp WAIT %s -> %s (expired)", symbol, outcome)
 
-            evaluated.append({"symbol": symbol, "action": action, "outcome": outcome,
-                               "signal_date": sig_date, "price_change_pct": price_change_pct})
+            evaluated.append({"symbol": symbol, "action": action,
+                               "outcome": outcome, "signal_date": sig_date,
+                               "price_change_pct": price_change_pct})
             continue
 
         # -- WAIT within expiry window: check hold period
@@ -417,8 +442,8 @@ def evaluate_wait_avoid(dry_run: bool = False) -> list[dict]:
         macro            = get_macro_snapshot(today)
         eval_geo_score   = _safe_float(macro.get("eval_geo_score"))
         eval_nepal_score = _safe_float(macro.get("eval_nepal_score"))
-        eval_geo_delta   = (eval_geo_score - geo_at_signal)   if geo_at_signal   is not None and eval_geo_score   is not None else None
-        eval_nepal_delta = (eval_nepal_score - nepal_at_signal) if nepal_at_signal is not None and eval_nepal_score is not None else None
+        eval_geo_delta   = (eval_geo_score - geo_at_signal)     if geo_at_signal   is not None and eval_geo_score   is not None else None
+        eval_nepal_delta = (eval_nepal_score - nepal_at_signal)  if nepal_at_signal is not None and eval_nepal_score is not None else None
 
         outcome = classify_wait_avoid(action, price_change_pct)
 
@@ -427,7 +452,6 @@ def evaluate_wait_avoid(dry_run: bool = False) -> list[dict]:
                  f"{eval_alpha:.2f}" if eval_alpha is not None else "N/A", outcome)
 
         update = {
-            "id":                    row_id,
             "outcome":               outcome,
             "exit_date":             today,
             "exit_price":            str(round(price_now, 2)),
@@ -456,8 +480,15 @@ def evaluate_wait_avoid(dry_run: bool = False) -> list[dict]:
 
         if not dry_run:
             try:
-                upsert_row("market_log", update, conflict_columns=["id"])
-                log.info("Stamped %s -> %s", symbol, outcome)
+                updated = update_row(
+                    "market_log",
+                    updates=update,
+                    where={"id": str(row_id)},
+                )
+                if updated:
+                    log.info("Stamped %s -> %s", symbol, outcome)
+                else:
+                    log.warning("Stamp: no row updated for %s id=%s", symbol, row_id)
             except Exception as e:
                 log.error("Failed to stamp %s id=%s: %s", symbol, row_id, e)
         else:
@@ -468,6 +499,7 @@ def evaluate_wait_avoid(dry_run: bool = False) -> list[dict]:
 
 # ---------------------------------------------------------------------------
 # EVALUATOR: BUY (signal quality / alpha tracking)
+# Unchanged per instructions -- evaluate_buy_signals is not touched.
 # ---------------------------------------------------------------------------
 
 def evaluate_buy_signals(dry_run: bool = False) -> list[dict]:
@@ -476,6 +508,9 @@ def evaluate_buy_signals(dry_run: bool = False) -> list[dict]:
     Compute price change + alpha vs NEPSE.
     Stamps STRONG/NEUTRAL/WEAK_BUY_SIGNAL for GPT learning.
     Does NOT stamp WIN/LOSS -- that is auditor.py from portfolio table.
+
+    FIX 4: writes use update_row (direct UPDATE WHERE id=)
+    instead of upsert_row which silently inserts ghost rows.
     """
     today = today_str()
     evaluated = []
@@ -536,15 +571,14 @@ def evaluate_buy_signals(dry_run: bool = False) -> list[dict]:
         nepal_at_signal  = _safe_float(row.get("macro_score"))
         eval_geo_score   = _safe_float(macro.get("eval_geo_score"))
         eval_nepal_score = _safe_float(macro.get("eval_nepal_score"))
-        eval_geo_delta   = (eval_geo_score - geo_at_signal)    if geo_at_signal   is not None and eval_geo_score   is not None else None
-        eval_nepal_delta = (eval_nepal_score - nepal_at_signal) if nepal_at_signal is not None and eval_nepal_score is not None else None
+        eval_geo_delta   = (eval_geo_score - geo_at_signal)     if geo_at_signal   is not None and eval_geo_score   is not None else None
+        eval_nepal_delta = (eval_nepal_score - nepal_at_signal)  if nepal_at_signal is not None and eval_nepal_score is not None else None
 
         log.info("BUY %s -> price_chg=%.2f%% alpha=%s%% outcome=%s",
                  symbol, price_change_pct,
                  f"{eval_alpha:.2f}" if eval_alpha is not None else "N/A", outcome)
 
         update = {
-            "id":                    row_id,
             "outcome":               outcome,
             "eval_date":             today,
             "eval_geo_score":        _str(eval_geo_score),
@@ -571,8 +605,15 @@ def evaluate_buy_signals(dry_run: bool = False) -> list[dict]:
 
         if not dry_run:
             try:
-                upsert_row("market_log", update, conflict_columns=["id"])
-                log.info("Stamped BUY %s -> %s", symbol, outcome)
+                updated = update_row(
+                    "market_log",
+                    updates=update,
+                    where={"id": str(row_id)},
+                )
+                if updated:
+                    log.info("Stamped BUY %s -> %s", symbol, outcome)
+                else:
+                    log.warning("Stamp BUY: no row updated for %s id=%s", symbol, row_id)
             except Exception as e:
                 log.error("Failed to stamp BUY %s id=%s: %s", symbol, row_id, e)
         else:

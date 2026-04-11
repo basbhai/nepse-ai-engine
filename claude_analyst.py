@@ -126,11 +126,41 @@ def _load_portfolio() -> dict:
 
 
 def _load_geo_context() -> dict:
-    """Read latest geo + nepal scores + headlines from nepal_pulse."""
+    """
+    Read latest geo + nepal scores + headlines from their respective tables.
+
+    geo_score comes from geopolitical_data (via get_latest_geo).
+    nepal_score + headlines come from nepal_pulse (via get_latest_pulse).
+    Headlines are stored as separate columns in nepal_pulse:
+        headlines_politics, headlines_economy, headlines_stock
+    """
     try:
         from sheets import get_latest_geo, get_latest_pulse
         geo   = get_latest_geo()   or {}
         pulse = get_latest_pulse() or {}
+
+        # -- headlines: explicit key lookup with empty-string fallback
+        # Column names in nepal_pulse table must match exactly.
+        # If your table uses a different naming convention, adjust here.
+        headlines_politics = (
+            pulse.get("headlines_politics")
+            or pulse.get("headlines_political")
+            or pulse.get("political_headlines")
+            or ""
+        )
+        headlines_economy = (
+            pulse.get("headlines_economy")
+            or pulse.get("headlines_economic")
+            or pulse.get("economic_headlines")
+            or ""
+        )
+        headlines_stock = (
+            pulse.get("headlines_stock")
+            or pulse.get("headlines_stocks")
+            or pulse.get("stock_headlines")
+            or ""
+        )
+
         return {
             "geo_score":          int(geo.get("geo_score",    0) or 0),
             "nepal_score":        int(pulse.get("nepal_score",0) or 0),
@@ -143,9 +173,9 @@ def _load_geo_context() -> dict:
             "key_geo_event":      geo.get("key_event",       "None"),
             "key_nepal_event":    pulse.get("key_event",     "None"),
             "dxy":                geo.get("dxy",              "99"),
-            "headlines_politics": str(pulse.get("headlines_politics") or ""),
-            "headlines_economy":  str(pulse.get("headlines_economy")  or ""),
-            "headlines_stock":    str(pulse.get("headlines_stock")    or ""),
+            "headlines_politics": str(headlines_politics),
+            "headlines_economy":  str(headlines_economy),
+            "headlines_stock":    str(headlines_stock),
         }
     except Exception as exc:
         logger.warning("_load_geo_context failed: %s", exc)
@@ -241,6 +271,58 @@ def _load_loss_streak() -> int:
         return int(float(kpi_map.get("Current_Loss_Streak", 0) or 0))
     except Exception:
         return 0
+
+
+# =============================================================================
+# FIX 2 + FIX 3: Skip helpers — checked before every Claude call
+# =============================================================================
+
+def _already_reviewed_today(symbol: str) -> bool:
+    """
+    Returns True if market_log already has ANY row for this symbol
+    with today's date (regardless of action or outcome).
+    Prevents re-analyzing the same stock every 6 minutes.
+    """
+    try:
+        from sheets import run_raw_sql
+        today = datetime.now(tz=NST).strftime("%Y-%m-%d")
+        rows = run_raw_sql(
+            """
+            SELECT id FROM market_log
+            WHERE symbol = %s
+              AND date = %s
+              AND action IN ('BUY', 'WAIT', 'AVOID')
+            LIMIT 1
+            """,
+            (symbol.upper(), today),
+        )
+        return len(rows) > 0
+    except Exception as exc:
+        logger.warning("_already_reviewed_today(%s) failed: %s", symbol, exc)
+        return False  # fail open — let Claude analyze if check fails
+
+
+def _has_open_buy(symbol: str) -> bool:
+    """
+    Returns True if market_log already has a BUY row for this symbol
+    with outcome = PENDING (active position being tracked).
+    """
+    try:
+        from sheets import run_raw_sql
+        rows = run_raw_sql(
+            """
+            SELECT id FROM market_log
+            WHERE symbol = %s
+              AND action = 'BUY'
+              AND outcome = 'PENDING'
+            LIMIT 1
+            """,
+            (symbol.upper(),),
+        )
+        return len(rows) > 0
+    except Exception as exc:
+        logger.warning("_has_open_buy(%s) failed: %s", symbol, exc)
+        return False  # fail open
 
 
 # =============================================================================
@@ -723,6 +805,7 @@ def _assemble_result(claude_json: dict, flag, geo: dict) -> AnalystResult:
         gemini_reason      = flag.gemini_reason,
         support_level      = float(flag.support_level    or 0),
         resistance_level   = float(flag.resistance_level or 0),
+        # FIX 1: headlines now carried from geo context (loaded from nepal_pulse)
         headlines_politics = geo.get("headlines_politics", ""),
         headlines_economy  = geo.get("headlines_economy",  ""),
         headlines_stock    = geo.get("headlines_stock",    ""),
@@ -850,7 +933,7 @@ def _write_to_db(result: AnalystResult, flag=None) -> None:
             "geo_score":         geo_score,
             "macro_score":       nepal_score,
 
-            # Headlines from nepal_pulse
+            # FIX 1: headlines written from result (which got them from geo context)
             "headlines_politics": _s(result.headlines_politics),
             "headlines_economy":  _s(result.headlines_economy),
             "headlines_stock":    _s(result.headlines_stock),
@@ -933,8 +1016,18 @@ def run_analysis(flags: list) -> list[AnalystResult]:
         logger.info("-" * 40)
         logger.info("Analyzing %s [%s] urgency=%s", sym, flag.sector, flag.urgency)
 
+        # FIX 3: skip if already reviewed today (any action)
+        if _already_reviewed_today(sym):
+            logger.info("%s: already reviewed today -- skipping", sym)
+            continue
+
+        # FIX 2: skip if open BUY still pending
+        if _has_open_buy(sym):
+            logger.info("%s: open BUY pending in market_log -- skipping", sym)
+            continue
+
         buy_count = sum(1 for r in results if r.action == "BUY")
-        if portfolio.get("open_positions", 0) + buy_count >= 99:
+        if portfolio.get("open_positions", 0) + buy_count >= 3:
             logger.info("%s: portfolio full after earlier BUYs -- skipping", sym)
             continue
 
@@ -1093,12 +1186,13 @@ if __name__ == "__main__":
             if r.action == "BUY":
                 send_buy_signal(r)
             elif r.action == "WAIT":
-                send_wait_signal(r)       
+                send_wait_signal(r)
+        logger.info('Telegram message sent')
 
     except Exception as e:
         from helper.notifier import send_error_alert
-        send_error_alert('claude_analyst',str(e))
-    logger.info('Telegram message sent')
+        send_error_alert('claude_analyst', str(e))
+    
     print(f"\n  {len(results)} result(s):")
     for r in results:
         print(f"  {r.summary()}")

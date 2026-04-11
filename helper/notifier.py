@@ -322,7 +322,7 @@ def send_buy_signal(result) -> bool:
     Send a BUY signal to Telegram (and optionally email).
     result: AnalystResult from claude_analyst.py
     """
-    if result.action != "AVOID":
+    if result.action != "BUY":
         return False
 
     message = _format_buy_signal(result)
