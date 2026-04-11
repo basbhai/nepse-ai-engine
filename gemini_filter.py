@@ -172,7 +172,7 @@ class GeminiFlag:
     def summary(self) -> str:
         return (
             f"{self.symbol:<10} [{self.urgency}] score={self.composite_score:.1f} "
-            f"signal={self.primary_signal} | {self.gemini_reason[:80]}"
+            f"signal={self.primary_signal} | {self.gemini_reason[:750]}"
         )
 
 
@@ -317,7 +317,7 @@ CANDLE=pattern CSTAR=C*signal HOLD=optimal_days SIG=primary_signal
 ═══════════════════════════════════════
 SCREENING RULES (apply in order)
 ═══════════════════════════════════════
-1. Don't skip if symbol is already in open positions
+1. Don't skip if symbol is already in open positions (evaluate EXIT/RE-ENTRY)
 2. Filter out if the stock's sector belongs to mutual fund or debentures
 2. SKIP if symbol already analyzed today (avoid duplicate flags)
 3. SKIP if market_state is BEAR and signal is not MACD or BB
@@ -331,15 +331,17 @@ SCREENING RULES (apply in order)
 10. FLAG max {MAX_FLAGS_FOR_CLAUDE} stocks — quality over quantity
 11. If no stock is genuinely worth Claude analysis today, return empty flags
 12. search internet for potiential favourable or unfavourable news/conditions (must be creditable and renouned sources)
+13. APPLY LAGGARD LOGIC: 
+    - Identify the 'Sector Leader' (highest % CHG and VOL in sector).
+    - If a candidate is in the same sector, has a lower RSI, but VOL > 1.5x avg, 
+      UPGRADE to 'ANALYZE'. This is a 'Catch-up Play'.
 
 ═══════════════════════════════════════
 TASK
 ═══════════════════════════════════════
-For each candidate decide: ANALYZE (send to Claude) or SKIP.
-If ANALYZE: assign urgency NORMAL or HIGH or URGENT.
-  URGENT = signal may not persist past today (e.g. MACD cross + T1 candle)
-  HIGH   = strong setup, act within 1-2 days
-  NORMAL = good setup, time to research
+1. Search the internet for latest news/conditions on current candidates.
+2. For each candidate decide: ANALYZE or SKIP based on rules above.
+3. If ANALYZE: assign urgency NORMAL or HIGH or URGENT.
 
 Return ONLY this JSON — no markdown, no explanation, no extra text:
 {{
@@ -351,19 +353,20 @@ Return ONLY this JSON — no markdown, no explanation, no extra text:
       "symbol": "SYMBOL",
       "action": "ANALYZE",
       "urgency": "NORMAL or HIGH or URGENT",
-      "reason": "one sentence — why this stock is worth deep analysis",
-      "risk": "one sentence — key risk to watch",
-      "primary_signal": "MACD or BB or SMA or OBV_MOMENTUM"
+      "reason": "3 sentence why it is worth watching citing specific volume (search web for history txn  if required)  or laggard setup. also take account of added technical details",
+      "risk": "Key risk or support level (e.g., NHPC support at 300)",
+      "primary_signal": "VOLUME_BREAKOUT or LAGGARD_PLAY"
     }}
   ],
   "skipped": [
     {{
       "symbol": "SYMBOL",
-      "reason": "one sentence — why skipped"
+      "reason": "One sentence — why skipped"
     }}
   ],
-  "market_comment": "one sentence about overall market conditions today"
-}}"""
+  "market_comment": "One sentence summary of NEPSE's momentum today."
+}}
+"""
 
     return prompt
 
