@@ -750,7 +750,31 @@ def write_indicators_batch(indicator_rows: list[dict]) -> int:
     """
     return batch_upsert("indicators", indicator_rows,
                         conflict_columns=["symbol", "date"])
+# ══════════════════════════════════════════════════════════════════════════════
+# TELEGRAM CHAT IDS from paper_users table
+# ══════════════════════════════════════════════════════════════════════════════
 
+def get_telegram_chat_ids() -> list[str]:
+    """
+    Return list of active Telegram chat IDs from paper_users table.
+    Filters out empty or null values. Returns empty list if table missing or error.
+
+    Example:
+        ids = sheets.get_telegram_chat_ids()
+        for chat_id in ids:
+            send_telegram(msg, chat_id=chat_id)
+    """
+    try:
+        with _db() as cur:
+            cur.execute("""
+                SELECT telegram_id FROM paper_users
+                WHERE telegram_id IS NOT NULL AND telegram_id != ''
+            """)
+            rows = cur.fetchall()
+            return [str(row["telegram_id"]) for row in rows]
+    except Exception as e:
+        log.error("get_telegram_chat_ids failed: %s", e)
+        return []
 
 def read_today_indicators(date: str = None) -> dict[str, dict]:
     """

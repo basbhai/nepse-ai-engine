@@ -468,14 +468,18 @@ def get_summary_for_gpt(days: int = 90) -> dict:
     stamped_rows  = [r for r in all_rows if r.get("outcome")]
     total_stamped = len(stamped_rows)
 
-    # ── By category ───────────────────────────────────────────────────────────
+    # ── By category — all rows for totals, stamped rows for outcome breakdown ─
     by_category: dict[str, dict] = defaultdict(lambda: {
-        "total": 0, "false_block": 0, "correct_block": 0, "neutral": 0,
+        "total": 0, "stamped": 0, "false_block": 0, "correct_block": 0, "neutral": 0,
     })
 
-    for row in stamped_rows:
-        cat = row.get("gate_category", "OTHER")
+    for row in all_rows:
+        cat = row.get("gate_category") or "OTHER"
         by_category[cat]["total"] += 1
+
+    for row in stamped_rows:
+        cat = row.get("gate_category") or "OTHER"
+        by_category[cat]["stamped"] += 1
         outcome = row.get("outcome", "")
         if outcome == "FALSE_BLOCK":
             by_category[cat]["false_block"] += 1
@@ -484,9 +488,9 @@ def get_summary_for_gpt(days: int = 90) -> dict:
         else:
             by_category[cat]["neutral"] += 1
 
-    # Compute rates
+    # Compute rates (based on stamped rows only)
     for cat, stats in by_category.items():
-        n = stats["total"]
+        n = stats["stamped"]
         if n > 0:
             stats["false_block_rate"]   = round(stats["false_block"]   / n, 3)
             stats["correct_block_rate"] = round(stats["correct_block"] / n, 3)
@@ -494,21 +498,25 @@ def get_summary_for_gpt(days: int = 90) -> dict:
             stats["false_block_rate"]   = 0.0
             stats["correct_block_rate"] = 0.0
 
-    # ── By market state ───────────────────────────────────────────────────────
+    # ── By market state — all rows for totals, stamped rows for outcome rates ─
     by_market_state: dict[str, dict] = defaultdict(lambda: {
-        "total": 0, "false_block": 0,
+        "total": 0, "stamped": 0, "false_block": 0,
     })
 
-    for row in stamped_rows:
-        ms = row.get("market_state", "UNKNOWN")
+    for row in all_rows:
+        ms = row.get("market_state") or "UNKNOWN"
         by_market_state[ms]["total"] += 1
+
+    for row in stamped_rows:
+        ms = row.get("market_state") or "UNKNOWN"
+        by_market_state[ms]["stamped"] += 1
         if row.get("outcome") == "FALSE_BLOCK":
             by_market_state[ms]["false_block"] += 1
 
     for ms, stats in by_market_state.items():
-        n = stats["total"]
+        n = stats["stamped"]
         stats["false_block_rate"] = round(stats["false_block"] / n, 3) if n > 0 else 0.0
-        stats["n"] = n
+        stats["n"] = stats["total"]
 
     # ── Worst category ────────────────────────────────────────────────────────
     worst_category       = None

@@ -144,6 +144,8 @@ class GeminiFlag:
     ema_20_50_cross:  str        = ""
     ema_50_200_cross: str        = ""
     macd_histogram:   float      = 0.0
+    macd_line:        float      = 0.0   # MACD line value (from FilterCandidate)
+    macd_signal_line: float      = 0.0   # MACD signal line value
     bb_pct_b:         float      = 0.5
     bb_upper:         float      = 0.0
     bb_lower:         float      = 0.0
@@ -548,6 +550,8 @@ def _assemble_flags(
             bb_pct_b         = c.bb_pct_b,
             bb_upper         = float(getattr(c, "bb_upper",  0.0) or 0.0),
             bb_lower         = float(getattr(c, "bb_lower",  0.0) or 0.0),
+            macd_line        = float(getattr(c, "macd_line",        0.0) or 0.0),
+            macd_signal_line = float(getattr(c, "macd_signal_line", 0.0) or 0.0),
             atr_pct          = c.atr_pct,
             tech_signal      = c.tech_signal,
             conf_score       = c.conf_score,
