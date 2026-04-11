@@ -17,3 +17,6 @@ SQL backup/
 
 *.bak
 
+*.sql
+*.dump
+
