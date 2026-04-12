@@ -163,6 +163,8 @@ def _send_weekly_telegram():
 
 
 if __name__ == "__main__":
+    from log_config import attach_file_handler
+    attach_file_handler(__name__)
     parser = argparse.ArgumentParser(description="NEPSE weekly workflow")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()

@@ -518,6 +518,8 @@ if __name__ == "__main__":
     import json
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    from log_config import attach_file_handler
+    attach_file_handler(__name__)
 
     if len(sys.argv) == 3:
         try:

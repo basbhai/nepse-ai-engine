@@ -829,4 +829,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    from log_config import attach_file_handler
+    attach_file_handler(__name__)
     main()

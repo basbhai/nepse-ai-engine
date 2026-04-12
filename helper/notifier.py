@@ -502,6 +502,8 @@ if __name__ == "__main__":
         level=logging.INFO,
         format="%(asctime)s [NOTIFIER] %(levelname)s: %(message)s",
     )
+    from log_config import attach_file_handler
+    attach_file_handler(__name__)
 
     args = sys.argv[1:]
     cmd  = args[0].lower() if args else "test"

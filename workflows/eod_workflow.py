@@ -119,6 +119,8 @@ def run(dry_run: bool = False, skip_guard: bool = False) -> int:
 
 
 if __name__ == "__main__":
+    from log_config import attach_file_handler
+    attach_file_handler(__name__)
     parser = argparse.ArgumentParser(description="NEPSE EOD workflow")
     parser.add_argument("--dry-run",    action="store_true")
     parser.add_argument("--skip-guard", action="store_true")

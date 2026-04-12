@@ -2212,6 +2212,8 @@ def run_full_backtest(
 
 # ── Windows multiprocessing guard ────────────────────────────────────────────
 if __name__ == "__main__":
+    from log_config import attach_file_handler
+    attach_file_handler(__name__)
     import multiprocessing
     multiprocessing.freeze_support()   # required on Windows
 
