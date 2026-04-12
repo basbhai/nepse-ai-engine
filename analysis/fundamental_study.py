@@ -947,6 +947,8 @@ def run(sector_filter: str = None, symbol_filter: str = None):
 
 
 if __name__ == "__main__":
+    from log_config import attach_file_handler
+    attach_file_handler(__name__)
     parser = argparse.ArgumentParser(description="NEPSE Fundamental Study (Enhanced)")
     parser.add_argument("--sector", type=str, default=None,
                         help="Filter to specific sector name (after loading sector map)")

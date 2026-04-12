@@ -168,7 +168,7 @@ def _load_wait_avoid_outcomes() -> list[dict]:
                    eval_fd_rate_pct, eval_geo_delta, eval_nepal_delta,
                    eval_price_change_pct, eval_nepse_change_pct, eval_alpha,
                    eval_key_news,
-                   entry_price, stop_loss, target_price, primary_signal
+                   entry_price, stop_loss, target, primary_signal
             FROM market_log
             WHERE action IN ('WAIT', 'AVOID', 'BUY')
             ORDER BY date DESC
@@ -187,13 +187,6 @@ def _load_buy_decisions() -> list[dict]:
     """
     Load BUY rows from market_log with full signal context.
     Cross-references trade_journal to attach final outcome where available.
-    Covers three cases GPT currently cannot see:
-      1. Closed BUYs - signal context at decision time (confidence, reasoning,
-         all technical fields) that trade_journal doesn't carry
-      2. Open BUYs   - currently held positions, tracking vs target/stop
-      3. BUYs the user chose not to trade - sitting in market_log with no
-         matching trade_journal entry
-    Ordered oldest-first (chronological) so GPT reads trend direction naturally.
     """
     try:
         rows = run_raw_sql(
@@ -208,8 +201,9 @@ def _load_buy_decisions() -> list[dict]:
                 ml.reasoning,
                 ml.entry_price,
                 ml.stop_loss,
-                ml.target_price,
-                ml.hold_days,
+                ml.target,
+                ml.allocation_npr,
+                ml.shares,
                 ml.primary_signal,
                 ml.rsi_14,
                 ml.macd_line,
@@ -236,9 +230,6 @@ def _load_buy_decisions() -> list[dict]:
                 ml.market_state,
                 ml.gemini_reason,
                 ml.gemini_risk,
-                ml.headlines_politics,
-                ml.headlines_economy,
-                ml.headlines_stock,
                 ml.outcome,
                 -- cross-reference trade_journal for final outcome
                 tj.result          AS tj_result,
@@ -323,6 +314,7 @@ def _load_nrb_macro() -> dict | None:
     except Exception as e:
         log.warning("nrb_monthly load failed: %s", e)
         return None
+
 
 def _load_gate_miss_summary() -> dict:
     """Gate miss outcomes summary for GPT. Calls gate_miss_tracker."""
@@ -435,6 +427,8 @@ def _load_claude_audit_history() -> list[dict]:
     except Exception as e:
         log.warning("claude_audit_history load failed: %s", e)
         return []
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # DUPLICATE REVIEW GUARD
 # ─────────────────────────────────────────────────────────────────────────────
@@ -454,6 +448,7 @@ def _check_review_already_done(review_week: str) -> bool:
         return cnt > 0
     except Exception:
         return False  # fail open  -  better to potentially duplicate than skip
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SERIALIZERS  -  token-optimized JSON for GPT
@@ -489,6 +484,7 @@ _LESSON_KEYS = (
     "condition", "finding", "action", "confidence_level",
     "trade_count", "win_rate", "last_validated",
 )
+
 _GATE_MISS_KEYS = (
     "date", "gate_category", "gate_reason", "symbol", "sector",
     "market_state", "outcome", "outcome_return_pct", "tracking_days",
@@ -517,14 +513,12 @@ _CLAUDE_AUDIT_KEYS = (
 
 _BUY_DECISION_KEYS = (
     "id", "date", "symbol", "sector", "confidence", "reasoning",
-    "entry_price", "stop_loss", "target_price", "hold_days", "primary_signal",
-    "rsi_14", "macd_histogram", "bb_pct_b", "ema_20_50_cross",
-    "conf_score", "geo_score", "macro_score", "fundamental_score",
-    "pe_ratio", "eps", "roe", "npl_pct",
+    "entry_price", "stop_loss", "target", "allocation_npr", "shares",
+    "primary_signal", "rsi_14", "macd_histogram", "bb_pct_b",
+    "ema_20_50_cross", "conf_score", "geo_score", "macro_score",
+    "fundamental_score", "pe_ratio", "eps", "roe", "npl_pct",
     "sector_mult", "cstar_signal", "candle_pattern", "market_state",
-    "gemini_reason", "gemini_risk",
-    "outcome",
-    # trade_journal cross-ref
+    "gemini_reason", "gemini_risk", "outcome",
     "tj_result", "tj_return_pct", "tj_pnl_npr", "tj_hold_days_actual",
     "tj_exit_date", "tj_exit_reason", "tj_loss_cause", "tj_alpha",
 )
@@ -541,10 +535,10 @@ def _serialize_compact(rows: list[dict], keys: tuple) -> str:
             lines.append(json.dumps(compact, ensure_ascii=False))
     return "\n".join(lines)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PROMPT BUILDERS
-# ─────────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────
+# PROMPT BUILDERS (unchanged from here onwards)
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _build_system_prompt() -> str:
     return """You are the NEPSE AI Engine's weekly learning coach  -  GPT-5o.
@@ -623,31 +617,31 @@ OUTPUT FORMAT  -  EXACTLY this JSON. No markdown, no extra text:
   "review_summary": "<2-3 sentence overview>",
   "lessons_to_deactivate": [<list of integer ids>],
   "lessons_to_write": [<list of lesson objects>]
-}
-"gate_proposals": [
-  {
-    "proposal_number": 1,
-    "parameter_name": "MIN_CONF_SCORE or TECH_SCORE_THRESHOLDS.SIDEWAYS etc",
-    "current_value": "50",
-    "proposed_value": "45",
-    "reasoning": "evidence-based explanation",
-    "false_block_rate": 0.43,
-    "sample_size": 31
+  "gate_proposals": [
+    {
+      "proposal_number": 1,
+      "parameter_name": "MIN_CONF_SCORE or TECH_SCORE_THRESHOLDS.SIDEWAYS etc",
+      "current_value": "50",
+      "proposed_value": "45",
+      "reasoning": "evidence-based explanation",
+      "false_block_rate": 0.43,
+      "sample_size": 31
+    }
+  ],
+  "claude_audit": {
+    "buy_count": number,
+    "buy_win_rate": number (0-1),
+    "buy_avg_return": number,
+    "wait_count": number,
+    "wait_accuracy": number (0-1),
+    "avoid_count": number,
+    "avoid_accuracy": number (0-1),
+    "false_avoid_rate": number (0-1),
+    "missed_entry_rate": number (0-1),
+    "overall_accuracy": number (0-1),
+    "macro_accuracy": "qualitative: did macro trend calls match outcomes",
+    "audit_summary": "2-3 sentence assessment of Claude decision quality"
   }
-],
-"claude_audit": {
-  "buy_count": number,
-  "buy_win_rate": number (0-1),
-  "buy_avg_return": number,
-  "wait_count": number,
-  "wait_accuracy": number (0-1),
-  "avoid_count": number,
-  "avoid_accuracy": number (0-1),
-  "false_avoid_rate": number (0-1),
-  "missed_entry_rate": number (0-1),
-  "overall_accuracy": number (0-1),
-  "macro_accuracy": "qualitative: did macro trend calls match outcomes",
-  "audit_summary": "2-3 sentence assessment of Claude decision quality"
 }
 """
 
@@ -732,7 +726,6 @@ By market state:
 
 Worst category: {gate_summary.get('worst_category', 'N/A')} (false block rate: {gate_summary.get('worst_false_block_rate', 'N/A')})
 
-
 === DAILY CONTEXT LOG (last {MAX_DAILY_CONTEXT} days  -  geo, nepal, NEPSE, signals, events) ===
 {_serialize_compact(daily_context, _DAILY_CONTEXT_KEYS)}
 
@@ -812,6 +805,7 @@ def _validate_lesson(lesson: dict, index: int) -> bool:
             pass
 
     return True
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LESSON WRITER  -  Option B: supersede, never overwrite
@@ -941,6 +935,7 @@ def _write_lessons(
 
     return written, deactivated
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 # TELEGRAM NOTIFICATION
 # ─────────────────────────────────────────────────────────────────────────────
@@ -979,7 +974,6 @@ def _send_telegram_summary(
         f"_Claude will apply updated lessons from next signal cycle._"
     )
 
-
     try:
         url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
         requests.post(url, json={
@@ -990,6 +984,7 @@ def _send_telegram_summary(
         log.info("Telegram summary sent")
     except Exception as e:
         log.warning("Telegram send failed: %s", e)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STATUS REPORTER
@@ -1058,6 +1053,7 @@ def print_status():
 
     print()
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 # PROMPT VIEWER (for --prompt mode and prompt_viewer CLI)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1094,9 +1090,11 @@ def get_review_prompts() -> tuple[str, str]:
 
     return system_prompt, user_prompt
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 # MAIN REVIEW RUNNER
 # ─────────────────────────────────────────────────────────────────────────────
+
 def _write_gate_proposals(proposals: list[dict], review_week: str) -> int:
     """Write GPT gate proposals to gate_proposals table."""
     from datetime import datetime
@@ -1149,6 +1147,7 @@ def _write_claude_audit(audit: dict, review_week: str) -> bool:
         log.error("Failed to write claude_audit: %s", e)
         return False
 
+
 def run_weekly_review(dry_run: bool = False):
     """Full GPT Sunday review cycle."""
 
@@ -1178,6 +1177,7 @@ def run_weekly_review(dry_run: bool = False):
     nepse_trend   = _load_nepse_trend()
     backtest      = _load_backtest_results()
     claude_audit_history = _load_claude_audit_history()
+
     # -- Build prompts
     system_prompt = _build_system_prompt()
     user_prompt   = _build_user_prompt(
@@ -1233,6 +1233,7 @@ def run_weekly_review(dry_run: bool = False):
     claude_audit = gpt_output.get("claude_audit", {})
     if claude_audit and not dry_run:
         _write_claude_audit(claude_audit, review_week)
+
     log.info("Review complete: %d lessons written, %d deactivated", written, deactivated)
 
     # ── Telegram notification
@@ -1252,6 +1253,7 @@ def run_weekly_review(dry_run: bool = False):
         "trades_reviewed":     len(trades),
         "wait_avoid_reviewed": len(wait_avoid),
     }
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ENTRY POINT
@@ -1301,4 +1303,6 @@ def main():
 
 
 if __name__ == "__main__":
+    from log_config import attach_file_handler
+    attach_file_handler(__name__)
     main()

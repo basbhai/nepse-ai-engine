@@ -1087,6 +1087,8 @@ def run_paper_audit(dry_run: bool = False) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    from log_config import attach_file_handler
+    attach_file_handler(__name__)
     import argparse
 
     parser = argparse.ArgumentParser(

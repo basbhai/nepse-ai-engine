@@ -522,6 +522,8 @@ def run(print_only: bool = False) -> bool:
 # ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    from log_config import attach_file_handler
+    attach_file_handler(__name__)
     arg        = sys.argv[1] if len(sys.argv) > 1 else ""
     print_only = (arg == "print")
 

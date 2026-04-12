@@ -621,6 +621,8 @@ if __name__ == "__main__":
         level=logging.INFO,
         format="%(asctime)s [ALLOCATOR] %(levelname)s: %(message)s",
     )
+    from log_config import attach_file_handler
+    attach_file_handler(__name__)
 
     arg = sys.argv[1] if len(sys.argv) > 1 else ""
 
