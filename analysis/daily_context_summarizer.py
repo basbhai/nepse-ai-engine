@@ -43,9 +43,35 @@ log = logging.getLogger(__name__)
 NST = ZoneInfo("Asia/Kathmandu")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GEMINI SETUP — lazy singleton
+# AI SETUP — lazy singleton
 # ─────────────────────────────────────────────────────────────────────────────
-
+def _call_openrouter_fallback(prompt: str) -> str:
+    """Fallback to OpenRouter free tier when Gemini fails."""
+    try:
+        import httpx
+        api_key = os.environ.get("OPENROUTER_API_KEY")
+        if not api_key:
+            log.error("OPENROUTER_API_KEY not set — fallback unavailable")
+            return ""
+        response = httpx.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type":  "application/json",
+            },
+            json={
+                "model":    "google/gemma-3-27b-it:free",
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=60,
+        )
+        response.raise_for_status()
+        return response.json()["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        log.error("OpenRouter fallback also failed: %s", e)
+        return ""
+    
+    
 _gemini_client = None
 
 
@@ -80,9 +106,9 @@ def _call_gemini(prompt: str) -> str:
         )
         return response.text.strip()
     except Exception as e:
-        log.error("Gemini call failed: %s", e)
-        return ""
-
+        log.error("Gemini call failed: %s — trying OpenRouter fallback", e)
+        return _call_openrouter_fallback(prompt)
+    
 # ─────────────────────────────────────────────────────────────────────────────
 # DATA FETCHERS — one function per source table
 # ─────────────────────────────────────────────────────────────────────────────
