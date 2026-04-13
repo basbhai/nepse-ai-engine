@@ -37,7 +37,7 @@ log = logging.getLogger(__name__)
 # ══════════════════════════════════════════════════════════════════════════════
 
 API_URL      = "https://sharehubnepal.com/data/api/v1/index/date-wise-analysis"
-DEFAULT_FROM = date(2023, 10, 23)
+DEFAULT_FROM = date(2026, 3, 23)
 REQUEST_DELAY = 0.8   # seconds between requests — polite to server
 TIMEOUT       = 15    # seconds per request
 MAX_RETRIES   = 3
