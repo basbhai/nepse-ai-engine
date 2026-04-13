@@ -76,6 +76,12 @@ def run(dry_run: bool = False, skip_guard: bool = False) -> int:
 
     results = {}
 
+    def _nepse_indices():
+        from modules.sharehub_scraper import run as run_indices
+        from datetime import datetime, timedelta
+        from_date = (datetime.now() - timedelta(days=5)).date()
+        run_indices(from_date=from_date, dry_run=False)
+    results["nepse_indices"] = _step("nepse_indices", _nepse_indices, dry_run)
     # ── Step 1: Recommendation tracker ───────────────────────────────────────
     def _rec_tracker():
         from analysis.recommendation_tracker import run as run_tracker
