@@ -257,6 +257,7 @@ def _format_buy_signal(result) -> str:
 
     lines.append(sep)
     return "\n".join(lines)
+
 def _format_wait_signal(result) -> str:
     """Format a WAIT signal for Telegram — different header, no trade details."""
     paper = PAPER_PREFIX if _is_paper_mode() else ""
