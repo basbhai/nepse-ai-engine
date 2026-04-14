@@ -188,38 +188,28 @@ def _load_relevant_lessons(symbols: list[str], limit: int = 8) -> list[str]:
     lessons = []
     try:
         from sheets import run_raw_sql
-
-        sym_list = "', '".join(symbols)
         rows = run_raw_sql(
-            f"""
-            SELECT symbol, pattern, lesson, outcome, win_when_applied, applied_count
+            """
+            SELECT condition, finding, action, confidence_level
             FROM learning_hub
-            WHERE symbol IN ('{sym_list}') OR symbol = 'MARKET'
-            ORDER BY
-                CASE WHEN symbol IN ('{sym_list}') THEN 0 ELSE 1 END,
-                id DESC
+            WHERE active = 'true'
+            ORDER BY id DESC
             LIMIT %s
             """,
             (limit,)
         )
         for r in (rows or []):
-            sym      = r.get("symbol", "?")
-            pattern  = r.get("pattern", "")
-            lesson   = r.get("lesson", "")[:120]
-            outcome  = r.get("outcome", "")
-            win_rate = r.get("win_when_applied", "")
-            applied  = r.get("applied_count", "")
+            condition  = r.get("condition", "")
+            finding    = (r.get("finding") or "")[:500]
+            action     = r.get("action", "")
+            confidence = r.get("confidence_level", "")
             lessons.append(
-                f"{sym} [{pattern}] {outcome}: {lesson}"
-                + (f" (win {win_rate}/{applied})" if applied else "")
+                f"[{action}] If {condition}: {finding}"
+                + (f" (confidence: {confidence})" if confidence else "")
             )
-
     except Exception as exc:
         logger.warning("Could not load Learning Hub lessons: %s", exc)
-
     return lessons
-
-
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 2 — LOAD OPEN POSITIONS
 # ══════════════════════════════════════════════════════════════════════════════
