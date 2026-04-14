@@ -654,6 +654,7 @@ def cmd_execute(dry: bool = False) -> None:
 
     for seed in seeds:
         try:
+            seed["date"] = _nst_now()[:10]
             # Use upsert keyed on (lesson_type, source, condition) to be idempotent
             # Falls back to write_row if upsert not available for this table
             try:

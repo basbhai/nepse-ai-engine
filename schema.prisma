@@ -635,9 +635,9 @@ model trade_journal {
 
 // learning_hub: synthesised lessons written by GPT weekly + research paper seeds
 model learning_hub {
-  id          Serial
-  created_at  Text
-
+  id                 Serial
+  created_at          Text
+  date                Text
   lesson_type         Text   // SIGNAL_FILTER | SECTOR_FILTER | MACRO_FILTER | ENTRY_TIMING | STOP_CALC | PORTFOLIO_RULE | DIVIDEND_PATTERN | CALENDAR_EFFECT | FAILURE_MODE
   source              Text   // research_paper | gpt_weekly | claude | user
   symbol              Text   // specific symbol OR 'MARKET'
