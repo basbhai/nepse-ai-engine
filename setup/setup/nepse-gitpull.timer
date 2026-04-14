@@ -1,0 +1,10 @@
+[Unit]
+Description=NEPSE AI Engine — Pull latest code before morning workflow
+Requires=nepse-gitpull.service
+
+[Timer]
+OnCalendar=Mon-Fri 04:35:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

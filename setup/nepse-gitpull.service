@@ -1,0 +1,10 @@
+[Unit]
+Description=NEPSE AI Engine — Git pull latest code from main
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/shanvi/nepse-ai-engine
+ExecStart=/bin/bash -c 'git fetch origin && git reset --hard origin/main'
+StandardOutput=journal
+StandardError=journal
