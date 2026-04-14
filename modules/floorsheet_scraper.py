@@ -465,6 +465,8 @@ if __name__ == "__main__":
         level  = logging.WARNING,  # suppress info during backfill — progress bar handles output
         format = "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
     )
+    from log_config import attach_file_handler
+    attach_file_handler(__name__)
 
     parser = argparse.ArgumentParser(description="NEPSE Floorsheet Scraper")
     parser.add_argument("--mode",   choices=["backfill", "daily"], default="daily")

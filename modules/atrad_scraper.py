@@ -293,6 +293,8 @@ def run():
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
+    from log_config import attach_file_handler
+    attach_file_handler(__name__)
     df = run()
     if df is not None and not df.empty:
         print(f"\n✅ Fetched {len(df)} symbols")
