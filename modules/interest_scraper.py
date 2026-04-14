@@ -31,7 +31,7 @@ from config import NST
 
 log = logging.getLogger(__name__)
 
-API_URL = "https://www.bankbyaj.com/api/fd-rates"
+API_URL = "https://admin.bankbyaj.com/api/v1/category/fd-individual?"
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
