@@ -1148,3 +1148,105 @@ model claude_audit {
   audit_summary      Text
 
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FLOORSHEET — Raw trade data (Merolagani 2019+ / Sharehubnepal 2023+)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model floorsheet {
+  id               Serial
+  date             Text!
+  symbol           Text!
+  contract_id      Text
+  buyer_broker_id  Text
+  seller_broker_id Text
+  buyer_broker     Text
+  seller_broker    Text
+  quantity         Text!
+  rate             Text!
+  amount           Text!
+  trade_time       Text    // NULL for Merolagani, HH:MM:SS for Sharehubnepal
+  source           Text    // 'merolagani' | 'sharehubnepal'
+
+  @@unique([date, contract_id, source])
+  @@index([date, symbol])
+  @@index([symbol])
+  @@index([date])
+  @@index([buyer_broker_id])
+  @@index([seller_broker_id])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FLOORSHEET SIGNALS — Computed daily per symbol from raw floorsheet
+// ─────────────────────────────────────────────────────────────────────────────
+
+model floorsheet_signals {
+  id                   Serial
+  date                 Text!
+  symbol               Text!
+  vwap                 Text    // sum(qty×rate)/sum(qty)
+  total_trades         Text    // total transactions
+  total_volume         Text    // total shares traded
+  total_turnover       Text    // total NPR amount
+  avg_trade_size       Text    // avg qty per trade
+  large_order_count    Text    // trades > 2× median qty
+  large_order_volume   Text    // total qty from large orders
+  large_order_pct      Text    // large_order_volume / total_volume
+  buyer_pressure       Text    // recurring buyer qty / total qty (0 to 1)
+  seller_pressure      Text    // recurring seller qty / total qty (0 to 1)
+  top_buyer_broker_id  Text    // most active buyer broker
+  top_seller_broker_id Text    // most active seller broker
+  broker_concentration Text    // top 3 brokers % of total volume
+  institutional_flag   Text    // true | false — large order + broker concentration
+  source               Text    // 'merolagani' | 'sharehubnepal' | 'combined'
+  computed_at          Text
+
+  @@unique([date, symbol])
+  @@index([date])
+  @@index([symbol])
+  @@index([institutional_flag])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ATRAD MARKET WATCH — Live intraday data from ATrad TMS
+// Written every 10 min during market hours by atrad_scraper.py
+// ─────────────────────────────────────────────────────────────────────────────
+
+model atrad_market_watch {
+  id           Serial
+  date         Text!
+  time         Text!    // HH:MM:SS — lasttradedtime from ATrad
+  symbol       Text!
+  ltp          Text     // tradeprice — last traded price
+  open         Text     // openingprice
+  high         Text     // highpx
+  low          Text     // lowpx
+  vwap         Text     // exchange-computed VWAP
+  avg_price    Text     // avgprice — simple average
+  bid_price    Text     // best bid price
+  bid_qty      Text     // best bid quantity — buy pressure
+  ask_price    Text     // best ask price
+  ask_qty      Text     // best ask quantity — sell pressure
+  volume       Text     // totvolume
+  turnover     Text     // totturnover
+  total_trades Text     // tottrades
+  net_change   Text     // netchange
+  pct_change   Text     // perchange
+  low_dpr      Text     // lower circuit breaker limit
+  high_dpr     Text     // upper circuit breaker limit
+  prev_dpr_low Text     // popdprlow — yesterday's lower DPR
+  prev_dpr_high Text    // popdprhigh — yesterday's upper DPR
+  max_al_qty   Text     // maxalqty — max allowable quantity
+
+  // Derived signals — computed at write time
+  vwap_dev     Text     // (ltp - vwap) / vwap — deviation from fair value
+  bid_ask_ratio Text    // bid_qty / (bid_qty + ask_qty) — demand pressure 0 to 1
+  dpr_proximity Text    // (ltp - low_dpr) / (high_dpr - low_dpr) — position in range
+
+  @@unique([date, time, symbol])
+  @@index([date, symbol])
+  @@index([symbol])
+  @@index([date])
+}
+
+
