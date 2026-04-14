@@ -43,6 +43,9 @@ TABS: dict[str, str] = {
     "gate_misses": "gate_misses",
     "gate_proposals": "gate_proposals",
     "claude_audit": "claude_audit",
+    "floorsheet": "floorsheet",
+    "floorsheet_signals": "floorsheet_signals",
+    "atrad_market_watch": "atrad_market_watch",
 }
 
 TABLE_DDL: dict[str, str] = {
@@ -1172,6 +1175,108 @@ TABLE_DDL: dict[str, str] = {
         CONSTRAINT ux_claude_audit_review_week UNIQUE (review_week)
     );
     """,
+
+    "floorsheet": """
+    CREATE TABLE IF NOT EXISTS "floorsheet" (
+        id SERIAL PRIMARY KEY,
+        date TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        contract_id TEXT,
+        buyer_broker_id TEXT,
+        seller_broker_id TEXT,
+        buyer_broker TEXT,
+        seller_broker TEXT,
+        quantity TEXT NOT NULL,
+        rate TEXT NOT NULL,
+        amount TEXT NOT NULL,
+        trade_time TEXT,
+        source TEXT,
+        inserted_at TIMESTAMPTZ DEFAULT NOW(),
+        CONSTRAINT ux_floorsheet_date_contract_id_source UNIQUE (date, contract_id, source)
+    );
+    CREATE INDEX IF NOT EXISTS ix_floorsheet_date_symbol
+        ON "floorsheet" (date, symbol);
+    CREATE INDEX IF NOT EXISTS ix_floorsheet_symbol
+        ON "floorsheet" (symbol);
+    CREATE INDEX IF NOT EXISTS ix_floorsheet_date
+        ON "floorsheet" (date);
+    CREATE INDEX IF NOT EXISTS ix_floorsheet_buyer_broker_id
+        ON "floorsheet" (buyer_broker_id);
+    CREATE INDEX IF NOT EXISTS ix_floorsheet_seller_broker_id
+        ON "floorsheet" (seller_broker_id);
+    """,
+
+    "floorsheet_signals": """
+    CREATE TABLE IF NOT EXISTS "floorsheet_signals" (
+        id SERIAL PRIMARY KEY,
+        date TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        vwap TEXT,
+        total_trades TEXT,
+        total_volume TEXT,
+        total_turnover TEXT,
+        avg_trade_size TEXT,
+        large_order_count TEXT,
+        large_order_volume TEXT,
+        large_order_pct TEXT,
+        buyer_pressure TEXT,
+        seller_pressure TEXT,
+        top_buyer_broker_id TEXT,
+        top_seller_broker_id TEXT,
+        broker_concentration TEXT,
+        institutional_flag TEXT,
+        source TEXT,
+        computed_at TEXT,
+        inserted_at TIMESTAMPTZ DEFAULT NOW(),
+        CONSTRAINT ux_floorsheet_signals_date_symbol UNIQUE (date, symbol)
+    );
+    CREATE INDEX IF NOT EXISTS ix_floorsheet_signals_date
+        ON "floorsheet_signals" (date);
+    CREATE INDEX IF NOT EXISTS ix_floorsheet_signals_symbol
+        ON "floorsheet_signals" (symbol);
+    CREATE INDEX IF NOT EXISTS ix_floorsheet_signals_institutional_flag
+        ON "floorsheet_signals" (institutional_flag);
+    """,
+
+    "atrad_market_watch": """
+    CREATE TABLE IF NOT EXISTS "atrad_market_watch" (
+        id SERIAL PRIMARY KEY,
+        date TEXT NOT NULL,
+        time TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        ltp TEXT,
+        open TEXT,
+        high TEXT,
+        low TEXT,
+        vwap TEXT,
+        avg_price TEXT,
+        bid_price TEXT,
+        bid_qty TEXT,
+        ask_price TEXT,
+        ask_qty TEXT,
+        volume TEXT,
+        turnover TEXT,
+        total_trades TEXT,
+        net_change TEXT,
+        pct_change TEXT,
+        low_dpr TEXT,
+        high_dpr TEXT,
+        prev_dpr_low TEXT,
+        prev_dpr_high TEXT,
+        max_al_qty TEXT,
+        vwap_dev TEXT,
+        bid_ask_ratio TEXT,
+        dpr_proximity TEXT,
+        inserted_at TIMESTAMPTZ DEFAULT NOW(),
+        CONSTRAINT ux_atrad_market_watch_date_time_symbol UNIQUE (date, time, symbol)
+    );
+    CREATE INDEX IF NOT EXISTS ix_atrad_market_watch_date_symbol
+        ON "atrad_market_watch" (date, symbol);
+    CREATE INDEX IF NOT EXISTS ix_atrad_market_watch_symbol
+        ON "atrad_market_watch" (symbol);
+    CREATE INDEX IF NOT EXISTS ix_atrad_market_watch_date
+        ON "atrad_market_watch" (date);
+    """,
 }
 
 TABLE_COLUMNS: dict[str, list[str]] = {
@@ -1213,4 +1318,7 @@ TABLE_COLUMNS: dict[str, list[str]] = {
     "gate_misses": ["date", "symbol", "sector", "gate_reason", "gate_category", "price_at_block", "market_state", "tech_score", "conf_score", "composite_score_would_be", "tracking_days", "outcome", "outcome_return_pct", "outcome_stamped_at"],
     "gate_proposals": ["review_week", "proposal_number", "parameter_name", "current_value", "proposed_value", "reasoning", "false_block_rate", "sample_size", "status", "decided_at", "applied_at"],
     "claude_audit": ["review_week", "buy_count", "buy_win_rate", "buy_avg_return", "wait_count", "wait_accuracy", "avoid_count", "avoid_accuracy", "false_avoid_rate", "missed_entry_rate", "overall_accuracy", "macro_accuracy", "audit_summary"],
+    "floorsheet": ["date", "symbol", "contract_id", "buyer_broker_id", "seller_broker_id", "buyer_broker", "seller_broker", "quantity", "rate", "amount", "trade_time", "source"],
+    "floorsheet_signals": ["date", "symbol", "vwap", "total_trades", "total_volume", "total_turnover", "avg_trade_size", "large_order_count", "large_order_volume", "large_order_pct", "buyer_pressure", "seller_pressure", "top_buyer_broker_id", "top_seller_broker_id", "broker_concentration", "institutional_flag", "source", "computed_at"],
+    "atrad_market_watch": ["date", "time", "symbol", "ltp", "open", "high", "low", "vwap", "avg_price", "bid_price", "bid_qty", "ask_price", "ask_qty", "volume", "turnover", "total_trades", "net_change", "pct_change", "low_dpr", "high_dpr", "prev_dpr_low", "prev_dpr_high", "max_al_qty", "vwap_dev", "bid_ask_ratio", "dpr_proximity"],
 }
