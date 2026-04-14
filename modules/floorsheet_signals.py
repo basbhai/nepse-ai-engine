@@ -284,6 +284,8 @@ if __name__ == "__main__":
         level  = logging.INFO,
         format = "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
     )
+    from log_config import attach_file_handler
+    attach_file_handler(__name__)
 
     parser = argparse.ArgumentParser(description="Floorsheet Signal Computation")
     parser.add_argument("--date",  default=None, help="YYYY-MM-DD")

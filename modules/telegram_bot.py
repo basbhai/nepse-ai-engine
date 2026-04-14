@@ -56,6 +56,7 @@ ENV vars:
   GEMINI_API_KEY      — for NLP parsing
   GEMINI_MODEL        — default: gemini-2.5-flash
   PAPER_MODE          — "true" | "false"
+  ATRAD_SIM_ENABLED   — "true" to enable ATrad order book simulation
 
   cli for sandbox
 
@@ -89,6 +90,26 @@ from calendar_guard import is_open as market_is_open, get_status as market_statu
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s",
                     level=logging.INFO)
 log = logging.getLogger(__name__)
+
+# ATrad order book simulation
+ATRAD_SIM_ENABLED = os.environ.get("ATRAD_SIM_ENABLED", "false").lower() == "true"
+ATRAD_AVAILABLE = False
+if ATRAD_SIM_ENABLED:
+    try:
+        from modules.atrad_scraper import (
+            fetch_order_book,
+            _ensure_session as atrad_ensure_session,
+            login as atrad_login,
+        )
+        ATRAD_AVAILABLE = True
+        log.info("ATrad simulation ENABLED and available")
+    except ImportError:
+        log.warning("ATrad simulation ENABLED but module not found — falling back to desired price")
+else:
+    log.info("ATrad simulation DISABLED (set ATRAD_SIM_ENABLED=true to enable)")
+
+MAX_SLIPPAGE_PCT = Decimal("0.005")  # 0.5% max acceptable slippage
+MIN_ORDER_VOL    = 10                # minimum qty at a level to count
 
 # ─── Constants ───────────────────────────────────────────────────────────────
 NST              = ZoneInfo("Asia/Kathmandu")
@@ -354,6 +375,113 @@ def calc_sell_fees(price: Decimal, shares: Decimal, wacc: Decimal) -> dict:
         "net_pnl":      net_pnl,
         "cost_basis":   cost_basis,
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ATrad order simulation
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _simulate_order_fill(
+    symbol       : str,
+    shares       : Decimal,
+    desired_price: Decimal,
+    side         : str,   # "BUY" or "SELL"
+) -> dict:
+    """
+    Simulate realistic order fill using ATrad live order book.
+    BUY  → walks ASK side (find sellers)
+    SELL → walks BID side (find buyers)
+    Returns: status, filled_qty, fill_price, slippage_pct, unfilled_qty, note
+    """
+    fallback = {
+        "status"      : "FALLBACK",
+        "filled_qty"  : shares,
+        "fill_price"  : desired_price,
+        "slippage_pct": Decimal("0"),
+        "unfilled_qty": Decimal("0"),
+        "book_used"   : False,
+        "note"        : "Filled at desired price (no book data)",
+    }
+
+    if not ATRAD_AVAILABLE:
+        return fallback
+
+    try:
+        if not atrad_ensure_session():
+            atrad_login()
+
+        book   = fetch_order_book(symbol)
+        levels = book.get("asks", []) if side == "BUY" else book.get("bids", [])
+
+        if not book or not levels:
+            fallback["status"] = "NO_BOOK"
+            fallback["note"]   = "No order book — market closed, filled at desired price"
+            return fallback
+
+        remaining    = shares
+        total_value  = Decimal("0")
+        total_filled = Decimal("0")
+        fill_levels  = []
+
+        for level in levels:
+            if remaining <= 0:
+                break
+
+            level_price = Decimal(str(level.get("price", 0)))
+            level_qty   = Decimal(str(level.get("qty",   0)))
+
+            if level_qty < MIN_ORDER_VOL:
+                continue
+
+            slippage = (
+                (level_price - desired_price) / desired_price
+                if side == "BUY"
+                else (desired_price - level_price) / desired_price
+            ) if desired_price > 0 else Decimal("0")
+
+            if slippage > MAX_SLIPPAGE_PCT:
+                break
+
+            fill_qty      = min(remaining, level_qty)
+            total_filled += fill_qty
+            total_value  += fill_qty * level_price
+            remaining    -= fill_qty
+            fill_levels.append(f"{fill_qty:.0f}@{level_price}")
+
+        if total_filled <= 0:
+            best = Decimal(str(levels[0].get("price", 0))) if levels else Decimal("0")
+            slip = abs((best - desired_price) / desired_price * 100).quantize(Decimal("0.01")) if desired_price > 0 else Decimal("0")
+            return {
+                "status"      : "UNFILLED",
+                "filled_qty"  : Decimal("0"),
+                "fill_price"  : desired_price,
+                "slippage_pct": slip,
+                "unfilled_qty": shares,
+                "book_used"   : True,
+                "note"        : f"Slippage {slip}% exceeds 0.5% limit — no fill",
+            }
+
+        avg_fill = (total_value / total_filled).quantize(Decimal("0.01"), ROUND_HALF_UP)
+        slip_pct = abs((avg_fill - desired_price) / desired_price * 100).quantize(Decimal("0.01")) if desired_price > 0 else Decimal("0")
+        unfilled = shares - total_filled
+        status   = "FULL_FILL" if unfilled <= 0 else "PARTIAL_FILL"
+        note     = " | ".join(fill_levels[:3])
+        if len(fill_levels) > 3:
+            note += f" (+{len(fill_levels)-3} levels)"
+
+        return {
+            "status"      : status,
+            "filled_qty"  : total_filled,
+            "fill_price"  : avg_fill,
+            "slippage_pct": slip_pct,
+            "unfilled_qty": unfilled,
+            "book_used"   : True,
+            "note"        : note,
+        }
+
+    except Exception as e:
+        log.warning(f"_simulate_order_fill {symbol} {side}: {e}")
+        return fallback
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1461,13 +1589,52 @@ async def cmd_buy(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
             f"_New WACC after: {fmt_npr(new_wacc)}_"
         )
 
+    # ── ATrad fill simulation ────────────────────────────────────────────
+    try:
+        sim = _simulate_order_fill(symbol, shares, price, "BUY")
+    except Exception as e:
+        log.warning(f"ATrad simulation crashed for {symbol} BUY: {e}")
+        sim = {
+            "status"      : "FALLBACK",
+            "filled_qty"  : shares,
+            "fill_price"  : price,
+            "slippage_pct": Decimal("0"),
+            "unfilled_qty": Decimal("0"),
+            "book_used"   : False,
+            "note"        : "Simulation error — using desired price",
+        }
+
+    fill_price    = sim["fill_price"]
+    fill_qty      = sim["filled_qty"]
+    sim_fees      = calc_buy_fees(fill_price, fill_qty) if fill_qty > 0 else fees
+    sim_total_out = sim_fees["total_cost"] if fill_qty > 0 else total_out
+
+    # Build simulation note
+    if sim["status"] == "FULL_FILL" and sim["book_used"]:
+        sim_note = f"\n📊 *Live Order Book Fill*\n  {sim['note']}\n  Slippage: {sim['slippage_pct']}%"
+    elif sim["status"] == "PARTIAL_FILL":
+        sim_note = (
+            f"\n⚠️ *Partial Fill* ({fill_qty:.0f}/{shares:.0f} shares)\n"
+            f"  {sim['note']}\n  Slippage: {sim['slippage_pct']}%\n"
+            f"  _{sim['unfilled_qty']:.0f} shares unfilled — thin market_"
+        )
+    elif sim["status"] == "UNFILLED":
+        sim_note = f"\n🚫 *UNFILLED* — {sim['note']}"
+    elif sim["status"] == "NO_BOOK":
+        sim_note = f"\n📴 _{sim['note']}_"
+    else:
+        sim_note = f"\n_Book unavailable — using desired price_"
+
     ctx.user_data["pending_buy"] = {
-        "symbol": symbol, "shares": str(shares), "price": str(price)
+        "symbol"    : symbol,
+        "shares"    : str(fill_qty),
+        "price"     : str(fill_price),
+        "sim_status": sim["status"],
     }
 
     await update.message.reply_text(
         f"*Confirm BUY* | {mode_label()}\n\n"
-        f"*{symbol}* | {shares:.0f} shares @ {fmt_npr(price)}\n"
+        f"*{symbol}* | {shares:.0f} shares @ {fmt_npr(price)} _(desired)_\n"
         f"────────────────────\n"
         f"Gross:      {fmt_npr(fees['gross'])}\n"
         f"Brokerage:  {fmt_npr(fees['brokerage'])}\n"
@@ -1478,7 +1645,8 @@ async def cmd_buy(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         f"*Total out: {fmt_npr(total_out)}*\n"
         f"Available:  {fmt_npr(available)}\n"
         f"After buy:  {fmt_npr(available - total_out)}"
-        f"{avg_note}\n\n"
+        f"{avg_note}"
+        f"{sim_note}\n\n"
         f"Type /yes to confirm or /no to cancel.",
         parse_mode="Markdown"
     )
@@ -1492,6 +1660,16 @@ async def confirm_buy_yes(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
     if not pending:
         await update.message.reply_text("No pending BUY.")
         return ConversationHandler.END
+
+    # Safety — if simulation returned UNFILLED, block execution
+    if pending.get("sim_status") == "UNFILLED":
+        await update.message.reply_text(
+            "🚫 Order could not be filled — no sellers at acceptable price.\n"
+            "Try a different price or check market depth."
+        )
+        ctx.user_data.pop("pending_buy", None)
+        return ConversationHandler.END
+
     try:
         r = execute_buy(uid, pending["symbol"], Decimal(pending["shares"]), Decimal(pending["price"]))
         avg_txt = "_(averaged)_" if r["averaged"] else "_(new position)_"
@@ -1591,25 +1769,69 @@ async def cmd_sell(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     em        = "🟢" if fees["net_pnl"] > 0 else "🔴"
     partial   = f"\n_{remaining:.0f} shares remain at WACC {fmt_npr(wacc)}_" if remaining > 0 else ""
 
+    # ── ATrad fill simulation ────────────────────────────────────────────
+    try:
+        sim = _simulate_order_fill(symbol, shares, price, "SELL")
+    except Exception as e:
+        log.warning(f"ATrad simulation crashed for {symbol} SELL: {e}")
+        sim = {
+            "status"      : "FALLBACK",
+            "filled_qty"  : shares,
+            "fill_price"  : price,
+            "slippage_pct": Decimal("0"),
+            "unfilled_qty": Decimal("0"),
+            "book_used"   : False,
+            "note"        : "Simulation error — using desired price",
+        }
+
+    fill_price = sim["fill_price"]
+    fill_qty   = sim["filled_qty"]
+    sim_fees   = calc_sell_fees(fill_price, fill_qty, wacc) if fill_qty > 0 else fees
+
+    if sim["status"] == "FULL_FILL" and sim["book_used"]:
+        sim_note = f"\n📊 *Live Order Book Fill*\n  {sim['note']}\n  Slippage: {sim['slippage_pct']}%"
+    elif sim["status"] == "PARTIAL_FILL":
+        sim_note = (
+            f"\n⚠️ *Partial Fill* ({fill_qty:.0f}/{shares:.0f} shares)\n"
+            f"  {sim['note']}\n  Slippage: {sim['slippage_pct']}%\n"
+            f"  _{sim['unfilled_qty']:.0f} shares unfilled — thin market_"
+        )
+    elif sim["status"] == "UNFILLED":
+        sim_note = f"\n🚫 *UNFILLED* — {sim['note']}"
+    elif sim["status"] == "NO_BOOK":
+        sim_note = f"\n📴 _{sim['note']}_"
+    else:
+        sim_note = f"\n_Book unavailable — using desired price_"
+
+    # Use simulated fill for actual execution
+    exec_fees  = sim_fees
+    exec_price = fill_price
+    exec_qty   = fill_qty if fill_qty > 0 else shares
+
     ctx.user_data["pending_sell"] = {
-        "symbol": symbol, "shares": str(shares), "price": str(price)
+        "symbol"    : symbol,
+        "shares"    : str(exec_qty),
+        "price"     : str(exec_price),
+        "sim_status": sim["status"],
     }
 
     await update.message.reply_text(
         f"*Confirm SELL* | {mode_label()}\n\n"
-        f"*{symbol}* | {shares:.0f} shares @ {fmt_npr(price)}\n"
+        f"*{symbol}* | {shares:.0f} shares\n"
+        f"Desired: {fmt_npr(price)} | Simulated fill: {fmt_npr(exec_price)}\n"
         f"Entry WACC: {fmt_npr(wacc)}\n"
         f"────────────────────\n"
-        f"Gross sale:  {fmt_npr(fees['gross'])}\n"
-        f"Brokerage:   {fmt_npr(fees['brokerage'])}\n"
-        f"SEBON:       {fmt_npr(fees['sebon'])}\n"
+        f"Gross sale:  {fmt_npr(exec_fees['gross'])}\n"
+        f"Brokerage:   {fmt_npr(exec_fees['brokerage'])}\n"
+        f"SEBON:       {fmt_npr(exec_fees['sebon'])}\n"
         f"DP fee:      {fmt_npr(DP_FEE)}\n"
-        f"CGT (7.5%):  {fmt_npr(fees['cgt'])}\n"
-        f"Total fees:  {fmt_npr(fees['total_fees'])}\n"
+        f"CGT (7.5%):  {fmt_npr(exec_fees['cgt'])}\n"
+        f"Total fees:  {fmt_npr(exec_fees['total_fees'])}\n"
         f"────────────────────\n"
-        f"{em} *Net P&L: {fmt_npr(fees['net_pnl'], sign=True)}*\n"
-        f"Proceeds back to capital: {fmt_npr(fees['net_proceeds'])}"
-        f"{partial}\n\n"
+        f"{em} *Net P&L: {fmt_npr(exec_fees['net_pnl'], sign=True)}*\n"
+        f"Proceeds: {fmt_npr(exec_fees['net_proceeds'])}"
+        f"{partial}"
+        f"{sim_note}\n\n"
         f"Type /yes to confirm or /no to cancel.",
         parse_mode="Markdown"
     )
@@ -1622,6 +1844,16 @@ async def confirm_sell_yes(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
     if not pending:
         await update.message.reply_text("No pending SELL.")
         return ConversationHandler.END
+
+    # Safety — if simulation returned UNFILLED, block execution
+    if pending.get("sim_status") == "UNFILLED":
+        await update.message.reply_text(
+            "🚫 Order could not be filled — no buyers at acceptable price.\n"
+            "Try a different price or check market depth."
+        )
+        ctx.user_data.pop("pending_sell", None)
+        return ConversationHandler.END
+
     try:
         r  = execute_sell(uid, pending["symbol"], Decimal(pending["shares"]), Decimal(pending["price"]))
         em = "🟢" if r["result"] == "WIN" else "🔴"
