@@ -1,0 +1,35 @@
+name: Sync latest_branch → main
+
+on:
+  push:
+    branches:
+      - latest_branch
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+      - name: Sync latest_branch to main
+        run: |
+          git fetch origin
+
+          # switch to main
+          git checkout main
+          git pull origin main
+
+          # merge latest_branch into main (AUTO PULL effect)
+          git merge origin/latest_branch
+
+          # push updated main
+          git push origin main
