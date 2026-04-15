@@ -130,19 +130,18 @@ def _write_rows(records: list) -> int:
     ]
 
     try:
-        with _db() as conn:
-            with conn.cursor() as cur:
-                execute_values(
-                    cur,
-                    f"""
-                    INSERT INTO floorsheet ({', '.join(columns)})
-                    VALUES %s
-                    ON CONFLICT DO NOTHING
-                    """,
-                    values,
-                    page_size=500,
-                )
-                return cur.rowcount
+        with _db() as cur:
+            execute_values(
+                cur,
+                f"""
+                INSERT INTO floorsheet ({', '.join(columns)})
+                VALUES %s
+                ON CONFLICT DO NOTHING
+                """,
+                values,
+                page_size=500,
+            )
+            return cur.rowcount
     except Exception as e:
         log.error(f"Bulk write failed: {e}")
         return 0
