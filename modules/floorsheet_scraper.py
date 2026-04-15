@@ -1,13 +1,10 @@
 """
 modules/floorsheet_scraper.py — NEPSE Floorsheet Data Collection
 Sources:
-  - Merolagani  : 2019-present, HTML POST, 500 rows/page, ~16 pages/day
+  - Merolagani  : 2019-present, HTML POST, 500 rows/page
   - Sharehubnepal: 2023 July-present, JSON API, max 100 rows/page
 
-Rate limiting:
-  - Merolagani  : 2s delay between pages — never parallel
-  - Sharehubnepal: 1s delay between pages
-  - One day at a time — never bulk parallel scraping
+Updated: 3 workers for Sharehub + lively progress bar
 """
 
 import os
@@ -17,6 +14,8 @@ import time
 import logging
 import requests
 import pandas as pd
+import concurrent.futures
+import threading
 from datetime import date, datetime, timedelta
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
@@ -37,8 +36,9 @@ SH_BASE        = "https://sharehubnepal.com/live/api/v2/floorsheet"
 ML_PAGE_SIZE   = 500
 SH_PAGE_SIZE   = 100
 ML_DELAY_SEC   = 2.0
-SH_DELAY_SEC   = 0.5
+SH_DELAY_SEC   = 0.8          # Safe with 3 workers
 SH_START_DATE  = date(2023, 7, 2)
+SH_WORKERS     = 3            # ← 3 workers as requested
 
 ML_HEADERS = {
     "User-Agent" : "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -50,20 +50,24 @@ SH_HEADERS = {
     "Accept"     : "application/json",
 }
 
-
-# ─── Progress Bar ─────────────────────────────────────────────────────────────
+# ─── Lively Progress Bar ─────────────────────────────────────────────────────
 
 def _progress(current: int, total: int, current_date: str, rows: int, status: str = ""):
-    """Print inline progress bar."""
-    pct      = current / total if total > 0 else 0
-    filled   = int(40 * pct)
-    bar      = "█" * filled + "░" * (40 - filled)
-    elapsed  = f"{rows:,} rows"
+    """Lively inline progress bar with ETA"""
+    pct = current / total if total > 0 else 0
+    filled = int(50 * pct)
+    bar = "█" * filled + "░" * (50 - filled)
+    
+    elapsed = time.time() - _progress.start_time if hasattr(_progress, 'start_time') else 0
+    rate = (current / elapsed) if elapsed > 0 else 0
+    remaining = (total - current) / rate if rate > 0 else 0
+    eta = f"ETA: {remaining/60:.1f} min" if remaining > 0 else ""
+
     sys.stdout.write(
         f"\r[{bar}] {current}/{total} ({pct*100:.1f}%)  "
         f"Date: {current_date}  "
-        f"Total: {elapsed}  "
-        f"{status}          "
+        f"Rows: {rows:,}  "
+        f"{status}  {eta}          "
     )
     sys.stdout.flush()
 
@@ -147,7 +151,7 @@ def _write_rows(records: list) -> int:
         return 0
 
 
-# ─── Merolagani Scraper ───────────────────────────────────────────────────────
+# ─── Merolagani Scraper (complete, from original) ─────────────────────────────
 
 class MerolaganiScraper:
 
@@ -284,91 +288,126 @@ class MerolaganiScraper:
         return total_written
 
 
-# ─── Sharehubnepal Scraper ────────────────────────────────────────────────────
+# ─── Sharehubnepal Scraper with 3 Workers + Lively Progress ───────────────────
 
 class SharehubScraper:
 
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update(SH_HEADERS)
+        self.lock = threading.Lock()
+
+    def _fetch_page(self, target_date: date, page: int) -> tuple:
+        date_str = f"{target_date.year}-{target_date.month}-{target_date.day}"
+        try:
+            r = self.session.get(
+                SH_BASE,
+                params={"Size": SH_PAGE_SIZE, "date": date_str, "Page": page},
+                timeout=30,
+            )
+
+            if r.status_code == 500:
+                return page, [], False, "HOLIDAY"
+            if r.status_code != 200:
+                return page, [], False, f"HTTP_{r.status_code}"
+
+            data = r.json()
+            payload = data.get("data", {})
+            trades = (payload.get("floorSheets") or payload.get("floorsheets") or 
+                     payload.get("trades") or [])
+
+            if not trades and isinstance(payload, dict):
+                for key, val in payload.items():
+                    if isinstance(val, list) and len(val) > 0:
+                        trades = val
+                        break
+
+            if not trades:
+                return page, [], False, "NO_DATA"
+
+            records = []
+            for t in trades:
+                try:
+                    raw_time = t.get("tradeTime", "")
+                    trade_time = raw_time[11:19] if raw_time else None
+                    records.append({
+                        "date": date_str,
+                        "symbol": t.get("symbol", ""),
+                        "contract_id": str(t.get("contractId", "")),
+                        "buyer_broker_id": str(t.get("buyerMemberId", "")),
+                        "seller_broker_id": str(t.get("sellerMemberId", "")),
+                        "buyer_broker": t.get("buyerBrokerName", ""),
+                        "seller_broker": t.get("sellerBrokerName", ""),
+                        "quantity": str(t.get("contractQuantity", 0)),
+                        "rate": str(t.get("contractRate", 0)),
+                        "amount": str(t.get("contractAmount", 0)),
+                        "trade_time": trade_time,
+                        "source": "sharehubnepal",
+                    })
+                except Exception:
+                    continue
+
+            has_next = payload.get("hasNext", False)
+            return page, records, has_next, "OK"
+
+        except Exception as e:
+            return page, [], False, f"ERROR: {e}"
 
     def scrape_date(self, target_date: date) -> int:
-        date_str      = f"{target_date.year}-{target_date.month}-{target_date.day}"
+        date_str = target_date.strftime("%Y-%m-%d")
         total_written = 0
-        page          = 1
-        has_next      = True
+        start_time = time.time()
 
-        while has_next:
-            try:
-                r = self.session.get(
-                    SH_BASE,
-                    params={"Size": SH_PAGE_SIZE, "date": date_str, "Page": page},
-                    timeout=30,
-                )
+        print(f"\n🚀 Starting Sharehub scrape with **3 workers** for date: {date_str}")
+        print(f"{'Page':<6} {'Rows This Page':<15} {'Total Rows':<12} Status")
 
-                # 500 = holiday or non-trading day — mark and skip
-                if r.status_code == 500:
-                    log.debug(f"Sharehub {target_date}: holiday/non-trading day")
-                    if page == 1:
-                        _mark_no_data(target_date, "sharehubnepal")
+        page = 1
+        max_pages = 400
+        has_next = True
+
+        while has_next and page <= max_pages:
+            batch = []
+            for _ in range(SH_WORKERS):
+                if not has_next or page > max_pages:
                     break
+                batch.append(page)
+                page += 1
 
-                if r.status_code != 200:
-                    log.error(f"Sharehub HTTP {r.status_code} on {target_date} page {page}")
-                    break
+            if not batch:
+                break
 
-                data    = r.json()
-                payload = data.get("data", {})
+            with concurrent.futures.ThreadPoolExecutor(max_workers=SH_WORKERS) as executor:
+                future_to_page = {executor.submit(self._fetch_page, target_date, p): p for p in batch}
 
-                # Find trade list — try multiple key names
-                trades = (payload.get("floorSheets")
-                       or payload.get("floorsheets")
-                       or payload.get("trades")
-                       or [])
+                for future in concurrent.futures.as_completed(future_to_page):
+                    p, records, next_flag, status = future.result()
 
-                if not trades and isinstance(payload, dict):
-                    for key, val in payload.items():
-                        if isinstance(val, list) and len(val) > 0:
-                            trades = val
-                            break
+                    if status in ("HOLIDAY", "NO_DATA"):
+                        if p == 1:
+                            _mark_no_data(target_date, "sharehubnepal")
+                        print(f"   {p:<6} {'0':<15} {total_written:<12,} {status}")
+                        has_next = False
+                        break
 
-                if not trades:
-                    if page == 1:
-                        _mark_no_data(target_date, "sharehubnepal")
-                    break
-
-                records = []
-                for t in trades:
-                    try:
-                        raw_time   = t.get("tradeTime", "")
-                        trade_time = raw_time[11:19] if raw_time else None
-                        records.append({
-                            "date"            : target_date.strftime("%Y-%m-%d"),
-                            "symbol"          : t.get("symbol", ""),
-                            "contract_id"     : str(t.get("contractId", "")),
-                            "buyer_broker_id" : str(t.get("buyerMemberId", "")),
-                            "seller_broker_id": str(t.get("sellerMemberId", "")),
-                            "buyer_broker"    : t.get("buyerBrokerName", ""),
-                            "seller_broker"   : t.get("sellerBrokerName", ""),
-                            "quantity"        : str(t.get("contractQuantity", 0)),
-                            "rate"            : str(t.get("contractRate", 0)),
-                            "amount"          : str(t.get("contractAmount", 0)),
-                            "trade_time"      : trade_time,
-                            "source"          : "sharehubnepal",
-                        })
-                    except Exception:
+                    if status.startswith("HTTP") or status.startswith("ERROR"):
+                        print(f"   {p:<6} {'-':<15} {total_written:<12,} {status}")
                         continue
 
-                written        = _write_rows(records)
-                total_written += written
-                has_next       = payload.get("hasNext", False)
-                page          += 1
-                time.sleep(SH_DELAY_SEC)
+                    with self.lock:
+                        written = _write_rows(records)
+                        total_written += written
 
-            except Exception as e:
-                log.error(f"Sharehub {target_date} page {page} error: {e}")
-                time.sleep(5)
-                break
+                    print(f"   {p:<6} {len(records):<15,} {total_written:<12,} OK")
+
+                    has_next = next_flag
+
+            time.sleep(SH_DELAY_SEC)
+
+        elapsed = time.time() - start_time
+        print(f"\n✅ Sharehub scrape finished for {date_str}")
+        print(f"   Total rows written : {total_written:,}")
+        print(f"   Total pages        : {page-1}")
+        print(f"   Time taken         : {elapsed:.1f} seconds ({elapsed/60:.2f} minutes)\n")
 
         return total_written
 
@@ -410,6 +449,7 @@ def run_backfill(
     sh_done = _get_already_scraped_dates(trading_days, "sharehubnepal")
 
     start_time = time.time()
+    _progress.start_time = start_time   # for ETA in progress bar
 
     for i, target_date in enumerate(trading_days):
         date_str = target_date.strftime("%Y-%m-%d")
