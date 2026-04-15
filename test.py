@@ -1,7 +1,6 @@
-import requests
+from helper.notifier import _get_telegram_chat_ids, send_telegram
 
-url = "https://sharehubnepal.com/live/api/v2/floorsheet?Size=10&date=2026-4-8"
-response = requests.get(url)
-data = response.json()
 
-print(data)
+
+
+send_telegram('test',parse_mode='Markdown',silent=False)
