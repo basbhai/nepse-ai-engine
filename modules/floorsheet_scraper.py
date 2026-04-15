@@ -20,8 +20,10 @@ import pandas as pd
 from datetime import date, datetime, timedelta
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
+from psycopg2.extras import execute_values
 
 from sheets import write_row, run_raw_sql
+from db.connection import _db
 from config import NST
 
 load_dotenv()
@@ -35,7 +37,7 @@ SH_BASE        = "https://sharehubnepal.com/live/api/v2/floorsheet"
 ML_PAGE_SIZE   = 500
 SH_PAGE_SIZE   = 100
 ML_DELAY_SEC   = 2.0
-SH_DELAY_SEC   = 1.0
+SH_DELAY_SEC   = 0.5
 SH_START_DATE  = date(2023, 7, 2)
 
 ML_HEADERS = {
@@ -81,6 +83,21 @@ def _date_already_scraped(target_date: date, source: str) -> bool:
         return False
 
 
+def _get_already_scraped_dates(dates: list, source: str) -> set:
+    """Return set of date strings already in DB for this source (single query)."""
+    if not dates:
+        return set()
+    try:
+        placeholders = ", ".join(["%s"] * len(dates))
+        rows = run_raw_sql(
+            f"SELECT DISTINCT date FROM floorsheet WHERE date IN ({placeholders}) AND source = %s",
+            [d.strftime("%Y-%m-%d") for d in dates] + [source],
+        )
+        return {r["date"] for r in rows}
+    except Exception:
+        return set()
+
+
 def _mark_no_data(target_date: date, source: str) -> None:
     """Write a marker row for holiday/non-trading days so they are skipped next run."""
     try:
@@ -97,15 +114,38 @@ def _mark_no_data(target_date: date, source: str) -> None:
 
 
 def _write_rows(records: list) -> int:
-    """Bulk write floorsheet rows. Returns count written."""
-    written = 0
-    for rec in records:
-        try:
-            write_row("floorsheet", rec)
-            written += 1
-        except Exception as e:
-            log.debug(f"floorsheet write skip: {e}")
-    return written
+    """Bulk insert floorsheet rows via single SQL. Returns count written."""
+    if not records:
+        return 0
+
+    columns = [
+        "date", "symbol", "contract_id", "buyer_broker_id", "seller_broker_id",
+        "buyer_broker", "seller_broker", "quantity", "rate", "amount",
+        "trade_time", "source",
+    ]
+
+    values = [
+        tuple(rec.get(c) for c in columns)
+        for rec in records
+    ]
+
+    try:
+        with _db() as conn:
+            with conn.cursor() as cur:
+                execute_values(
+                    cur,
+                    f"""
+                    INSERT INTO floorsheet ({', '.join(columns)})
+                    VALUES %s
+                    ON CONFLICT DO NOTHING
+                    """,
+                    values,
+                    page_size=500,
+                )
+                return cur.rowcount
+    except Exception as e:
+        log.error(f"Bulk write failed: {e}")
+        return 0
 
 
 # ─── Merolagani Scraper ───────────────────────────────────────────────────────
@@ -366,6 +406,10 @@ def run_backfill(
     print(f"\nBackfill: {start_date} → {end_date}")
     print(f"Trading days: {total_days} | Source: {source}\n")
 
+    # Pre-fetch all already-scraped dates in ONE query per source
+    ml_done = _get_already_scraped_dates(trading_days, "merolagani")
+    sh_done = _get_already_scraped_dates(trading_days, "sharehubnepal")
+
     start_time = time.time()
 
     for i, target_date in enumerate(trading_days):
@@ -379,10 +423,10 @@ def run_backfill(
             use_sh = source == "sharehubnepal"
             use_ml = source == "merolagani"
 
-        src_name = "sharehubnepal" if use_sh else "merolagani"
+        already_done = sh_done if use_sh else ml_done
 
-        # Skip already scraped
-        if _date_already_scraped(target_date, src_name):
+        # Skip already scraped (uses pre-fetched set — no DB roundtrip)
+        if date_str in already_done:
             done_days += 1
             _progress(i + 1, total_days, date_str, total_rows, "SKIP")
             continue
