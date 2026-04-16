@@ -40,7 +40,7 @@ import logging
 import argparse
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-
+from AI import ask_gpt
 import requests
 
 from sheets import run_raw_sql, upsert_row, write_row, get_setting
@@ -67,44 +67,7 @@ MAX_WAIT_AVOID    = 80     # most recent evaluated WAIT/AVOID signals
 MAX_DAILY_CONTEXT = 90     # ~3 months of trading days
 MAX_GPT_TOKENS    = 8000   # max_tokens for GPT response
 
-# ─────────────────────────────────────────────────────────────────────────────
-# GPT SETUP (OpenRouter)
-# ─────────────────────────────────────────────────────────────────────────────
 
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
-GPT_MODEL          = os.environ.get("GPT_MODEL", "openai/gpt-5o")
-OPENROUTER_URL     = "https://openrouter.ai/api/v1/chat/completions"
-
-
-def _call_gpt(system_prompt: str, user_prompt: str, max_tokens: int = MAX_GPT_TOKENS) -> str:
-    """Call GPT via OpenRouter. Returns text response."""
-    if not OPENROUTER_API_KEY:
-        raise RuntimeError("OPENROUTER_API_KEY not set")
-
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type":  "application/json",
-        "HTTP-Referer":  "https://github.com/nepse-ai-engine",
-        "X-Title":       "NEPSE AI Engine  -  Learning Hub",
-    }
-    payload = {
-        "model":      GPT_MODEL,
-        "max_tokens": max_tokens,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user",   "content": user_prompt},
-        ],
-        "temperature": 0.2,
-    }
-
-    try:
-        resp = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=180)
-        resp.raise_for_status()
-        data = resp.json()
-        return data["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        log.error("GPT call failed: %s", e)
-        return ""
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DATA LOADERS  -  with token-aware limits
@@ -1188,7 +1151,7 @@ def run_weekly_review(dry_run: bool = False):
 
     log.info("Calling GPT-5o for weekly review (prompt ~%d tokens)...",
              (len(system_prompt) + len(user_prompt)) // 4)
-    raw_response = _call_gpt(system_prompt, user_prompt, max_tokens=MAX_GPT_TOKENS)
+    raw_response = ask_gpt(system_prompt, user_prompt, max_tokens=MAX_GPT_TOKENS, context="learning_hub")
 
     if not raw_response:
         log.error("GPT returned empty response  -  aborting review")

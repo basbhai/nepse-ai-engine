@@ -17,6 +17,7 @@ CLI:
     python claude_analyst.py --print-prompt -> print prompt, no API call
 """
 
+
 import json
 import logging
 import os
@@ -24,7 +25,7 @@ import sys
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from typing import Optional
-
+from AI import ask_claude
 from config import NST
 
 logger = logging.getLogger(__name__)
@@ -713,72 +714,9 @@ Respond ONLY with this JSON -- no markdown, no explanation outside JSON:
 }}"""
 
 
-# =============================================================================
-# SECTION 5 - CALL CLAUDE
-# =============================================================================
-
-def _call_claude(prompt: str) -> Optional[dict]:
-    import urllib.request
-    try:
-        api_key = os.getenv("OPENROUTER_API_KEY", "")
-        if not api_key:
-            logger.error("OPENROUTER_API_KEY not set in environment")
-            return None
-
-        payload = json.dumps({
-            "model": "anthropic/claude-sonnet-4-6",
-            "max_tokens": 1200,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a senior NEPSE quantitative analyst. "
-                        "You respond ONLY in valid JSON. No markdown fences. "
-                        "You never recommend a trade without a clear stop loss."
-                    ),
-                },
-                {"role": "user", "content": prompt},
-            ],
-        }).encode()
-
-        req = urllib.request.Request(
-            "https://openrouter.ai/api/v1/chat/completions",
-            data=payload,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type":  "application/json",
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            data = json.loads(resp.read().decode())
-
-        raw = data["choices"][0]["message"]["content"].strip()
-        if raw.startswith("```"):
-            parts = raw.split("```")
-            raw   = parts[1] if len(parts) > 1 else parts[0]
-            if raw.lower().startswith("json"):
-                raw = raw[4:]
-            raw = raw.strip()
-
-        result = json.loads(raw)
-        logger.info(
-            "Claude: %s %s | conf=%s",
-            result.get("action", "?"),
-            result.get("primary_signal", "?"),
-            result.get("confidence", "?"),
-        )
-        return result
-    except json.JSONDecodeError as exc:
-        logger.warning("Claude returned invalid JSON: %s", exc)
-        return None
-    except Exception as exc:
-        logger.error("Claude API call failed: %s", exc)
-        return None
-
 
 # =============================================================================
-# SECTION 6 - ASSEMBLE RESULT + WRITE TO DB
+# SECTION 5- ASSEMBLE RESULT + WRITE TO DB
 # =============================================================================
 
 def _assemble_result(claude_json: dict, flag, geo: dict) -> AnalystResult:
@@ -976,7 +914,7 @@ def _write_to_db(result: AnalystResult, flag=None) -> None:
 
 
 # =============================================================================
-# SECTION 7 - MAIN ENTRY POINT
+# SECTION 6 - MAIN ENTRY POINT
 # =============================================================================
 
 def run_analysis(flags: list) -> list[AnalystResult]:
@@ -1046,7 +984,7 @@ def run_analysis(flags: list) -> list[AnalystResult]:
             flag, portfolio, geo, macro, lessons, market_state, loss_streak,
             fund_ctx=fund_ctx,
         )
-        claude_json = _call_claude(prompt)
+        claude_json = ask_claude(prompt, context="claude_analyst")
 
         if claude_json is None:
             logger.warning("%s: Claude returned no result -- skipping", sym)
@@ -1082,7 +1020,7 @@ def run_analysis(flags: list) -> list[AnalystResult]:
 
 
 # =============================================================================
-# SECTION 8 - FORMAT FOR NOTIFIER
+# SECTION 7 - FORMAT FOR NOTIFIER
 # =============================================================================
 
 def format_buy_signal(result: AnalystResult) -> str:

@@ -45,7 +45,8 @@ from sheets import (
     get_macro_data,
 )
 from calendar_guard import flag_adhoc_closure, today_nst
-from config import NST, GEMINI_API_KEY, GEMINI_MODEL
+from AI import ask_gemini_json
+from config import NST
 
 # ══════════════════════════════════════════════════════════════════════════════
 # LOGGING
@@ -340,23 +341,9 @@ def _build_headlines_df() -> pd.DataFrame:
 # package not installed or API key missing. Keyword fallback handles it.
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _ask_gemini(df: pd.DataFrame) -> dict:
-    """
-    Send headlines DataFrame to Gemini Flash for context-aware analysis.
-    Uses google.genai (new SDK — google.generativeai is deprecated).
-    Raises exception on failure — caller handles keyword fallback.
-    """
-    # Import inside function — prevents crash if package missing
-    from google import genai
-    from google.genai import types
-
-    if not GEMINI_API_KEY:
-        raise ValueError("GEMINI_API_KEY not set in .env — using keyword fallback")
-
-    client = genai.Client(api_key=GEMINI_API_KEY)
+def _build_gemini_prompt(df: pd.DataFrame) -> str:
     data_str = df.to_string(index=False)
-
-    prompt = f"""You are a Nepal financial market analyst.
+    return f"""You are a Nepal financial market analyst.
 Analyze these Nepal news headlines scraped today.
 Detect signals relevant to Nepal stock market (NEPSE).
 
@@ -395,29 +382,6 @@ Return ONLY this JSON object with no other text, no markdown, no explanation:
   "headlines_economy":  "title 1: lorem ipsum |title: 2: lorem_ipum [only related to Nepal]",
   "headlines_stock":    "title 1: lorem ipsum |title: 2: lorem_ipum [only related to NEPSE]"
 }}"""
-
-    log.info("Sending %d headlines to Gemini Flash...", len(df))
-
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-        ),
-    )
-
-    raw    = response.text.strip()
-    result = json.loads(raw)
-
-    log.info(
-        "Gemini Flash: bandh=%s | IPO=%s | crisis=%s | gulf=%s",
-        result.get("bandh_today"),
-        result.get("ipo_fpo_active"),
-        result.get("crisis_detected"),
-        result.get("gulf_signal"),
-    )
-
-    return result
 
 
 def _is_nepal_source(source: str) -> bool:
@@ -558,12 +522,15 @@ def _scrape_and_analyze(force_keywords: bool = False) -> dict:
 
     result = {}
     if not force_keywords:
-        try:
-            result = _ask_gemini(df)
-            log.info("Gemini Flash analysis used")
-        except Exception as exc:
-            log.warning("Gemini Flash failed (%s) — keyword fallback", exc)
+        result = ask_gemini_json(
+            prompt  = _build_gemini_prompt(df),
+            context = "nepal_pulse",
+        )
+        if result is None:
+            log.warning("Gemini Flash failed — keyword fallback")
             result = _keyword_detect(df)
+        else:
+            log.info("Gemini Flash analysis used")
     else:
         log.info("Keyword fallback forced")
         result = _keyword_detect(df)

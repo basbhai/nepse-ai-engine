@@ -48,6 +48,7 @@ from typing import Optional
 
 from config import NST, GEMINI_API_KEY, GEMINI_MODEL
 from filter_engine import run_filter, get_filter_context, get_last_near_misses
+from AI import ask_gemini_json, ask_gemini_text
 
 logger = logging.getLogger(__name__)
 
@@ -361,64 +362,9 @@ Return ONLY this JSON — no markdown, no explanation, no extra text:
     return prompt
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# SECTION 4 — CALL GEMINI FLASH
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _call_gemini(prompt: str) -> Optional[dict]:
-    """Send prompt to Gemini Flash. Returns parsed JSON dict or None on failure."""
-    if not GEMINI_API_KEY:
-        logger.error("GEMINI_API_KEY not set in .env")
-        return None
-
-    try:
-        from google import genai
-        from google.genai import types
-
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        logger.info("Calling Gemini Flash (%s)...", GEMINI_MODEL)
-
-        response = client.models.generate_content(
-            model   = GEMINI_MODEL,
-            contents= prompt,
-            config  = types.GenerateContentConfig(
-                system_instruction = (
-                    "You are a Nepal stock market screening AI. "
-                    "You understand NEPSE trading patterns, Nepal macro context, "
-                    "and the research-backed signal weights being used. "
-                    "You return only valid JSON — no markdown, no fences, no explanation."
-                ),
-                response_mime_type = "application/json",
-                temperature        = 0.2,
-            ),
-        )
-
-        raw = response.text.strip()
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-            raw = raw.strip()
-
-        result = json.loads(raw)
-        logger.info(
-            "Gemini Flash: %d flags | %d skipped | market=%s",
-            len(result.get("flags", [])),
-            len(result.get("skipped", [])),
-            result.get("market_state", "?"),
-        )
-        return result
-
-    except json.JSONDecodeError as exc:
-        logger.error("Gemini returned invalid JSON: %s", exc)
-        return None
-    except Exception as exc:
-        logger.error("Gemini Flash call failed: %s", exc)
-        return None
-
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 5 — KEYWORD FALLBACK
+# SECTION 4 — KEYWORD FALLBACK
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _keyword_fallback(
@@ -486,7 +432,7 @@ def _keyword_fallback(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 6 — ASSEMBLE GEMINI FLAGS
+# SECTION 5 — ASSEMBLE GEMINI FLAGS
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _assemble_flags(
@@ -564,7 +510,7 @@ def _assemble_flags(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 7 — WRITE TO NEON
+# SECTION 6— WRITE TO NEON
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _write_log(
@@ -646,7 +592,7 @@ def _write_log(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 8 — MAIN RUNNER
+# SECTION 7 — MAIN RUNNER
 # ══════════════════════════════════════════════════════════════════════════════
 
 def run_gemini_filter(
@@ -718,7 +664,16 @@ def run_gemini_filter(
         total_capital  = total_capital,
     )
 
-    gemini_result = _call_gemini(prompt)
+    gemini_result = ask_gemini_json(
+    prompt,
+    system  = (
+        "You are a Nepal stock market screening AI. "
+        "You understand NEPSE trading patterns, Nepal macro context, "
+        "and the research-backed signal weights being used. "
+        "You return only valid JSON — no markdown, no fences, no explanation."
+    ),
+    context = "gemini_filter",
+)
 
     if gemini_result is None:
         logger.warning("Gemini unavailable — using keyword fallback")
@@ -745,7 +700,7 @@ def run_gemini_filter(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 9 — HELPER FOR claude_analyst.py
+# SECTION 8 — HELPER FOR claude_analyst.py
 # ══════════════════════════════════════════════════════════════════════════════
 
 def format_flag_for_claude(flag: GeminiFlag) -> str:
@@ -845,7 +800,16 @@ if __name__ == "__main__":
         gemini_result = _keyword_fallback(candidates, open_positions, slots_remaining)
     else:
         prompt        = _build_prompt(candidates, context, lessons, open_positions, total_capital)
-        gemini_result = _call_gemini(prompt)
+        gemini_result = ask_gemini_json(
+            prompt,
+            system  = (
+                "You are a Nepal stock market screening AI. "
+                "You understand NEPSE trading patterns, Nepal macro context, "
+                "and the research-backed signal weights being used. "
+                "You return only valid JSON — no markdown, no fences, no explanation."
+            ),
+            context = "gemini_filter",
+            )
         if gemini_result is None:
             print("  ⚠️  Gemini unavailable — keyword fallback")
             gemini_result = _keyword_fallback(candidates, open_positions, slots_remaining)

@@ -44,7 +44,7 @@ import os
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from typing import Optional
-
+from AI import ask_deepseek
 from config import NST
 
 logger = logging.getLogger(__name__)
@@ -349,34 +349,20 @@ def _default_win_stats() -> dict:
         "note":      "default_no_history",
     }
 
-
 def _kelly_via_deepseek(
-    win_rate:  float,
-    avg_win:   float,
-    avg_loss:  float,
+    win_rate:      float,
+    avg_win:       float,
+    avg_loss:      float,
     total_capital: float,
-    max_pct:   float = MAX_POSITION_PCT,
+    max_pct:       float = MAX_POSITION_PCT,
 ) -> dict:
     """
     Calculate Kelly Criterion fraction via DeepSeek R1.
     DeepSeek R1 handles math reasoning better than Claude.
-
     Returns dict with fraction, recommended_npr, confidence_note.
     Falls back to local calculation if DeepSeek unavailable.
     """
-    if not OPENROUTER_API_KEY:
-        logger.warning("OPENROUTER_API_KEY not set — using local Kelly calculation")
-        return _kelly_local(win_rate, avg_win, avg_loss, total_capital, max_pct)
-
-    try:
-        from openai import OpenAI
-
-        client = OpenAI(
-            base_url="https://openrouter.ai/api/v1",
-            api_key=OPENROUTER_API_KEY,
-        )
-
-        prompt = f"""Calculate the Kelly Criterion position size for a NEPSE stock trade.
+    prompt = f"""Calculate the Kelly Criterion position size for a NEPSE stock trade.
 
 INPUTS:
   Win Rate (p):              {win_rate:.4f}  ({win_rate*100:.1f}%)
@@ -411,36 +397,21 @@ Return ONLY this JSON with no explanation, no markdown:
   "calculation_note": "one line showing the key calculation"
 }}"""
 
-        response = client.chat.completions.create(
-            model=DEEPSEEK_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            extra_body={"reasoning": {"enabled": True}},
-        )
+    result = ask_deepseek(prompt, context="budget_kelly")
 
-        raw = response.choices[0].message.content.strip()
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-            raw = raw.strip()
+    if result is None:
+        logger.warning("DeepSeek Kelly failed — local fallback")
+        return _kelly_local(win_rate, avg_win, avg_loss, total_capital, max_pct)
 
-        result = json.loads(raw)
-        logger.info(
-            "DeepSeek Kelly: raw=%.4f half=%.4f pct=%.1f%% NPR=%.0f conf=%s",
-            result.get("raw_kelly_fraction", 0),
-            result.get("half_kelly_fraction", 0),
-            result.get("recommended_pct", 0),
-            result.get("recommended_npr", 0),
-            result.get("confidence", "?"),
-        )
-        return result
-
-    except json.JSONDecodeError as exc:
-        logger.warning("DeepSeek returned invalid JSON: %s — local fallback", exc)
-    except Exception as exc:
-        logger.warning("DeepSeek Kelly failed: %s — local fallback", exc)
-
-    return _kelly_local(win_rate, avg_win, avg_loss, total_capital, max_pct)
+    logger.info(
+        "DeepSeek Kelly: raw=%.4f half=%.4f pct=%.1f%% NPR=%.0f conf=%s",
+        result.get("raw_kelly_fraction", 0),
+        result.get("half_kelly_fraction", 0),
+        result.get("recommended_pct", 0),
+        result.get("recommended_npr", 0),
+        result.get("confidence", "?"),
+    )
+    return result
 
 
 def _kelly_local(
