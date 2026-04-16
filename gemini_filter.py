@@ -676,8 +676,8 @@ def run_gemini_filter(
 )
 
     if gemini_result is None:
-        logger.warning("Gemini unavailable — using keyword fallback")
-        gemini_result = _keyword_fallback(candidates, open_positions, slots_remaining)
+        logger.warning("Gemini unavailable — skipping Claude this cycle, no fallback")
+        return []
 
     # ── Assemble + log ────────────────────────────────────────────────────────
     flags = _assemble_flags(gemini_result, candidates)
@@ -811,8 +811,8 @@ if __name__ == "__main__":
             context = "gemini_filter",
             )
         if gemini_result is None:
-            print("  ⚠️  Gemini unavailable — keyword fallback")
-            gemini_result = _keyword_fallback(candidates, open_positions, slots_remaining)
+            print("  ⚠️  Gemini unavailable — no fallback, exiting")
+            sys.exit(0)
 
     flags = _assemble_flags(gemini_result, candidates)
 

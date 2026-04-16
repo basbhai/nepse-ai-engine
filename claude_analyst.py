@@ -111,7 +111,7 @@ def _load_portfolio() -> dict:
             "liquid_npr":        liquid,
             "invested_npr":      invested,
             "open_positions":    len(open_rows),
-            "slots_remaining":   max(0, 3 - len(open_rows)),
+            "slots_remaining":   max(0, 99 - len(open_rows)),
             "holdings":          holdings,
         }
     except Exception as exc:
@@ -121,7 +121,7 @@ def _load_portfolio() -> dict:
             "liquid_npr":        100000,
             "invested_npr":      0,
             "open_positions":    0,
-            "slots_remaining":   3,
+            "slots_remaining":   99,
             "holdings":          [],
         }
 
@@ -654,7 +654,7 @@ YOUR PORTFOLIO
 ==============================================
 Total Capital:   NPR {portfolio.get('total_capital_npr', 0):,.0f}
 Liquid Cash:     NPR {portfolio.get('liquid_npr', 0):,.0f}
-Open Positions:  {portfolio.get('open_positions', 0)}/3
+Open Positions:  {portfolio.get('open_positions', 0)}/99  
 Slots Left:      {portfolio.get('slots_remaining', 0)}
 
 Holdings:
@@ -965,7 +965,8 @@ def run_analysis(flags: list) -> list[AnalystResult]:
             continue
 
         buy_count = sum(1 for r in results if r.action == "BUY")
-        if portfolio.get("open_positions", 0) + buy_count >= 3:
+        if portfolio.get("open_positions", 0) + buy_count >= 99: #hard coded to match genimi for now
+            
             logger.info("%s: portfolio full after earlier BUYs -- skipping", sym)
             continue
 
