@@ -18,6 +18,8 @@ Called by:
     nightly_summary.yml (GitHub Actions, ~9 PM NST Sun-Thu)
 """
 
+from curses import raw
+from curses import raw
 import os
 import sys
 import logging
@@ -26,6 +28,8 @@ import json
 import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from AI import ask_gemini_text
+
 
 from sheets import run_raw_sql, upsert_row, get_setting
 
@@ -42,72 +46,11 @@ log = logging.getLogger(__name__)
 
 NST = ZoneInfo("Asia/Kathmandu")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# AI SETUP — lazy singleton
-# ─────────────────────────────────────────────────────────────────────────────
-def _call_openrouter_fallback(prompt: str) -> str:
-    """Fallback to OpenRouter free tier when Gemini fails."""
-    try:
-        import httpx
-        api_key = os.environ.get("OPENROUTER_API_KEY")
-        if not api_key:
-            log.error("OPENROUTER_API_KEY not set — fallback unavailable")
-            return ""
-        response = httpx.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type":  "application/json",
-            },
-            json={
-                "model":    "google/gemma-3-27b-it:free",
-                "messages": [{"role": "user", "content": prompt}],
-            },
-            timeout=60,
-        )
-        response.raise_for_status()
-        return response.json()["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        log.error("OpenRouter fallback also failed: %s", e)
-        return ""
-    
-    
-_gemini_client = None
 
 
-def _get_gemini_client():
-    """Lazy-init Gemini client — created once, reused across calls."""
-    global _gemini_client
-    if _gemini_client is not None:
-        return _gemini_client
-    try:
-        from google import genai
-        api_key = os.environ.get("GEMINI_API_KEY")
-        if not api_key:
-            log.error("GEMINI_API_KEY not set")
-            return None
-        _gemini_client = genai.Client(api_key=api_key)
-        return _gemini_client
-    except ImportError:
-        log.error("google-genai package not installed")
-        return None
 
 
-def _call_gemini(prompt: str) -> str:
-    """Call Gemini Flash via google.genai SDK. Returns text response."""
-    client = _get_gemini_client()
-    if client is None:
-        return ""
-    try:
-        model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-        response = client.models.generate_content(
-            model=model_name,
-            contents=prompt,
-        )
-        return response.text.strip()
-    except Exception as e:
-        log.error("Gemini call failed: %s — trying OpenRouter fallback", e)
-        return _call_openrouter_fallback(prompt)
+
     
 # ─────────────────────────────────────────────────────────────────────────────
 # DATA FETCHERS — one function per source table
@@ -608,7 +551,8 @@ def build_daily_context(target_date: str, dry_run: bool = False) -> dict | None:
         target_date, geo_data, pulse_data, breadth, nrb, signals, nepse_idx,
         gate_data=gate_data, avg_conf=avg_conf
     )
-    narratives = _parse_gemini_response(_call_gemini(prompt))
+    raw        = ask_gemini_text(prompt, context="daily_summarizer")
+    narratives = _parse_gemini_response(raw) if raw else {}
 
     if not narratives:
         log.warning("Gemini narrative failed for %s — using fallback", target_date)

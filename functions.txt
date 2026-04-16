@@ -1,0 +1,475 @@
+
+//----from gemini_filter.py__--------
+
+def _call_gemini(prompt: str) -> Optional[dict]:
+    """Send prompt to Gemini Flash. Returns parsed JSON dict or None on failure."""
+    if not GEMINI_API_KEY:
+        logger.error("GEMINI_API_KEY not set in .env")
+        return None
+
+    try:
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        logger.info("Calling Gemini Flash (%s)...", GEMINI_MODEL)
+
+        response = client.models.generate_content(
+            model   = GEMINI_MODEL,
+            contents= prompt,
+            config  = types.GenerateContentConfig(
+                system_instruction = (
+                    "You are a Nepal stock market screening AI. "
+                    "You understand NEPSE trading patterns, Nepal macro context, "
+                    "and the research-backed signal weights being used. "
+                    "You return only valid JSON — no markdown, no fences, no explanation."
+                ),
+                response_mime_type = "application/json",
+                temperature        = 0.2,
+            ),
+        )
+
+        raw = response.text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+            raw = raw.strip()
+
+        result = json.loads(raw)
+        logger.info(
+            "Gemini Flash: %d flags | %d skipped | market=%s",
+            len(result.get("flags", [])),
+            len(result.get("skipped", [])),
+            result.get("market_state", "?"),
+        )
+        return result
+
+    except json.JSONDecodeError as exc:
+        logger.error("Gemini returned invalid JSON: %s", exc)
+        return None
+    except Exception as exc:
+        logger.error("Gemini Flash call failed: %s", exc)
+        return None
+
+
+#___-------- from gemini.py inside AI
+def ask_ai(prompt: str, system: str = None) -> Optional[dict]:
+    """
+    Send prompt to Gemini, return parsed JSON dict.
+    Drop-in replacement for _ask_claude() in capital_allocator.py.
+
+    Args:
+        prompt: Full user prompt
+        system: Optional system prompt override (uses default if None)
+
+    Returns:
+        Parsed dict from Gemini JSON response, or None on failure.
+    """
+    if not GEMINI_API_KEY:
+        log.error("GEMINI_API_KEY not set in .env")
+        return None
+
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    system_instruction = system or SYSTEM_PROMPT
+
+    log.info("Sending prompt to Gemini (%s)...", GEMINI_MODEL)
+
+    try:
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                response_mime_type="application/json",
+                temperature=0.3,   # lower = more consistent financial advice
+            ),
+        )
+
+        raw = response.text.strip()
+
+        # Strip code fences if Gemini adds them despite mime type
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+            raw = raw.strip()
+
+        result = json.loads(raw)
+        log.info("✅ Gemini response received")
+        return result
+
+    except json.JSONDecodeError as e:
+        log.error("Gemini returned invalid JSON: %s", e)
+        log.error("Raw response: %s", raw[:300] if 'raw' in locals() else "N/A")
+        return None
+    except Exception as e:
+        log.error("Gemini API error: %s", e)
+        return None
+
+
+def ask_ai_text(prompt: str, system: str = None) -> Optional[str]:
+    """
+    Same as ask_ai but returns raw text instead of parsed JSON.
+    Used for free-form responses like briefing summaries.
+    """
+    if not GEMINI_API_KEY:
+        log.error("GEMINI_API_KEY not set in .env")
+        return None
+
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    system_instruction = system or SYSTEM_PROMPT
+
+    try:
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                temperature=0.4,
+            ),
+        )
+        return response.text.strip()
+
+    except Exception as e:
+        log.error("Gemini text API error: %s", e)
+        return None
+
+
+//----------from claude_analyst--------------------
+
+
+def _call_claude(prompt: str) -> Optional[dict]:
+    import urllib.request
+    try:
+        api_key = os.getenv("OPENROUTER_API_KEY", "")
+        if not api_key:
+            logger.error("OPENROUTER_API_KEY not set in environment")
+            return None
+
+        payload = json.dumps({
+            "model": "anthropic/claude-sonnet-4-6",
+            "max_tokens": 1200,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a senior NEPSE quantitative analyst. "
+                        "You respond ONLY in valid JSON. No markdown fences. "
+                        "You never recommend a trade without a clear stop loss."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+        }).encode()
+
+        req = urllib.request.Request(
+            "https://openrouter.ai/api/v1/chat/completions",
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type":  "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read().decode())
+
+        raw = data["choices"][0]["message"]["content"].strip()
+        if raw.startswith("```"):
+            parts = raw.split("```")
+            raw   = parts[1] if len(parts) > 1 else parts[0]
+            if raw.lower().startswith("json"):
+                raw = raw[4:]
+            raw = raw.strip()
+
+        result = json.loads(raw)
+        logger.info(
+            "Claude: %s %s | conf=%s",
+            result.get("action", "?"),
+            result.get("primary_signal", "?"),
+            result.get("confidence", "?"),
+        )
+        return result
+    except json.JSONDecodeError as exc:
+        logger.warning("Claude returned invalid JSON: %s", exc)
+        return None
+    except Exception as exc:
+        logger.error("Claude API call failed: %s", exc)
+        return None
+
+//---------------------------- budegt
+
+def _kelly_via_deepseek(
+    win_rate:  float,
+    avg_win:   float,
+    avg_loss:  float,
+    total_capital: float,
+    max_pct:   float = MAX_POSITION_PCT,
+) -> dict:
+    """
+    Calculate Kelly Criterion fraction via DeepSeek R1.
+    DeepSeek R1 handles math reasoning better than Claude.
+
+    Returns dict with fraction, recommended_npr, confidence_note.
+    Falls back to local calculation if DeepSeek unavailable.
+    """
+    if not OPENROUTER_API_KEY:
+        logger.warning("OPENROUTER_API_KEY not set — using local Kelly calculation")
+        return _kelly_local(win_rate, avg_win, avg_loss, total_capital, max_pct)
+
+    try:
+        from openai import OpenAI
+
+        client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=OPENROUTER_API_KEY,
+        )
+
+        prompt = f"""Calculate the Kelly Criterion position size for a NEPSE stock trade.
+
+INPUTS:
+  Win Rate (p):              {win_rate:.4f}  ({win_rate*100:.1f}%)
+  Average Win (b × stake):   NPR {avg_win:.2f}
+  Average Loss (a × stake):  NPR {avg_loss:.2f}
+  Total Capital:             NPR {total_capital:.2f}
+  Maximum Position:          {max_pct}% of capital
+
+FORMULA:
+  Kelly fraction = p - ((1 - p) / (avg_win / avg_loss))
+  This is the optimal fraction of capital to risk.
+
+NEPAL-SPECIFIC ADJUSTMENTS (apply after Kelly):
+  1. Use Half-Kelly (multiply by 0.5) — reduces variance, essential for retail traders
+  2. Cap at {max_pct}% maximum regardless of Kelly output
+  3. If Kelly fraction is negative → position size = 0 (do not trade)
+  4. Round down to nearest share
+
+CALCULATE:
+  1. Raw Kelly fraction (show working)
+  2. Half-Kelly fraction
+  3. Recommended NPR allocation (capped at {max_pct}% = NPR {total_capital * max_pct / 100:.0f})
+  4. Kelly confidence level (LOW if Kelly < 0.05, MEDIUM if 0.05-0.15, HIGH if > 0.15)
+
+Return ONLY this JSON with no explanation, no markdown:
+{{
+  "raw_kelly_fraction": float,
+  "half_kelly_fraction": float,
+  "recommended_pct": float,
+  "recommended_npr": float,
+  "confidence": "LOW or MEDIUM or HIGH",
+  "calculation_note": "one line showing the key calculation"
+}}"""
+
+        response = client.chat.completions.create(
+            model=DEEPSEEK_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            extra_body={"reasoning": {"enabled": True}},
+        )
+
+        raw = response.choices[0].message.content.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+            raw = raw.strip()
+
+        result = json.loads(raw)
+        logger.info(
+            "DeepSeek Kelly: raw=%.4f half=%.4f pct=%.1f%% NPR=%.0f conf=%s",
+            result.get("raw_kelly_fraction", 0),
+            result.get("half_kelly_fraction", 0),
+            result.get("recommended_pct", 0),
+            result.get("recommended_npr", 0),
+            result.get("confidence", "?"),
+        )
+        return result
+
+    except json.JSONDecodeError as exc:
+        logger.warning("DeepSeek returned invalid JSON: %s — local fallback", exc)
+    except Exception as exc:
+        logger.warning("DeepSeek Kelly failed: %s — local fallback", exc)
+
+    return _kelly_local(win_rate, avg_win, avg_loss, total_capital, max_pct)
+
+
+//------------------nepal_pulse--------------------
+
+def _ask_gemini(df: pd.DataFrame) -> dict:
+    """
+    Send headlines DataFrame to Gemini Flash for context-aware analysis.
+    Uses google.genai (new SDK — google.generativeai is deprecated).
+    Raises exception on failure — caller handles keyword fallback.
+    """
+    # Import inside function — prevents crash if package missing
+    from google import genai
+    from google.genai import types
+
+    if not GEMINI_API_KEY:
+        raise ValueError("GEMINI_API_KEY not set in .env — using keyword fallback")
+
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    data_str = df.to_string(index=False)
+
+    prompt = f"""You are a Nepal financial market analyst.
+Analyze these Nepal news headlines scraped today.
+Detect signals relevant to Nepal stock market (NEPSE).
+
+1. Is there a bandh, strike, chakka jam, or transport/business shutdown IN NEPAL today?
+   Only count events physically happening inside Nepal — ignore global news.
+2. Is any IPO, FPO, or right share application open on NEPSE today? must be general public not right, reserved issue.
+3. Is there a political crisis , PM resignation, or government instability IN NEPAL, only central government related?
+4. What is the Gulf/Middle East stability? (affects Nepal remittance workers abroad)
+5. What is the remittance risk level based on Gulf/foreign employment news?
+6. What is the overall Nepal market sentiment today?
+7. Crisis details should be only that effect share market.
+8 india_nepal_relations: "STABLE" | "TENSE" | "HOSTILE" 
+  (based on any India-Nepal border, trade, treaty, political news recent only)
+9 nrb_rate_decision: "CUT" | "RAISED" | "UNCHANGED"
+  (based on any NRB monetary policy announcement)
+
+
+Headlines:
+{data_str}
+
+Return ONLY this JSON object with no other text, no markdown, no explanation:
+{{
+  "bandh_today": "YES or NO",
+  "bandh_detail": "who called it and where in Nepal, or empty string",
+  "ipo_fpo_active": "YES or NO",
+  "ipo_fpo_detail": "company name and issue type, or empty string",
+  "crisis_detected": "YES or NO",
+  "crisis_detail": "what happened in Nepal, or empty string",
+  "gulf_signal": "STABLE or TENSE or CRISIS",   
+  "gulf_detail": "reason from headlines, or empty string",
+  "remittance_signal": "LOW or MEDIUM or HIGH",
+  "remittance_detail": "reason from headlines, or empty string",
+  "overall_sentiment": "POSITIVE or NEUTRAL or NEGATIVE",
+  "key_event": "single most important news that will directly effect NEPSE"
+  "headlines_politics": "title 1: lorem ipsum |title: 2: lorem_ipum[only related to Nepal]",
+  "headlines_economy":  "title 1: lorem ipsum |title: 2: lorem_ipum [only related to Nepal]",
+  "headlines_stock":    "title 1: lorem ipsum |title: 2: lorem_ipum [only related to NEPSE]"
+}}"""
+
+    log.info("Sending %d headlines to Gemini Flash...", len(df))
+
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+        ),
+    )
+
+    raw    = response.text.strip()
+    result = json.loads(raw)
+
+    log.info(
+        "Gemini Flash: bandh=%s | IPO=%s | crisis=%s | gulf=%s",
+        result.get("bandh_today"),
+        result.get("ipo_fpo_active"),
+        result.get("crisis_detected"),
+        result.get("gulf_signal"),
+    )
+
+    return result
+
+
+//---------------------daily context sumarrizer
+
+def _call_openrouter_fallback(prompt: str) -> str:
+    """Fallback to OpenRouter free tier when Gemini fails."""
+    try:
+        import httpx
+        api_key = os.environ.get("OPENROUTER_API_KEY")
+        if not api_key:
+            log.error("OPENROUTER_API_KEY not set — fallback unavailable")
+            return ""
+        response = httpx.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type":  "application/json",
+            },
+            json={
+                "model":    "google/gemma-3-27b-it:free",
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=60,
+        )
+        response.raise_for_status()
+        return response.json()["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        log.error("OpenRouter fallback also failed: %s", e)
+        return ""
+    
+    
+_gemini_client = None
+
+
+def _get_gemini_client():
+    """Lazy-init Gemini client — created once, reused across calls."""
+    global _gemini_client
+    if _gemini_client is not None:
+        return _gemini_client
+    try:
+        from google import genai
+        api_key = os.environ.get("GEMINI_API_KEY")
+        if not api_key:
+            log.error("GEMINI_API_KEY not set")
+            return None
+        _gemini_client = genai.Client(api_key=api_key)
+        return _gemini_client
+    except ImportError:
+        log.error("google-genai package not installed")
+        return None
+
+
+def _call_gemini(prompt: str) -> str:
+    """Call Gemini Flash via google.genai SDK. Returns text response."""
+    client = _get_gemini_client()
+    if client is None:
+        return ""
+    try:
+        model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+        response = client.models.generate_content(
+            model=model_name,
+            contents=prompt,
+        )
+        return response.text.strip()
+    except Exception as e:
+        log.error("Gemini call failed: %s — trying OpenRouter fallback", e)
+        return _call_openrouter_fallback(prompt)
+    
+//-------------from learning hub-----------------------
+
+
+def _call_gpt(system_prompt: str, user_prompt: str, max_tokens: int = MAX_GPT_TOKENS) -> str:
+    """Call GPT via OpenRouter. Returns text response."""
+    if not OPENROUTER_API_KEY:
+        raise RuntimeError("OPENROUTER_API_KEY not set")
+
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type":  "application/json",
+        "HTTP-Referer":  "https://github.com/nepse-ai-engine",
+        "X-Title":       "NEPSE AI Engine  -  Learning Hub",
+    }
+    payload = {
+        "model":      GPT_MODEL,
+        "max_tokens": max_tokens,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": user_prompt},
+        ],
+        "temperature": 0.2,
+    }
+
+    try:
+        resp = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=180)
+        resp.raise_for_status()
+        data = resp.json()
+        return data["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        log.error("GPT call failed: %s", e)
+        return ""
