@@ -29,14 +29,25 @@ _installed: set[str] = set()
 
 def _entry_point_name(fallback: str) -> str:
     """
-    Walk the call stack to the bottom frame and derive the short script name.
-    Falls back to fallback if stack inspection fails for any reason.
+    Walk the call stack from the bottom up, skipping internal frames, and
+    derive the short script name from the first real entry-point frame.
+    Falls back to fallback if no valid frame is found or inspection fails.
     """
+    _this_file = os.path.abspath(__file__)
     try:
         frames = inspect.stack()
-        bottom = frames[-1]
-        filename = bottom.filename
-        if filename and filename not in ("<stdin>", "<string>", ""):
+        for frame in reversed(frames):
+            filename = frame.filename
+            if not filename:
+                continue
+            if filename.startswith("<"):
+                continue
+            if "runpy" in filename:
+                continue
+            if "importlib" in filename:
+                continue
+            if os.path.abspath(filename) == _this_file:
+                continue
             return os.path.splitext(os.path.basename(filename))[0]
     except Exception:
         pass
@@ -104,3 +115,5 @@ def attach_file_handler(module_name: str) -> str | None:
     root.addHandler(fh)
     root.info("File logging → %s", log_path)
     return log_path
+
+
