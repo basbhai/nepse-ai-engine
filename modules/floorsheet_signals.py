@@ -34,8 +34,8 @@ def _load_raw(target_date: date) -> pd.DataFrame:
                 trade_time,
                 source
             FROM floorsheet
-            WHERE date = %s
-        """, [target_date.strftime("%Y-%m-%d")])
+            WHERE date = %s OR date = %s
+        """, [target_date.strftime("%Y-%m-%d"), f"{target_date.year}-{target_date.month}-{target_date.day}"])
 
         if not rows:
             return pd.DataFrame()
