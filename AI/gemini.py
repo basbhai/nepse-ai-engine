@@ -1,15 +1,19 @@
 """
 AI/gemini.py
 ============
-Central Gemini Flash gateway for the NEPSE AI Engine.
+Central Gemini gateway for the NEPSE AI Engine.
 
-All modules must import from here — no inline Gemini calls anywhere else.
+Strategy:
+  1. Try Google SDK with 3 rotating API keys (free quota)
+     - Retry 5 times rotating keys: key1 → key2 → key3 → key1 → key2
+     - Jitter 4-15s between retries
+  2. If all 5 fail → fallback to OpenRouter paid Gemini
+  3. Telegram alert to admin only if OpenRouter also fails
 
+All modules import from here:
     from AI.gemini import ask_gemini_json, ask_gemini_text
-
-Retry policy: 5 attempts, random jitter 4-15s between attempts.
-Retries on: 503, 429, timeout, connection error.
-Telegram alert sent to admin when ALL retries are exhausted.
+Or via __init__.py:
+    from AI import ask_gemini_json, ask_gemini_text
 """
 
 import json
@@ -24,46 +28,57 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL   = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+OPENROUTER_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "google/gemini-2.5-flash")
 
-MAX_RETRIES  = 5
-JITTER_MIN   = 4    # seconds
-JITTER_MAX   = 15   # seconds
+MAX_RETRIES = 5
+JITTER_MIN  = 4
+JITTER_MAX  = 15
 
-# Errors that warrant a retry (transient)
+# 3 rotating API keys — key1 used as fallback for GEMINI_API_KEY backwards compat
+_GEMINI_KEYS = [
+    os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY", ""),
+    os.getenv("GEMINI_API_KEY_2", ""),
+    os.getenv("GEMINI_API_KEY_3", ""),
+]
+
+# Retries rotate across keys: attempt 0→key0, 1→key1, 2→key2, 3→key0, 4→key1
+def _get_key(attempt: int) -> str:
+    """Rotate across available keys. Skip empty keys."""
+    available = [k for k in _GEMINI_KEYS if k.strip()]
+    if not available:
+        return ""
+    return available[attempt % len(available)]
+
+
+# ---------------------------------------------------------------------------
+# Retryable error detection
+# ---------------------------------------------------------------------------
 _RETRYABLE = (
-    "503",
-    "429",
-    "UNAVAILABLE",
-    "quota",
-    "rate",
-    "timeout",
-    "timed out",
-    "connection",
-    "ServiceUnavailable",
-    "ResourceExhausted",
+    "503", "429", "UNAVAILABLE", "quota", "rate",
+    "timeout", "timed out", "connection",
+    "ServiceUnavailable", "ResourceExhausted",
+    "overloaded", "try again",
 )
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
 
 def _is_retryable(exc: Exception) -> bool:
     msg = str(exc).lower()
     return any(k.lower() in msg for k in _RETRYABLE)
 
 
+# ---------------------------------------------------------------------------
+# Telegram admin alert
+# ---------------------------------------------------------------------------
 def _alert_admin(context: str, last_error: str) -> None:
-    """Send Telegram alert to admin when all retries are exhausted."""
+    """Alert admin only when BOTH Gemini SDK and OpenRouter fallback fail."""
     try:
         import requests
-        token   = os.getenv("TELEGRAM_BOT_TOKEN", "")
+        token   = os.getenv("TELEGRAM_ERROR_BOT", "") 
         chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
         if not token or not chat_id:
             return
         text = (
-            f"🔴 *Gemini Flash — ALL RETRIES EXHAUSTED*\n"
+            f"🔴 *Gemini — ALL KEYS + OPENROUTER FAILED*\n"
             f"Context: `{context}`\n"
             f"Last error: `{last_error[:200]}`\n"
             f"Model: `{GEMINI_MODEL}`"
@@ -77,24 +92,26 @@ def _alert_admin(context: str, last_error: str) -> None:
         log.error("Failed to send Telegram alert: %s", e)
 
 
-def _raw_gemini_call(
+# ---------------------------------------------------------------------------
+# Google SDK raw call
+# ---------------------------------------------------------------------------
+def _sdk_call(
     prompt: str,
     system: Optional[str],
     response_mime_type: str,
     temperature: float,
+    api_key: str,
 ) -> str:
     """
-    Single raw call to Gemini. Returns response text.
+    Single raw call via Google SDK.
     Raises on any error — caller handles retry.
     """
     from google import genai
     from google.genai import types
 
-    client = genai.Client(api_key=GEMINI_API_KEY)
+    client = genai.Client(api_key=api_key)
 
-    config_kwargs = dict(
-        temperature=temperature,
-    )
+    config_kwargs = dict(temperature=temperature)
     if response_mime_type:
         config_kwargs["response_mime_type"] = response_mime_type
     if system:
@@ -108,8 +125,45 @@ def _raw_gemini_call(
     return response.text.strip()
 
 
+# ---------------------------------------------------------------------------
+# OpenRouter paid fallback
+# ---------------------------------------------------------------------------
+def _openrouter_fallback(
+    prompt: str,
+    system: Optional[str],
+    response_mime_type: str,
+    temperature: float,
+    context: str,
+) -> Optional[str]:
+    """
+    Fallback to OpenRouter paid Gemini when all SDK keys fail.
+    Uses same _call() from openrouter.py — retry logic already inside.
+    """
+    try:
+        from AI.openrouter import _call
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        log.warning("[%s] All Gemini SDK keys failed — falling back to OpenRouter paid", context)
+
+        return _call(
+            model       = OPENROUTER_GEMINI_MODEL,
+            messages    = messages,
+            max_tokens  = 2000,
+            temperature = temperature,
+            context     = f"{context}_openrouter_fallback",
+        )
+    except Exception as e:
+        log.error("[%s] OpenRouter fallback also failed: %s", context, e)
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Strip markdown fences
+# ---------------------------------------------------------------------------
 def _strip_fences(raw: str) -> str:
-    """Strip markdown code fences Gemini sometimes adds despite mime type."""
     if raw.startswith("```"):
         parts = raw.split("```")
         raw   = parts[1] if len(parts) > 1 else parts[0]
@@ -119,26 +173,47 @@ def _strip_fences(raw: str) -> str:
     return raw
 
 
+# ---------------------------------------------------------------------------
+# Core retry loop
+# ---------------------------------------------------------------------------
 def _gemini_with_retry(
     prompt: str,
     system: Optional[str],
     response_mime_type: str,
     temperature: float,
-    context: str,          # human-readable caller name for logs/alerts
+    context: str,
 ) -> Optional[str]:
     """
-    Call Gemini with retry logic. Returns raw text or None on total failure.
+    Try Google SDK 5 times rotating across 3 keys.
+    On total failure → OpenRouter paid fallback.
+    On OpenRouter failure → Telegram alert + return None.
+
+    Key rotation:
+        attempt 0 → GEMINI_API_KEY_1
+        attempt 1 → GEMINI_API_KEY_2
+        attempt 2 → GEMINI_API_KEY_3
+        attempt 3 → GEMINI_API_KEY_1
+        attempt 4 → GEMINI_API_KEY_2
     """
-    if not GEMINI_API_KEY:
-        log.error("GEMINI_API_KEY not set in .env")
-        return None
+    available_keys = [k for k in _GEMINI_KEYS if k.strip()]
+    if not available_keys:
+        log.error("[%s] No Gemini API keys configured", context)
+        return _openrouter_fallback(
+            prompt, system, response_mime_type, temperature, context
+        )
 
     last_error = ""
     for attempt in range(1, MAX_RETRIES + 1):
+        api_key  = _get_key(attempt - 1)
+        key_num  = (attempt - 1) % len(available_keys) + 1
+
         try:
-            log.info("[%s] Gemini call attempt %d/%d", context, attempt, MAX_RETRIES)
-            raw = _raw_gemini_call(prompt, system, response_mime_type, temperature)
-            log.info("[%s] Gemini responded on attempt %d", context, attempt)
+            log.info(
+                "[%s] Gemini SDK attempt %d/%d (key_%d)",
+                context, attempt, MAX_RETRIES, key_num,
+            )
+            raw = _sdk_call(prompt, system, response_mime_type, temperature, api_key)
+            log.info("[%s] Gemini responded on attempt %d (key_%d)", context, attempt, key_num)
             return raw
 
         except Exception as exc:
@@ -147,26 +222,39 @@ def _gemini_with_retry(
                 if attempt < MAX_RETRIES:
                     wait = random.uniform(JITTER_MIN, JITTER_MAX)
                     log.warning(
-                        "[%s] Gemini transient error (attempt %d/%d): %s — retrying in %.1fs",
-                        context, attempt, MAX_RETRIES, exc, wait,
+                        "[%s] Gemini transient error key_%d (attempt %d/%d): %s — retrying in %.1fs",
+                        context, key_num, attempt, MAX_RETRIES, exc, wait,
                     )
                     time.sleep(wait)
                 else:
                     log.error(
-                        "[%s] Gemini failed after %d attempts: %s",
+                        "[%s] All %d Gemini SDK attempts failed. Last: %s",
                         context, MAX_RETRIES, exc,
                     )
-                    _alert_admin(context, last_error)
             else:
-                # Non-retryable error — fail immediately
-                log.error("[%s] Gemini non-retryable error: %s", context, exc)
-                return None
+                # Non-retryable — skip remaining retries for this key
+                # but still try next key
+                log.warning(
+                    "[%s] Gemini non-retryable error key_%d: %s — trying next key",
+                    context, key_num, exc,
+                )
+                if attempt < MAX_RETRIES:
+                    continue
 
-    return None
+    # All SDK attempts failed — try OpenRouter paid
+    raw = _openrouter_fallback(
+        prompt, system, response_mime_type, temperature, context
+    )
+
+    if raw is None:
+        # Both SDK and OpenRouter failed — alert admin
+        _alert_admin(context, last_error)
+
+    return raw
 
 
 # ---------------------------------------------------------------------------
-# Public API
+# Public API — signatures identical to before, callers unchanged
 # ---------------------------------------------------------------------------
 
 def ask_gemini_json(
@@ -176,20 +264,16 @@ def ask_gemini_json(
     context: str = "gemini_json",
 ) -> Optional[dict]:
     """
-    Send prompt to Gemini Flash. Returns parsed JSON dict or None on failure.
+    Send prompt to Gemini Flash. Returns parsed JSON dict or None.
 
-    Args:
-        prompt:      Full user prompt.
-        system:      Optional system instruction override.
-        temperature: Sampling temperature (default 0.2 for structured output).
-        context:     Caller name — shown in logs and Telegram alerts.
-
-    Returns:
-        Parsed dict, or None if all retries fail or JSON is invalid.
+    Internally:
+      1. Tries Google SDK × 5 (rotating 3 keys)
+      2. Falls back to OpenRouter paid Gemini
+      3. Alerts admin only if both fail
 
     Usage:
-        from AI.gemini import ask_gemini_json
-        result = ask_gemini_json(prompt, system="You are ...", context="gemini_filter")
+        from AI import ask_gemini_json
+        result = ask_gemini_json(prompt, system="You are...", context="gemini_filter")
     """
     raw = _gemini_with_retry(
         prompt             = prompt,
@@ -205,7 +289,10 @@ def ask_gemini_json(
     try:
         return json.loads(raw)
     except json.JSONDecodeError as exc:
-        log.error("[%s] Gemini returned invalid JSON: %s | raw: %s", context, exc, raw[:300])
+        log.error(
+            "[%s] Gemini returned invalid JSON: %s | raw: %s",
+            context, exc, raw[:300],
+        )
         return None
 
 
@@ -216,25 +303,21 @@ def ask_gemini_text(
     context: str = "gemini_text",
 ) -> Optional[str]:
     """
-    Send prompt to Gemini Flash. Returns raw text string or None on failure.
+    Send prompt to Gemini Flash. Returns raw text or None.
 
-    Args:
-        prompt:      Full user prompt.
-        system:      Optional system instruction override.
-        temperature: Sampling temperature (default 0.4 for free-form text).
-        context:     Caller name — shown in logs and Telegram alerts.
-
-    Returns:
-        Text string, or None if all retries fail.
+    Internally:
+      1. Tries Google SDK × 5 (rotating 3 keys)
+      2. Falls back to OpenRouter paid Gemini
+      3. Alerts admin only if both fail
 
     Usage:
-        from AI.gemini import ask_gemini_text
-        summary = ask_gemini_text(prompt, context="daily_context_summarizer")
+        from AI import ask_gemini_text
+        result = ask_gemini_text(prompt, context="daily_summarizer")
     """
     return _gemini_with_retry(
         prompt             = prompt,
         system             = system,
-        response_mime_type = "",          # no mime type = free text
+        response_mime_type = "",   # no mime = free text
         temperature        = temperature,
         context            = context,
     )

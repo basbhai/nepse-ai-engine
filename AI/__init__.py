@@ -16,13 +16,13 @@ Provider routing:
 """
  
 from AI.gemini import ask_gemini_json, ask_gemini_text
-from AI.openrouter import ask_claude, ask_gpt, ask_deepseek
- 
+from AI.openrouter import ask_claude, ask_gpt, ask_deepseek, ask_free
+
 __all__ = [
     "ask_gemini_json",
     "ask_gemini_text",
     "ask_claude",
     "ask_gpt",
     "ask_deepseek",
+    "ask_free",
 ]
- 
