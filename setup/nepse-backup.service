@@ -1,0 +1,13 @@
+[Unit]
+Description=NEPSE Backup Sync — local PostgreSQL → Neon
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/shanvi/nepse_ai
+ExecStart=/home/shanvi/nepse_ai/nepse_env/bin/python -m analysis.backup_sync
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

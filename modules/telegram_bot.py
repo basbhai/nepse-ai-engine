@@ -85,6 +85,7 @@ from sheets import (
 )
 from db.connection import _db
 from calendar_guard import is_open as market_is_open, get_status as market_status
+from AI import ask_free
 
 # ─── Logging ────────────────────────────────────────────────────────────────
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s",
@@ -279,27 +280,18 @@ Rules:
 """
 
 def parse_trade_command(raw: str) -> dict:
-    if not GEMINI_API_KEY:
-        return {"error": "GEMINI_API_KEY not set"}
+    result = ask_free(
+        prompt  = raw,
+        system  = PARSE_SYSTEM,
+        context = "telegram_nlp",
+    )
+    if not result:
+        return {"error": "AI unavailable. Use format: /buy SYMBOL SHARES PRICE"}
     try:
-        import google.genai as genai
-        from google.genai import types
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=raw,
-            config=types.GenerateContentConfig(
-                system_instruction=PARSE_SYSTEM,
-                temperature=0.1,
-            ),
-        )
-        text = response.text.strip().replace("```json", "").replace("```", "").strip()
+        text = result.replace("```json", "").replace("```", "").strip()
         return json.loads(text)
     except json.JSONDecodeError:
         return {"error": "AI returned invalid response. Please rephrase."}
-    except Exception as e:
-        log.error("Gemini parse error: %s", e)
-        return {"error": f"AI error: {str(e)[:80]}"}
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -352,3 +352,91 @@ def ask_deepseek(
     except json.JSONDecodeError as exc:
         log.error("[%s] DeepSeek returned invalid JSON: %s | raw: %s", context, exc, raw[:300])
         return None
+
+
+def ask_free(
+    prompt: str,
+    system: Optional[str] = None,
+    context: str = "free",
+) -> Optional[str]:
+    """
+    Call a free OpenRouter model for lightweight NLP tasks.
+    No retry — free tier is flaky, fail fast and let caller handle it.
+    Returns raw text or None on failure.
+
+    Usage:
+        from AI.openrouter import ask_free
+        result = ask_free(prompt, system="You are a parser...", context="telegram_nlp")
+    """
+    if not OPENROUTER_API_KEY:
+        log.error("OPENROUTER_API_KEY not set in .env")
+        return None
+
+    # Gemma free models don't support system role — merge into user message
+    combined = f"{system}\n\n{prompt}" if system else prompt
+    messages = [{"role": "user", "content": combined}]
+
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type":  "application/json",
+        "HTTP-Referer":  "https://github.com/basbhai/nepse-ai-engine",
+        "X-Title":       "NEPSE AI Engine",
+    }
+    payload = {
+        "model":       "google/gemma-3n-e2b-it:free",
+        "max_tokens":  200,
+        "temperature": 0.1,
+        "messages":    messages,
+    }
+
+    try:
+        log.info("[%s] Free model call...", context)
+        resp = requests.post(
+            OPENROUTER_URL,
+            headers=headers,
+            data=json.dumps(payload),
+            timeout=30,
+        )
+        if resp.status_code != 200:
+            log.warning(
+                "[%s] Free model HTTP %d: %s",
+                context, resp.status_code, resp.text[:200],
+            )
+            return None
+        content = resp.json()["choices"][0]["message"].get("content") or ""
+        if not content:
+            log.warning("[%s] Free model returned empty content", context)
+            return None
+        log.info("[%s] Free model responded", context)
+        return content.strip()
+    except Exception as exc:
+        log.warning("[%s] Free model failed: %s", context, exc)
+        return None
+    
+
+def ask_gemini_lite(
+    prompt: str,
+    system: Optional[str] = None,
+    temperature: float = 0.4,
+    context: str = "gemini_lite",
+) -> Optional[str]:
+    """
+    Call Gemini 2.5 Flash-Lite via OpenRouter — cheap nightly summarization.
+    Returns raw text or None on failure.
+
+    Usage:
+        from AI import ask_gemini_lite
+        result = ask_gemini_lite(prompt, context="daily_summarizer")
+    """
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+
+    return _call(
+        model       = "google/gemini-2.5-flash-lite",
+        messages    = messages,
+        max_tokens  = 1000,
+        temperature = temperature,
+        context     = context,
+    )
