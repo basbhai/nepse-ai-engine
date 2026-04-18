@@ -236,6 +236,10 @@ class FilterCandidate:
     fundamental_adj:  float = 0.0
     fundamental_reason: str   = ""
 
+    vwap_dev:         float = 0.0
+    bid_ask_ratio:    float = 0.0
+    dpr_proximity:    float = 0.0
+
     timestamp: str = field(default_factory=lambda:
                     datetime.now(tz=NST).strftime("%Y-%m-%d %H:%M:%S"))
 
@@ -1252,6 +1256,10 @@ def run_filter(
 
             fundamental_adj    = fund_adj,
             fundamental_reason = fund_reason,
+
+            vwap_dev       = float(getattr(price_row, "vwap_dev",       0) or 0),
+            bid_ask_ratio  = float(getattr(price_row, "bid_ask_ratio",  0) or 0),
+            dpr_proximity  = float(getattr(price_row, "dpr_proximity",  0) or 0),
         ))
 
     # ── Rank and trim ─────────────────────────────────────────────────────────

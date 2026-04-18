@@ -164,6 +164,10 @@ class GeminiFlag:
     fundamental_adj:  float      = 0.0
     fundamental_reason: str      = ""
 
+    vwap_dev:         float      = 0.0
+    bid_ask_ratio:    float      = 0.0
+    dpr_proximity:    float      = 0.0
+
     timestamp: str = field(default_factory=lambda:
                     datetime.now(tz=NST).strftime("%Y-%m-%d %H:%M:%S"))
 
@@ -263,7 +267,10 @@ def _build_prompt(
     slots_remaining = 999  # max(0, 3 - len(open_positions)) for test
 
     candidates_str = "\n".join(
-        f"{i+1}. {format_candidate_for_gemini(c)}"
+        f"{i+1}. {format_candidate_for_gemini(c)} "
+        f"VWAPD={getattr(c, 'vwap_dev', 0.0):+.1f}% "
+        f"BAR={getattr(c, 'bid_ask_ratio', 0.0):.2f} "
+        f"DPRP={getattr(c, 'dpr_proximity', 0.0):.2f}"
         for i, c in enumerate(candidates[:MAX_CANDIDATES_TO_GEMINI])
     )
 
@@ -302,6 +309,7 @@ Field key: SYM=symbol SEC=sector LTP=price CHG=daily% VOL=volume
 SCORE=composite TECH=tech_score RSI=rsi[signal] MACD=cross
 BB=signal[pct_b] EMA=trend OBV=trend ATR%=volatility CONF=sharesansar
 CANDLE=pattern CSTAR=C*signal HOLD=optimal_days SIG=primary_signal
+VWAPD=vwap_dev% BAR=bid_ask_ratio DPRP=dpr_proximity
 
 {candidates_str}
 
@@ -504,6 +512,10 @@ def _assemble_flags(
             cstar_signal     = c.cstar_signal,
             fundamental_adj  = c.fundamental_adj,
             fundamental_reason = c.fundamental_reason,
+
+            vwap_dev       = float(getattr(c, "vwap_dev",       0.0) or 0.0),
+            bid_ask_ratio  = float(getattr(c, "bid_ask_ratio",  0.0) or 0.0),
+            dpr_proximity  = float(getattr(c, "dpr_proximity",  0.0) or 0.0),
         ))
 
     return flags
@@ -567,6 +579,9 @@ def _write_log(
                 "rsi_14":         str(flag.rsi_14),
                 "candle_pattern": flag.best_candle,
                 "timestamp":      flag.timestamp,
+                "vwap_dev":       str(flag.vwap_dev),
+                "bid_ask_ratio":  str(flag.bid_ask_ratio),
+                "dpr_proximity":  str(flag.dpr_proximity),
             })
 
             rows = run_raw_sql(
