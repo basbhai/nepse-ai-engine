@@ -101,10 +101,13 @@ def _sdk_call(
     response_mime_type: str,
     temperature: float,
     api_key: str,
+    use_search: bool = False,
 ) -> str:
     """
     Single raw call via Google SDK.
     Raises on any error — caller handles retry.
+    When use_search=True, adds Google Search grounding tool and
+    skips response_mime_type (incompatible with search grounding).
     """
     from google import genai
     from google.genai import types
@@ -112,7 +115,9 @@ def _sdk_call(
     client = genai.Client(api_key=api_key)
 
     config_kwargs = dict(temperature=temperature)
-    if response_mime_type:
+    if use_search:
+        config_kwargs["tools"] = [types.Tool(google_search=types.GoogleSearch())]
+    elif response_mime_type:
         config_kwargs["response_mime_type"] = response_mime_type
     if system:
         config_kwargs["system_instruction"] = system
@@ -182,6 +187,7 @@ def _gemini_with_retry(
     response_mime_type: str,
     temperature: float,
     context: str,
+    use_search: bool = False,
 ) -> Optional[str]:
     """
     Try Google SDK 5 times rotating across 3 keys.
@@ -212,7 +218,7 @@ def _gemini_with_retry(
                 "[%s] Gemini SDK attempt %d/%d (key_%d)",
                 context, attempt, MAX_RETRIES, key_num,
             )
-            raw = _sdk_call(prompt, system, response_mime_type, temperature, api_key)
+            raw = _sdk_call(prompt, system, response_mime_type, temperature, api_key, use_search)
             log.info("[%s] Gemini responded on attempt %d (key_%d)", context, attempt, key_num)
             return raw
 
@@ -241,7 +247,13 @@ def _gemini_with_retry(
                 if attempt < MAX_RETRIES:
                     continue
 
-    # All SDK attempts failed — try OpenRouter paid
+    # All SDK attempts failed
+    if use_search:
+        # Google Search grounding is incompatible with OpenRouter — alert and bail
+        log.error("[%s] All Gemini SDK attempts failed (use_search=True) — no OpenRouter fallback", context)
+        _alert_admin(context, last_error)
+        return None
+
     raw = _openrouter_fallback(
         prompt, system, response_mime_type, temperature, context
     )
@@ -262,13 +274,14 @@ def ask_gemini_json(
     system: Optional[str] = None,
     temperature: float = 0.2,
     context: str = "gemini_json",
+    use_search: bool = False,
 ) -> Optional[dict]:
     """
     Send prompt to Gemini Flash. Returns parsed JSON dict or None.
 
     Internally:
       1. Tries Google SDK × 5 (rotating 3 keys)
-      2. Falls back to OpenRouter paid Gemini
+      2. Falls back to OpenRouter paid Gemini (skipped when use_search=True)
       3. Alerts admin only if both fail
 
     Usage:
@@ -278,9 +291,10 @@ def ask_gemini_json(
     raw = _gemini_with_retry(
         prompt             = prompt,
         system             = system,
-        response_mime_type = "application/json",
+        response_mime_type = "" if use_search else "application/json",
         temperature        = temperature,
         context            = context,
+        use_search         = use_search,
     )
     if raw is None:
         return None
@@ -301,13 +315,14 @@ def ask_gemini_text(
     system: Optional[str] = None,
     temperature: float = 0.4,
     context: str = "gemini_text",
+    use_search: bool = False,
 ) -> Optional[str]:
     """
     Send prompt to Gemini Flash. Returns raw text or None.
 
     Internally:
       1. Tries Google SDK × 5 (rotating 3 keys)
-      2. Falls back to OpenRouter paid Gemini
+      2. Falls back to OpenRouter paid Gemini (skipped when use_search=True)
       3. Alerts admin only if both fail
 
     Usage:
@@ -320,4 +335,5 @@ def ask_gemini_text(
         response_mime_type = "",   # no mime = free text
         temperature        = temperature,
         context            = context,
+        use_search         = use_search,
     )

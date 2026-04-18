@@ -280,6 +280,7 @@ def _write_near_misses_to_db(near_misses: list, date_str: str, dry_run: bool) ->
                 "tech_score":               str(nm.tech_score),
                 "conf_score":               str(nm.conf_score),
                 "composite_score_would_be": str(nm.composite_score_would_be),
+                "volume_os_ratio":          str(nm.volume_os_ratio) if hasattr(nm, "volume_os_ratio") else "0",
                 "tracking_days":            "0",
 
             }, conflict_columns=["symbol", "date"])

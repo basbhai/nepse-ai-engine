@@ -620,6 +620,7 @@ TECHNICAL INDICATORS (frozen at 10:30 AM NST):
   VWAP Dev:        {getattr(flag, 'vwap_dev', 0.0):+.2f}%  (+ = above fair value)
   Bid/Ask Ratio:   {getattr(flag, 'bid_ask_ratio', 0.0):.2f}  (>0.5 = buy pressure)
   DPR Proximity:   {getattr(flag, 'dpr_proximity', 0.0):.2f}  (0=near low circuit, 1=near high circuit)
+  Volume/OS Ratio: {getattr(flag, 'volume_os_ratio', 0.0):.2f}%  (>1% = smart money signal, >3% = operator/institutional)
 
 Primary Signal:  {flag.primary_signal}
 Composite Score: {flag.composite_score:.1f}
@@ -873,6 +874,12 @@ def _write_to_db(result: AnalystResult, flag=None) -> None:
             # Geo / macro scores
             "geo_score":         geo_score,
             "macro_score":       nepal_score,
+
+            # ATrad intraday signals
+            "vwap_dev":        _s(getattr(flag, "vwap_dev",        0.0)) if flag else "",
+            "bid_ask_ratio":   _s(getattr(flag, "bid_ask_ratio",   0.0)) if flag else "",
+            "dpr_proximity":   _s(getattr(flag, "dpr_proximity",   0.0)) if flag else "",
+            "volume_os_ratio": _s(getattr(flag, "volume_os_ratio", 0.0)) if flag else "",
 
             # FIX 1: headlines written from result (which got them from geo context)
             "headlines_politics": _s(result.headlines_politics),

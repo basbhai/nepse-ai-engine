@@ -138,6 +138,10 @@ model market_log {
   volume_ratio     Text
   obv_trend        Text
   vwap             Text
+  vwap_dev         Text   // (ltp - vwap) / vwap — ATrad intraday signal
+  bid_ask_ratio    Text   // bid_qty / (bid_qty + ask_qty) — demand pressure 0-1
+  dpr_proximity    Text   // (ltp - low_dpr) / (high_dpr - low_dpr) — circuit range position
+  volume_os_ratio  Text   // today_volume / outstanding_shares % — smart money signal
   atr_14           Text
   support_level    Text
   resistance_level Text
@@ -1133,6 +1137,7 @@ model gate_misses {
   market_state           Text
   tech_score             Text
   conf_score             Text
+  volume_os_ratio        Text      // today_volume / outstanding_shares %
   composite_score_would_be Text
   tracking_days          Text  @default("0")
   outcome                Text      // NULL until stamped: FALSE_BLOCK | CORRECT_BLOCK | NEUTRAL
