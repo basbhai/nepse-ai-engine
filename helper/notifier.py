@@ -7,7 +7,9 @@ Purpose : Telegram (primary) + Email (fallback) notification dispatcher.
 
 What it sends:
   BUY signals     — full trade details (entry, stop, target, allocation)
-  WAIT/AVOID      — brief context log (debug only, not sent by default)
+                    → sent to ALL approved paper_users
+  WAIT signals    — admin only
+  AVOID           — not sent
   EOD summary     — daily P&L, win/loss count
   Error alerts    — when something breaks
   Heartbeat       — silent confirmation every trading loop (Telegram only)
@@ -21,9 +23,9 @@ All sends are fire-and-forget — failures are logged but never crash the pipeli
 
 ─────────────────────────────────────────────────────────────────────────────
 CLI:
-  python notifier.py test              → send test message to Telegram
-  python notifier.py heartbeat         → send silent heartbeat
-  python notifier.py signal NABIL BUY  → send test BUY signal
+  python -m helper.notifier test              → send test message to Telegram
+  python -m helper.notifier heartbeat         → send silent heartbeat
+  python -m helper.notifier signal NABIL BUY  → send test BUY signal
 ─────────────────────────────────────────────────────────────────────────────
 """
 
@@ -31,6 +33,7 @@ import logging
 import os
 import smtplib
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -49,7 +52,7 @@ EMAIL_APP_PASS   = os.getenv("EMAIL_APP_PASS", "")
 EMAIL_RECEIVERS  = [e.strip() for e in os.getenv("EMAIL_RECEIVER", "").split(",") if e.strip()]
 
 TELEGRAM_API     = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-TELEGRAM_TIMEOUT = 15
+TELEGRAM_TIMEOUT = 8       # reduced from 15 — parallel sends make this safe
 MAX_TG_LENGTH    = 4000    # Telegram limit is 4096, keep buffer
 
 # ── Paper mode prefix ─────────────────────────────────────────────────────────
@@ -99,13 +102,47 @@ def _get_telegram_chat_ids() -> List[str]:
     return chat_ids
 
 
+def _send_admin_only(message: str, parse_mode: str = "Markdown") -> bool:
+    """
+    Send to admin chat ID only.
+    Used for WAIT signals, error alerts, heartbeats, system messages.
+    """
+    admin_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    if not admin_id or not TELEGRAM_TOKEN:
+        logger.debug("Telegram admin-only: token or admin ID not set")
+        return False
+    try:
+        payload = {"chat_id": admin_id, "text": message}
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
+        resp = requests.post(TELEGRAM_API, json=payload, timeout=TELEGRAM_TIMEOUT)
+        if resp.status_code == 200:
+            logger.info("Telegram (admin-only) sent to %s (%d chars)", admin_id, len(message))
+            return True
+        # Parse mode error — retry plain
+        if resp.status_code == 400 and "parse" in resp.text.lower():
+            payload.pop("parse_mode", None)
+            resp2 = requests.post(TELEGRAM_API, json=payload, timeout=TELEGRAM_TIMEOUT)
+            if resp2.status_code == 200:
+                logger.info("Telegram (admin-only) sent to %s (plain retry)", admin_id)
+                return True
+        logger.error("Telegram admin-only: HTTP %d — %s", resp.status_code, resp.text[:200])
+        return False
+    except requests.exceptions.Timeout:
+        logger.error("Telegram admin-only: request timed out for %s", admin_id)
+        return False
+    except Exception as exc:
+        logger.error("Telegram admin-only error: %s", exc)
+        return False
+
+
 def send_telegram(
     message: str,
     parse_mode: str = "Markdown",
     silent: bool = False,
 ) -> bool:
     """
-    Send a message to Telegram (to all configured chat IDs).
+    Send a message to Telegram (to all configured chat IDs) in parallel.
     Returns True if at least one recipient succeeded, False otherwise.
     Never raises.
 
@@ -138,32 +175,36 @@ def send_telegram(
     if parse_mode:
         payload["parse_mode"] = parse_mode
 
-    success_any = False
-    for chat_id in chat_ids:
-        payload["chat_id"] = chat_id
+    def _send_one(chat_id: str) -> bool:
+        p = {**payload, "chat_id": chat_id}
         try:
-            resp = requests.post(TELEGRAM_API, json=payload, timeout=TELEGRAM_TIMEOUT)
+            resp = requests.post(TELEGRAM_API, json=p, timeout=TELEGRAM_TIMEOUT)
             if resp.status_code == 200:
                 logger.info("Telegram sent to %s (%d chars, silent=%s)", chat_id, len(message), silent)
-                success_any = True
+                return True
+            # Parse mode error — retry as plain text
+            if resp.status_code == 400 and "parse" in resp.text.lower():
+                logger.warning("Telegram: parse mode error for %s — retrying plain", chat_id)
+                p.pop("parse_mode", None)
+                resp2 = requests.post(TELEGRAM_API, json=p, timeout=TELEGRAM_TIMEOUT)
+                if resp2.status_code == 200:
+                    logger.info("Telegram sent to %s (plain retry)", chat_id)
+                    return True
+                logger.error("Telegram: plain retry failed for %s — HTTP %d", chat_id, resp2.status_code)
             else:
-                # Parse mode error — retry as plain text
-                if resp.status_code == 400 and "parse" in resp.text.lower():
-                    logger.warning("Telegram: parse mode error for %s — retrying plain", chat_id)
-                    payload.pop("parse_mode", None)
-                    resp2 = requests.post(TELEGRAM_API, json=payload, timeout=TELEGRAM_TIMEOUT)
-                    if resp2.status_code == 200:
-                        success_any = True
-                    else:
-                        logger.error("Telegram: plain retry failed for %s — HTTP %d", chat_id, resp2.status_code)
-                else:
-                    logger.error("Telegram: HTTP %d for %s — %s", resp.status_code, chat_id, resp.text[:200])
+                logger.error("Telegram: HTTP %d for %s — %s", resp.status_code, chat_id, resp.text[:200])
         except requests.exceptions.Timeout:
             logger.error("Telegram: request timed out for %s", chat_id)
         except Exception as exc:
             logger.error("Telegram: unexpected error for %s — %s", chat_id, exc)
+        return False
 
-    return success_any
+    # Send to all chat IDs in parallel — all fire simultaneously
+    with ThreadPoolExecutor(max_workers=len(chat_ids)) as executor:
+        futures = {executor.submit(_send_one, cid): cid for cid in chat_ids}
+        results = [f.result() for f in as_completed(futures)]
+
+    return any(results)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -212,76 +253,58 @@ def _format_buy_signal(result) -> str:
     Format an AnalystResult BUY for Telegram.
     Paper mode prefix automatically added. Beautified with better emojis & layout.
     """
-    paper    = PAPER_PREFIX if _is_paper_mode() else ""
-    nst_now  = datetime.now(tz=NST)
-    sep      = "▬" * 24
+    paper   = PAPER_PREFIX if _is_paper_mode() else ""
+    nst_now = datetime.now(tz=NST)
+    sep     = "▬" * 24
 
-    # Fee calculations
-    try:
-        from budget import calc_true_profit, calc_breakeven
-        profit  = calc_true_profit(result.entry_price, result.target, result.shares)
-        net     = profit["net_profit"]
-        be      = result.breakeven if result.breakeven > 0 else calc_breakeven(result.entry_price, result.shares)
-    except Exception:
-        net = 0.0
-        be  = result.breakeven
-
-    # Confidence bar (visual)
-    conf_bar = "█" * (result.confidence // 10) + "░" * (10 - result.confidence // 10)
+    rr_emoji  = "🎯" if result.risk_reward >= 2.0 else "⚠️"
+    conf_emoji = "🟢" if result.confidence >= 70 else "🟡"
 
     lines = [
-        f"{sep}",
-        f"{paper}🔔 *BUY SIGNAL* — {result.symbol}",
-        f"📅 {nst_now.strftime('%d %b %H:%M NST')} | 🏭 {result.sector} | ⚡ Confidence: {result.confidence}% {conf_bar}",
-        f"{sep}",
-        f"💰 Entry:      *NPR {result.entry_price:,.0f}*",
+        sep,
+        f"{paper}🚨 *BUY SIGNAL — {result.symbol}*",
+        sep,
+        f"🏭 Sector:      {result.sector.title()}",
+        f"{conf_emoji} Confidence:  *{result.confidence}%*  |  Signal: {result.primary_signal}",
+        f"",
+        f"💰 Entry:       *NPR {result.entry_price:,.0f}*",
         f"🛑 Stop Loss:   NPR {result.stop_loss:,.0f}",
         f"🎯 Target:      NPR {result.target:,.0f}",
-        f"⚖️ Breakeven:   NPR {be:,.0f}",
+        f"⚖️  Breakeven:   NPR {result.breakeven:,.0f}",
+        f"{rr_emoji} R/R Ratio:   *{result.risk_reward:.1f}x*",
         f"",
         f"📦 Shares:      {result.shares}",
         f"💵 Allocation:  NPR {result.allocation_npr:,.0f}",
-        f"📈 Net profit:  *NPR {net:+,.0f}*",
-        f"⚡ R/R Ratio:   {result.risk_reward:.1f}x",
-        f"📅 Hold days:   ~{result.suggested_hold}",
+        f"⏳ Hold:        ~{result.suggested_hold} days",
         f"",
-        f"📡 Signal:      {result.primary_signal} | 🚦 Urgency: {result.urgency}",
-        f"",
-        f"💡 *Reasoning:* {result.reasoning[:200]}",
+        f"🧠 *Reasoning:*",
+        f"_{result.reasoning[:300]}_",
     ]
 
-    if result.lesson_applied and result.lesson_applied not in ("", "NONE"):
-        lines.append(f"📚 Lesson: {result.lesson_applied[:100]}")
-    if result.candle_pattern:
-        lines.append(f"🕯 Candle: {result.candle_pattern}")
+    if result.lesson_applied and result.lesson_applied not in ("NONE", "", "none"):
+        lines.append(f"\n📚 *Lesson:* _{result.lesson_applied[:120]}_")
 
     lines.append(sep)
+    lines.append(f"🕒 {nst_now.strftime('%H:%M NST')}")
+
     return "\n".join(lines)
+
 
 def _format_wait_signal(result) -> str:
-    """Format a WAIT signal for Telegram — different header, no trade details."""
-    paper = PAPER_PREFIX if _is_paper_mode() else ""
+    """Format a WAIT signal — admin only, concise."""
+    paper   = PAPER_PREFIX if _is_paper_mode() else ""
     nst_now = datetime.now(tz=NST)
-    sep = "▬" * 24
 
     lines = [
-        f"{sep}",
-        f"{paper}⏸ *WAIT SIGNAL* — {result.symbol}",
-        f"📅 {nst_now.strftime('%d %b %H:%M NST')} | 🏭 {result.sector}",
-        f"{sep}",
-        f"💡 *Reasoning:* {result.reasoning[:200]}",
-        f"📚 Lesson: {result.lesson_applied[:100] if result.lesson_applied else 'NONE'}",
-        f"{sep}",
+        f"⏸ {paper}*WAIT — {result.symbol}*",
+        f"📊 Conf: {result.confidence}% | Signal: {result.primary_signal}",
+        f"💬 _{result.reasoning[:200]}_",
     ]
+    if hasattr(result, "wait_condition") and result.wait_condition and result.wait_condition != "NONE":
+        lines.append(f"🔑 Trigger: _{result.wait_condition[:150]}_")
+    lines.append(f"🕒 {nst_now.strftime('%H:%M NST')}")
     return "\n".join(lines)
 
-
-def send_wait_signal(result) -> bool:
-    """Send a WAIT signal to Telegram (no email fallback)."""
-    if result.action != "WAIT":
-        return False
-    message = _format_wait_signal(result)
-    return send_telegram(message, parse_mode="Markdown", silent=False)
 
 def _format_eod_summary(
     winning: int,
@@ -320,7 +343,8 @@ def _format_eod_summary(
 
 def send_buy_signal(result) -> bool:
     """
-    Send a BUY signal to Telegram (and optionally email).
+    Send a BUY signal to ALL approved paper_users via Telegram (parallel).
+    Also sends email as backup if configured.
     result: AnalystResult from claude_analyst.py
     """
     if result.action != "BUY":
@@ -342,6 +366,17 @@ def send_buy_signal(result) -> bool:
     return tg_ok
 
 
+def send_wait_signal(result) -> bool:
+    """
+    Send a WAIT signal to admin only.
+    result: AnalystResult from claude_analyst.py
+    """
+    if result.action != "WAIT":
+        return False
+    message = _format_wait_signal(result)
+    return _send_admin_only(message, parse_mode="Markdown")
+
+
 def send_avoid_signal(result, verbose: bool = False) -> bool:
     """Optionally send WAIT/AVOID to Telegram (debug mode only)."""
     if not verbose:
@@ -353,18 +388,18 @@ def send_avoid_signal(result, verbose: bool = False) -> bool:
         f"📊 Confidence: {result.confidence}% | {result.primary_signal}\n"
         f"💬 {result.reasoning[:150]}"
     )
-    return send_telegram(msg, parse_mode="Markdown", silent=True)
+    return _send_admin_only(msg, parse_mode="Markdown")
 
 
 def send_heartbeat() -> bool:
     """Silent heartbeat every trading loop. Confirms system is running."""
     nst_now = datetime.now(tz=NST)
     msg = f"💓 `{nst_now.strftime('%H:%M')}` – system online"
-    return send_telegram(msg, parse_mode="Markdown", silent=True)
+    return _send_admin_only(msg, parse_mode="Markdown")
 
 
 def send_error_alert(module: str, error: str, critical: bool = False) -> bool:
-    """Send error alert to Telegram. critical=True adds email as well."""
+    """Send error alert to admin only. critical=True adds email as well."""
     nst_now = datetime.now(tz=NST)
     emoji   = "🚨" if critical else "⚠️"
     msg = (
@@ -373,7 +408,7 @@ def send_error_alert(module: str, error: str, critical: bool = False) -> bool:
         f"🕒 Time: {nst_now.strftime('%Y-%m-%d %H:%M NST')}\n"
         f"🔍 Details: {error[:300]}"
     )
-    tg_ok = send_telegram(msg, parse_mode="Markdown")
+    tg_ok = _send_admin_only(msg, parse_mode="Markdown")
 
     if critical and EMAIL_USER:
         send_email(
@@ -391,18 +426,18 @@ def send_eod_summary(
     win_rate: float = 0,
     market_comment: str = "",
 ) -> bool:
-    """Send end-of-day summary. Called by auditor.py at 3:15 PM NST."""
+    """Send end-of-day summary to admin only. Called by auditor.py at 3:15 PM NST."""
     msg = _format_eod_summary(winning, losing, pending, total_pnl, win_rate, market_comment)
-    return send_telegram(msg, parse_mode="Markdown")
+    return _send_admin_only(msg, parse_mode="Markdown")
 
 
 def send_morning_brief(message: str) -> bool:
-    """Send the morning briefing assembled by briefing.py."""
-    return send_telegram(message, parse_mode="Markdown")
+    """Send the morning briefing assembled by briefing.py to admin only."""
+    return _send_admin_only(message, parse_mode="Markdown")
 
 
 def send_circuit_breaker(reason: str) -> bool:
-    """Alert when circuit breaker is triggered."""
+    """Alert admin when circuit breaker is triggered."""
     nst_now = datetime.now(tz=NST)
     paper   = PAPER_PREFIX if _is_paper_mode() else ""
     msg = (
@@ -411,14 +446,14 @@ def send_circuit_breaker(reason: str) -> bool:
         f"📛 Reason: {reason}\n"
         f"⛔ Action: All new BUY signals blocked until manual review."
     )
-    tg_ok = send_telegram(msg, parse_mode="Markdown")
+    tg_ok = _send_admin_only(msg, parse_mode="Markdown")
     if EMAIL_USER:
         send_email(subject="🚨 NEPSE Circuit Breaker", body=reason)
     return tg_ok
 
 
 def send_bandh_alert(detail: str) -> bool:
-    """Alert when bandh is detected by nepal_pulse.py."""
+    """Alert admin when bandh is detected by nepal_pulse.py."""
     paper = PAPER_PREFIX if _is_paper_mode() else ""
     msg = (
         f"🚨 {paper}*BANDH ALERT*\n"
@@ -426,7 +461,7 @@ def send_bandh_alert(detail: str) -> bool:
         f"📛 {detail[:200]}\n"
         f"⛔ Action: All BUY signals auto-blocked today."
     )
-    return send_telegram(msg, parse_mode="Markdown")
+    return _send_admin_only(msg, parse_mode="Markdown")
 
 
 def send_position_update(
@@ -434,7 +469,7 @@ def send_position_update(
     event: str,
     detail: str,
 ) -> bool:
-    """Send position event: trailing stop moved, target hit, stop hit."""
+    """Send position event to admin: trailing stop moved, target hit, stop hit."""
     paper = PAPER_PREFIX if _is_paper_mode() else ""
     icons = {
         "TARGET_HIT":     "🎯",
@@ -447,7 +482,7 @@ def send_position_update(
         f"{icon} {paper}*{event.replace('_', ' ')}: {symbol}*\n"
         f"{detail[:200]}"
     )
-    return send_telegram(msg, parse_mode="Markdown")
+    return _send_admin_only(msg, parse_mode="Markdown")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -457,12 +492,12 @@ def send_position_update(
 def send_analysis_results(results: list) -> dict:
     """
     Process and send all AnalystResult objects from one trading loop.
-    Sends BUYs immediately. Counts WAIT/AVOID silently.
+    BUY → all approved users | WAIT → admin only | AVOID → not sent.
 
     Returns:
         {buys_sent, waits_skipped, avoids_skipped, errors}
     """
-    sent    = {"buys_sent": 0, "waits_skipped": 0, "avoids_skipped": 0, "errors": 0}
+    sent = {"buys_sent": 0, "waits_skipped": 0, "avoids_skipped": 0, "errors": 0}
 
     for r in results:
         try:
@@ -473,8 +508,8 @@ def send_analysis_results(results: list) -> dict:
                 else:
                     sent["errors"] += 1
             elif r.action == "WAIT":
+                send_wait_signal(r)
                 sent["waits_skipped"] += 1
-                logger.info("WAIT %s (not sent — normal)", r.symbol)
             else:
                 sent["avoids_skipped"] += 1
                 logger.info("AVOID %s (not sent — normal)", r.symbol)
@@ -522,7 +557,6 @@ if __name__ == "__main__":
         print(f"  Error alert: {'✅ sent' if ok else '❌ failed'}")
 
     elif cmd == "signal":
-        # Create fake AnalystResult for testing
         from dataclasses import dataclass as dc, field as f
 
         @dc
