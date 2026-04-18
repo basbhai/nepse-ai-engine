@@ -333,31 +333,65 @@ model nepal_pulse {
 // macro_data — DROPPED Apr 5 2026 (superseded by nrb_monthly since Mar 28 fix)
 
 model nrb_monthly {
-  id                         Serial
-  period                     Text!  @unique   // e.g. "fy2023/24-month1"
-  fiscal_year                Text
-  month_number               Text
-  is_annual                  Text   @default("false")
-  nepse_index                Text
-  policy_rate                Text
-  bank_rate                  Text
-  crr_percentage             Text
-  slr_percentage             Text
-  cpi_inflation              Text
-  credit_growth_rate         Text
-  liquidity_injected_billion Text
-  remittance_yoy_change_pct  Text
-  fx_reserve_months          Text
-  bop_overall_balance_usd_m  Text
-  bop_current_account_usd_m  Text
-  bop_status                 Text
-  bop_trend                  Text
-  overall_sentiment          Text   // BULLISH | NEUTRAL | BEARISH
-  forward_guidance           Text   // TIGHT | LOOSE | NEUTRAL
-  key_risks                  Text
+  id                                  Serial
+  period                              Text!  @unique   // e.g. "fy2025/26-month8"
+  fiscal_year                         Text
+  month_number                        Text
+  is_annual                           Text   @default("false")
+
+  // ── Monetary Policy ───────────────────────────────────────────────────────
+  policy_rate                         Text
+  bank_rate                           Text
+  crr_percentage                      Text
+  slr_percentage                      Text
+
+  // ── Interest Rates ────────────────────────────────────────────────────────
+  lending_rate_pct                    Text   // commercial banks weighted avg
+  deposit_rate_pct                    Text   // commercial banks weighted avg
+  interbank_rate_pct                  Text   // weighted avg inter-bank rate
+  tbill_91d_rate_pct                  Text   // 91-day T-bill rate
+
+  // ── Inflation & Credit ────────────────────────────────────────────────────
+  cpi_inflation                       Text
+  credit_growth_rate                  Text   // YoY private sector credit growth
+  private_sector_credit_growth_yoy_pct Text  // same as above but explicit YoY
+  m2_growth_yoy_pct                   Text
+  deposit_growth_yoy_pct              Text
+  npl_ratio_pct                       Text   // non-performing loan ratio
+
+  // ── Liquidity ─────────────────────────────────────────────────────────────
+  liquidity_injected_billion          Text   // net liquidity absorbed/injected
+  liquidity_status                    Text   // SURPLUS | TIGHT | NEUTRAL
+
+  // ── Remittance ────────────────────────────────────────────────────────────
+  remittance_yoy_change_pct           Text
+  remittance_total_billion_npr        Text   // absolute figure for trend tracking
+
+  // ── Foreign Exchange ──────────────────────────────────────────────────────
+  fx_reserve_months                   Text
+  usd_npr_rate                        Text   // buying rate mid-period
+
+  // ── Balance of Payments ───────────────────────────────────────────────────
+  bop_overall_balance_usd_m           Text
+  bop_current_account_usd_m           Text
+  bop_capital_account_usd_m           Text   // NEW
+  bop_trade_deficit_usd_m             Text   // NEW
+  bop_status                          Text   // SURPLUS | DEFICIT
+  bop_trend                           Text   // IMPROVING | DETERIORATING | STABLE
+  bop_impact_on_nepse                 Text   // one sentence NEPSE liquidity implication
+
+  // ── Capital Market ────────────────────────────────────────────────────────
+  nepse_index_value                   Text   // NEPSE index at report date
+  nepse_index                         Text   // legacy — keep for backward compat
+  market_cap_billion_npr              Text
+
+  // ── Macro Sentiment ───────────────────────────────────────────────────────
+  overall_sentiment                   Text   // BULLISH | NEUTRAL | BEARISH
+  forward_guidance                    Text   // max 2 sentences
+  key_risks                           Text   // max 3 bullets
 
   @@index([fiscal_year, month_number])
-}
+}s
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FUNDAMENTALS
