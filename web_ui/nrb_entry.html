@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NRB Monthly Entry — NEPSE AI Engine</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:        #0d0f0e;
+    --surface:   #141714;
+    --surface2:  #1a1d1a;
+    --border:    #2a2e2a;
+    --border2:   #353a35;
+    --green:     #4ade80;
+    --green-dim: #22c55e44;
+    --amber:     #fbbf24;
+    --red:       #f87171;
+    --blue:      #60a5fa;
+    --text:      #e2e8e2;
+    --text-dim:  #6b7a6b;
+    --text-mid:  #9aaa9a;
+    --mono:      'IBM Plex Mono', monospace;
+    --sans:      'IBM Plex Sans', sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 13px;
+    min-height: 100vh;
+    line-height: 1.5;
+  }
+  .header {
+    border-bottom: 1px solid var(--border);
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 100;
+  }
+  .header-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 8px var(--green);
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:1}50%{opacity:.4} }
+  .header-title { font-size: 12px; letter-spacing: .15em; color: var(--text-mid); text-transform: uppercase; }
+  .header-title span { color: var(--green); }
+  .header-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+  .api-status { font-size: 11px; color: var(--text-dim); display: flex; align-items: center; gap: 6px; }
+  .api-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-dim); }
+  .api-dot.online { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .api-dot.offline { background: var(--red); }
+  .main { display: grid; grid-template-columns: 1fr 1fr; height: calc(100vh - 49px); }
+  .left-panel { border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
+  .panel-header {
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border);
+    font-size: 10px;
+    letter-spacing: .12em;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .panel-header::before { content:''; display:inline-block; width:3px; height:12px; background:var(--green); }
+  .period-section {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 12px;
+  }
+  .field-group { display: flex; flex-direction: column; gap: 5px; }
+  label { font-size: 10px; letter-spacing: .1em; color: var(--text-dim); text-transform: uppercase; }
+  input, select, textarea {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 13px;
+    padding: 7px 10px;
+    border-radius: 3px;
+    outline: none;
+    transition: border-color .15s;
+    width: 100%;
+  }
+  input:focus, select:focus, textarea:focus { border-color: var(--green); }
+  select option { background: var(--surface2); }
+  .period-preview {
+    grid-column: 1/-1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    flex-wrap: wrap;
+  }
+  .period-preview-label { color: var(--text-dim); font-size: 11px; }
+  .period-preview-value { color: var(--green); font-size: 13px; font-weight: 500; }
+  .existing-badge {
+    display: none;
+    padding: 3px 8px;
+    background: #fbbf2418;
+    border: 1px solid #fbbf2444;
+    color: var(--amber);
+    font-size: 11px;
+    border-radius: 3px;
+  }
+  .json-section { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  .json-toolbar {
+    padding: 8px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  textarea.json-input {
+    flex: 1;
+    resize: none;
+    border: none;
+    border-radius: 0;
+    padding: 16px 20px;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-mid);
+    background: var(--surface);
+    height: 100%;
+  }
+  textarea.json-input:focus { border-color: transparent; }
+  .json-error { padding: 8px 20px; font-size: 11px; color: var(--red); border-top: 1px solid var(--border); display: none; }
+  .btn {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    padding: 7px 14px;
+    border-radius: 3px;
+    border: 1px solid;
+    cursor: pointer;
+    transition: all .15s;
+  }
+  .btn-green { background: transparent; border-color: var(--green); color: var(--green); }
+  .btn-green:hover { background: var(--green-dim); }
+  .btn-amber { background: transparent; border-color: var(--amber); color: var(--amber); }
+  .btn-amber:hover { background: #fbbf2422; }
+  .btn-dim { background: transparent; border-color: var(--border2); color: var(--text-dim); }
+  .btn-dim:hover { border-color: var(--text-mid); color: var(--text-mid); }
+  .btn-big { font-size: 12px; padding: 10px 24px; letter-spacing: .1em; }
+  .btn:disabled { opacity: .3; cursor: not-allowed; }
+  .right-panel { display: flex; flex-direction: column; overflow: hidden; }
+  .fields-container { flex: 1; overflow-y: auto; padding: 0; }
+  .fields-container::-webkit-scrollbar { width: 4px; }
+  .fields-container::-webkit-scrollbar-track { background: var(--surface); }
+  .fields-container::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+  .field-section { border-bottom: 1px solid var(--border); }
+  .field-section-header {
+    padding: 8px 20px;
+    font-size: 10px;
+    letter-spacing: .12em;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  .section-count { margin-left: auto; color: var(--text-dim); font-size: 10px; }
+  .section-filled { color: var(--green); }
+  .field-row {
+    display: grid;
+    grid-template-columns: 220px 1fr 72px;
+    align-items: center;
+    border-bottom: 1px solid var(--border);
+    transition: background .1s;
+  }
+  .field-row:hover { background: var(--surface2); }
+  .field-row:last-child { border-bottom: none; }
+  .field-name {
+    padding: 8px 16px;
+    font-size: 11px;
+    color: var(--text-mid);
+    border-right: 1px solid var(--border);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .field-input-wrap { padding: 5px 10px; }
+  .field-input {
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text);
+    font-size: 12px;
+    padding: 4px 6px;
+    border-radius: 2px;
+    width: 100%;
+    font-family: var(--mono);
+  }
+  .field-input:focus { border-color: var(--green); background: var(--surface2); }
+  .field-input.is-null { color: var(--red); border-color: #f8717122; background: #f8717108; }
+  .field-input.is-null::placeholder { color: var(--red); opacity: .6; }
+  .field-status {
+    padding: 8px 10px;
+    font-size: 10px;
+    text-align: center;
+    border-left: 1px solid var(--border);
+    color: var(--text-dim);
+  }
+  .field-status.ok { color: var(--green); }
+  .field-status.null { color: var(--red); }
+  .field-status.modified { color: var(--amber); }
+  .bottom-bar {
+    border-top: 1px solid var(--border);
+    padding: 12px 20px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--bg);
+  }
+  .status-banner {
+    flex: 1;
+    font-size: 12px;
+    padding: 8px 14px;
+    border-radius: 3px;
+    display: none;
+    align-items: center;
+    gap: 8px;
+  }
+  .status-banner.success { display:flex; background:#4ade8018; border:1px solid #4ade8044; color:var(--green); }
+  .status-banner.error   { display:flex; background:#f8717118; border:1px solid #f8717144; color:var(--red); }
+  .status-banner.loading { display:flex; background:#60a5fa18; border:1px solid #60a5fa44; color:var(--blue); }
+  .stats-bar {
+    padding: 8px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    gap: 20px;
+    background: var(--surface);
+  }
+  .stat-item { display:flex; align-items:center; gap:6px; font-size:11px; }
+  .stat-label { color:var(--text-dim); }
+  .stat-value { font-weight:500; }
+  .stat-value.green { color:var(--green); }
+  .stat-value.red   { color:var(--red); }
+  .stat-value.amber { color:var(--amber); }
+  .spinner {
+    display:inline-block; width:10px; height:10px;
+    border:1px solid currentColor; border-top-color:transparent;
+    border-radius:50%; animation:spin .6s linear infinite;
+  }
+  @keyframes spin { to{transform:rotate(360deg)} }
+  .empty-state { padding:40px 20px; color:var(--text-dim); text-align:center; font-size:12px; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-dot"></div>
+  <div class="header-title">NEPSE AI Engine / <span>NRB Monthly Entry</span></div>
+  <div class="header-right">
+    <div class="api-status">
+      <div class="api-dot" id="apiDot"></div>
+      <span id="apiStatusText">checking api...</span>
+    </div>
+  </div>
+</div>
+
+<div class="main">
+
+  <!-- LEFT -->
+  <div class="left-panel">
+    <div class="panel-header">01 — Period &amp; Source JSON</div>
+
+    <div class="period-section">
+      <div class="field-group">
+        <label>Fiscal Year</label>
+        <select id="fiscalYear">
+          <option value="2026/27">2026/27</option>
+          <option value="2025/26" selected>2025/26</option>
+          <option value="2024/25">2024/25</option>
+          <option value="2023/24">2023/24</option>
+        </select>
+      </div>
+      <div class="field-group">
+        <label>Month Number</label>
+        <select id="monthNumber">
+          <option value="1">1 — Shrawan</option>
+          <option value="2">2 — Bhadra</option>
+          <option value="3">3 — Ashwin</option>
+          <option value="4">4 — Kartik</option>
+          <option value="5">5 — Mangsir</option>
+          <option value="6">6 — Poush</option>
+          <option value="7">7 — Magh</option>
+          <option value="8" selected>8 — Falgun</option>
+          <option value="9">9 — Chaitra</option>
+          <option value="10">10 — Baisakh</option>
+          <option value="11">11 — Jestha</option>
+          <option value="12">12 — Ashadh</option>
+        </select>
+      </div>
+      <div class="field-group">
+        <label>Type</label>
+        <select id="isAnnual">
+          <option value="false">Monthly</option>
+          <option value="true">Annual</option>
+        </select>
+      </div>
+      <div class="period-preview">
+        <span class="period-preview-label">period key →</span>
+        <span class="period-preview-value" id="periodPreview">fy2025/26-month8</span>
+        <span class="existing-badge" id="existingBadge">⚠ exists — will overwrite</span>
+      </div>
+    </div>
+
+    <div class="json-section">
+      <div class="json-toolbar">
+        <span style="color:var(--text-dim);font-size:11px;text-transform:uppercase;letter-spacing:.1em;">Paste NotebookLM JSON</span>
+        <div style="margin-left:auto;display:flex;gap:8px;">
+          <button class="btn btn-dim" onclick="clearAll()">Clear</button>
+          <button class="btn btn-green" onclick="parseJSON()">Parse →</button>
+        </div>
+      </div>
+      <textarea class="json-input" id="jsonInput"
+        placeholder='{&#10;  "policy_rate": 5.0,&#10;  "bank_rate": 7.0,&#10;  "cpi_inflation": 3.62,&#10;  "overall_sentiment": "BULLISH",&#10;  ...&#10;}'
+        spellcheck="false"></textarea>
+      <div class="json-error" id="jsonError"></div>
+    </div>
+  </div>
+
+  <!-- RIGHT -->
+  <div class="right-panel">
+    <div class="panel-header">02 — Review &amp; Edit Fields</div>
+
+    <div class="stats-bar">
+      <div class="stat-item"><span class="stat-label">Total</span><span class="stat-value" id="statTotal">—</span></div>
+      <div class="stat-item"><span class="stat-label">Filled</span><span class="stat-value green" id="statFilled">—</span></div>
+      <div class="stat-item"><span class="stat-label">Null</span><span class="stat-value red" id="statNull">—</span></div>
+      <div class="stat-item"><span class="stat-label">Modified</span><span class="stat-value amber" id="statModified">0</span></div>
+    </div>
+
+    <div class="fields-container" id="fieldsContainer">
+      <div class="empty-state">Paste JSON on the left and click Parse →</div>
+    </div>
+
+    <div class="bottom-bar">
+      <div class="status-banner" id="statusBanner"></div>
+      <button class="btn btn-amber btn-big" id="saveBtn" onclick="saveToDatabase()" disabled>
+        Save to Database
+      </button>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const API = 'http://localhost:8765';
+
+const FIELD_GROUPS = [
+  { label: 'Monetary Policy', fields: [
+    { key:'policy_rate',    type:'number' },
+    { key:'bank_rate',      type:'number' },
+    { key:'crr_percentage', type:'number' },
+    { key:'slr_percentage', type:'number' },
+  ]},
+  { label: 'Interest Rates', fields: [
+    { key:'lending_rate_pct',   type:'number' },
+    { key:'deposit_rate_pct',   type:'number' },
+    { key:'interbank_rate_pct', type:'number' },
+    { key:'tbill_91d_rate_pct', type:'number' },
+  ]},
+  { label: 'Inflation & Credit', fields: [
+    { key:'cpi_inflation',                        type:'number' },
+    { key:'credit_growth_rate',                   type:'number' },
+    { key:'private_sector_credit_growth_yoy_pct', type:'number' },
+    { key:'m2_growth_yoy_pct',                    type:'number' },
+    { key:'deposit_growth_yoy_pct',               type:'number' },
+    { key:'npl_ratio_pct',                        type:'number' },
+  ]},
+  { label: 'Liquidity', fields: [
+    { key:'liquidity_injected_billion', type:'number' },
+    { key:'liquidity_status',           type:'enum', options:['SURPLUS','TIGHT','NEUTRAL'] },
+  ]},
+  { label: 'Remittance', fields: [
+    { key:'remittance_yoy_change_pct',    type:'number' },
+    { key:'remittance_total_billion_npr', type:'number' },
+  ]},
+  { label: 'Foreign Exchange', fields: [
+    { key:'fx_reserve_months', type:'number' },
+    { key:'usd_npr_rate',      type:'number' },
+  ]},
+  { label: 'Balance of Payments', fields: [
+    { key:'bop_overall_balance_usd_m',  type:'number' },
+    { key:'bop_current_account_usd_m',  type:'number' },
+    { key:'bop_capital_account_usd_m',  type:'number' },
+    { key:'bop_trade_deficit_usd_m',    type:'number' },
+    { key:'bop_status',                 type:'enum', options:['SURPLUS','DEFICIT'] },
+    { key:'bop_trend',                  type:'enum', options:['IMPROVING','DETERIORATING','STABLE'] },
+    { key:'bop_impact_on_nepse',        type:'text' },
+  ]},
+  { label: 'Capital Market', fields: [
+    { key:'nepse_index_value',     type:'number' },
+    { key:'market_cap_billion_npr', type:'number' },
+  ]},
+  { label: 'Macro Sentiment', fields: [
+    { key:'overall_sentiment', type:'enum', options:['BULLISH','NEUTRAL','BEARISH'] },
+    { key:'forward_guidance',  type:'text' },
+    { key:'key_risks',         type:'text' },
+  ]},
+];
+
+let parsedData = {}, originalData = {}, existingPeriods = [];
+
+// ── Period ────────────────────────────────────────────────────────────────────
+function buildPeriodKey() {
+  const fy  = document.getElementById('fiscalYear').value;
+  const mn  = document.getElementById('monthNumber').value;
+  const ann = document.getElementById('isAnnual').value;
+  return ann === 'true' ? `fy${fy}-annual` : `fy${fy}-month${mn}`;
+}
+
+function updatePeriodPreview() {
+  const key = buildPeriodKey();
+  document.getElementById('periodPreview').textContent = key;
+  const badge = document.getElementById('existingBadge');
+  badge.style.display = existingPeriods.includes(key) ? 'inline-flex' : 'none';
+}
+
+['fiscalYear','monthNumber','isAnnual'].forEach(id =>
+  document.getElementById(id).addEventListener('change', updatePeriodPreview)
+);
+
+// ── API ───────────────────────────────────────────────────────────────────────
+async function checkAPI() {
+  try {
+    const r = await fetch(`${API}/health`, { signal: AbortSignal.timeout(2000) });
+    if (r.ok) {
+      document.getElementById('apiDot').className = 'api-dot online';
+      document.getElementById('apiStatusText').textContent = 'api online :8765';
+      loadExistingPeriods();
+    } else throw new Error();
+  } catch {
+    document.getElementById('apiDot').className = 'api-dot offline';
+    document.getElementById('apiStatusText').textContent = 'api offline — start uvicorn';
+  }
+}
+
+async function loadExistingPeriods() {
+  try {
+    const r = await fetch(`${API}/nrb/periods`);
+    const d = await r.json();
+    existingPeriods = (d.periods || []).map(p => p.period);
+    updatePeriodPreview();
+  } catch {}
+}
+
+// ── Parse ─────────────────────────────────────────────────────────────────────
+function parseJSON() {
+  const raw   = document.getElementById('jsonInput').value.trim();
+  const errEl = document.getElementById('jsonError');
+  if (!raw) { errEl.textContent = 'Paste JSON first.'; errEl.style.display = 'block'; return; }
+  let data;
+  try { data = JSON.parse(raw); }
+  catch (e) { errEl.textContent = `JSON parse error: ${e.message}`; errEl.style.display = 'block'; return; }
+  errEl.style.display = 'none';
+  parsedData   = data;
+  originalData = JSON.parse(JSON.stringify(data));
+  renderFields(data);
+  document.getElementById('saveBtn').disabled = false;
+}
+
+// ── Render ────────────────────────────────────────────────────────────────────
+function renderFields(data) {
+  const container = document.getElementById('fieldsContainer');
+  container.innerHTML = '';
+
+  FIELD_GROUPS.forEach(group => {
+    const section = document.createElement('div');
+    section.className = 'field-section';
+
+    const filled = group.fields.filter(f => data[f.key] !== null && data[f.key] !== undefined).length;
+    const header = document.createElement('div');
+    header.className = 'field-section-header';
+    header.innerHTML = `${group.label}<span class="section-count"><span class="section-filled">${filled}</span>/${group.fields.length}</span>`;
+    section.appendChild(header);
+
+    group.fields.forEach(fd => {
+      const val    = data[fd.key];
+      const isNull = val === null || val === undefined;
+
+      const row = document.createElement('div');
+      row.className = 'field-row';
+
+      const nameEl = document.createElement('div');
+      nameEl.className = 'field-name';
+      nameEl.textContent = fd.key;
+      nameEl.title = fd.key;
+
+      const inputWrap = document.createElement('div');
+      inputWrap.className = 'field-input-wrap';
+
+      let inputEl;
+      if (fd.type === 'enum') {
+        inputEl = document.createElement('select');
+        inputEl.className = 'field-input' + (isNull ? ' is-null' : '');
+        const nullOpt = document.createElement('option');
+        nullOpt.value = ''; nullOpt.textContent = '— null —';
+        inputEl.appendChild(nullOpt);
+        fd.options.forEach(opt => {
+          const o = document.createElement('option');
+          o.value = opt; o.textContent = opt;
+          if (String(val) === opt) o.selected = true;
+          inputEl.appendChild(o);
+        });
+        if (isNull) inputEl.value = '';
+      } else {
+        inputEl = document.createElement('input');
+        inputEl.type = 'text';
+        inputEl.className = 'field-input' + (isNull ? ' is-null' : '');
+        inputEl.value = isNull ? '' : String(val);
+        inputEl.placeholder = 'null';
+      }
+
+      inputEl.dataset.key = fd.key;
+
+      const statusEl = document.createElement('div');
+      statusEl.className = 'field-status ' + (isNull ? 'null' : 'ok');
+      statusEl.id = `status-${fd.key}`;
+      statusEl.textContent = isNull ? 'null' : '✓';
+
+      inputEl.addEventListener('input', () => {
+        const newVal  = inputEl.value.trim();
+        const origVal = originalData[fd.key];
+        const wasNull = origVal === null || origVal === undefined;
+        const nowNull = newVal === '' || newVal === '— null —';
+
+        inputEl.classList.toggle('is-null', nowNull);
+
+        if (nowNull) {
+          parsedData[fd.key] = null;
+          statusEl.textContent = 'null';
+          statusEl.className = 'field-status null';
+        } else {
+          parsedData[fd.key] = newVal;
+          const changed = !wasNull && String(origVal) !== newVal;
+          const recovered = wasNull && newVal;
+          statusEl.textContent = (changed || recovered) ? '~' : '✓';
+          statusEl.className = 'field-status ' + ((changed || recovered) ? 'modified' : 'ok');
+        }
+        updateStats();
+      });
+
+      inputWrap.appendChild(inputEl);
+      row.appendChild(nameEl);
+      row.appendChild(inputWrap);
+      row.appendChild(statusEl);
+      section.appendChild(row);
+    });
+
+    container.appendChild(section);
+  });
+
+  updateStats();
+}
+
+function updateStats() {
+  let total=0, filled=0, nullCount=0, modified=0;
+  FIELD_GROUPS.forEach(g => g.fields.forEach(f => {
+    total++;
+    const val  = parsedData[f.key];
+    const orig = originalData[f.key];
+    const isNull = val === null || val === undefined || val === '';
+    if (!isNull) filled++; else nullCount++;
+    if (String(val) !== String(orig)) modified++;
+  }));
+  document.getElementById('statTotal').textContent    = total;
+  document.getElementById('statFilled').textContent   = filled;
+  document.getElementById('statNull').textContent     = nullCount;
+  document.getElementById('statModified').textContent = modified;
+}
+
+// ── Save ──────────────────────────────────────────────────────────────────────
+async function saveToDatabase() {
+  const banner = document.getElementById('statusBanner');
+  const btn    = document.getElementById('saveBtn');
+
+  banner.className = 'status-banner loading';
+  banner.innerHTML = '<span class="spinner"></span> Saving to database...';
+  btn.disabled = true;
+
+  const period = buildPeriodKey();
+  const payload = {
+    period,
+    fiscal_year:  document.getElementById('fiscalYear').value,
+    month_number: document.getElementById('monthNumber').value,
+    is_annual:    document.getElementById('isAnnual').value,
+  };
+
+  FIELD_GROUPS.forEach(g => g.fields.forEach(f => {
+    const val = parsedData[f.key];
+    payload[f.key] = (val === null || val === undefined || val === '') ? null : String(val);
+  }));
+
+  try {
+    const r = await fetch(`${API}/nrb/upsert`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const d = await r.json();
+    if (r.ok) {
+      banner.className = 'status-banner success';
+      banner.innerHTML = `✓ Saved: <strong>${period}</strong> — ${d.fields_written} fields written`;
+      existingPeriods = [...new Set([...existingPeriods, period])];
+      updatePeriodPreview();
+    } else throw new Error(d.detail || 'Unknown error');
+  } catch (e) {
+    banner.className = 'status-banner error';
+    banner.innerHTML = `✗ Failed: ${e.message}`;
+  }
+
+  btn.disabled = false;
+}
+
+// ── Clear ─────────────────────────────────────────────────────────────────────
+function clearAll() {
+  document.getElementById('jsonInput').value = '';
+  document.getElementById('jsonError').style.display = 'none';
+  document.getElementById('fieldsContainer').innerHTML = '<div class="empty-state">Paste JSON on the left and click Parse →</div>';
+  const b = document.getElementById('statusBanner');
+  b.className = 'status-banner'; b.style.display = 'none';
+  document.getElementById('saveBtn').disabled = true;
+  ['statTotal','statFilled','statNull'].forEach(id => document.getElementById(id).textContent = '—');
+  document.getElementById('statModified').textContent = '0';
+  parsedData = {}; originalData = {};
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+checkAPI();
+setInterval(checkAPI, 15000);
+updatePeriodPreview();
+</script>
+</body>
+</html>

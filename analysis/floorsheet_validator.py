@@ -20,7 +20,7 @@ Methodology — matches backtester.py standards:
   - Hard stop: -5% from entry (backtester uses -5% per new_backtester.py)
   - Trailing stop: activates at +6%, floor = peak - 3% (per handoff)
   - Forward windows: T+5, T+10, T+17 (research-validated hold days)
-  - Spearman correlation (not OLS — avoids multicollinearity)
+  - Spearman correlation (continuous) / point-biserial (binary)
   - FDR correction (Benjamini-Hochberg) across all tests
   - Bootstrap CI on Profit Factor (1000 iterations)
   - Fully vectorized — NumPy/Pandas only, no Python loops in hot paths
@@ -41,6 +41,7 @@ Run:
   python -m analysis.floorsheet_validator --signal vwap_dev
   python -m analysis.floorsheet_validator --symbol NABIL
   python -m analysis.floorsheet_validator --from 2024-01-01 --to 2026-04-01
+  python -m analysis.floorsheet_validator --save-enriched
 ═══════════════════════════════════════════════════════════════════════════════
 """
 
@@ -59,6 +60,14 @@ import pandas as pd
 from scipy import stats
 
 warnings.filterwarnings("ignore")
+
+# ── Optional progress bar ────────────────────────────────────────────────────
+try:
+    from tqdm import tqdm
+    HAS_TQDM = True
+except ImportError:
+    HAS_TQDM = False
+    tqdm = lambda x, **kwargs: x  # no-op fallback
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -93,7 +102,6 @@ TRAIL_FLOOR_PCT    = 0.03   # trails 3% below peak
 FORWARD_WINDOWS = [5, 10, 17]
 
 # ── Signal definitions ───────────────────────────────────────────────────────
-# (name, column, type, thresholds_to_test)
 SIGNALS = [
     {
         "name":       "vwap_dev",
@@ -137,20 +145,9 @@ SIGNALS = [
     },
 ]
 
-# ── NEPSE gazette holidays — matches backtester.py ───────────────────────────
-GAZETTE_HOLIDAYS = {
-    "2024-01-11", "2024-01-15", "2024-02-19", "2024-03-08", "2024-04-12",
-    "2024-05-01", "2024-05-10", "2024-05-23", "2024-07-04", "2024-08-07",
-    "2024-09-16", "2024-10-02", "2024-10-12", "2024-10-13", "2024-11-15",
-    "2024-12-25", "2023-01-11", "2023-02-20", "2023-03-08", "2023-04-13",
-    "2023-05-01", "2023-08-30", "2023-09-15", "2023-10-02", "2023-10-23",
-    "2023-10-24", "2023-11-14", "2023-12-25", "2025-01-11", "2025-02-19",
-    "2025-03-08", "2025-04-14", "2025-05-01", "2025-08-27", "2025-10-02",
-    "2025-10-23", "2025-11-05", "2025-12-25",
-    # 2026 estimated
-    "2026-01-11", "2026-02-19", "2026-04-14",
-}
-
+# ── Liquidity filter ─────────────────────────────────────────────────────────
+MIN_VOLUME_FILTER = 1000   # minimum total_volume to consider a signal
+MIN_TRADING_DAYS  = 50     # minimum number of trading days per symbol
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # SECTION 1 — DATA LOADING
@@ -205,6 +202,10 @@ def load_floorsheet_signals(from_date: str, to_date: str) -> pd.DataFrame:
     df["institutional_flag"] = (
         df["institutional_flag"].astype(str).str.lower().str.strip() == "true"
     )
+
+    # Apply liquidity filter
+    df = df[df["total_volume"] >= MIN_VOLUME_FILTER].copy()
+    log.info("After liquidity filter (volume>=%d): %d rows", MIN_VOLUME_FILTER, len(df))
 
     return df
 
@@ -359,10 +360,6 @@ def compute_forward_returns(
     date_to_idx = build_trading_date_index(trading_dates)
 
     # Build price lookup: {symbol → {date → (open, high, low, close)} }
-    # Use pivot for O(1) vectorized lookups
-    log.info("Building price lookup tables...")
-
-    # Pivot price_df to wide format per symbol
     price_by_sym = {}
     for sym, grp in price_df.groupby("symbol"):
         g = grp.set_index("date").sort_index()
@@ -372,7 +369,9 @@ def compute_forward_returns(
     symbols = signal_df["symbol"].unique()
     log.info("Computing forward returns for %d symbols...", len(symbols))
 
-    for sym in symbols:
+    # Use tqdm progress bar if available
+    iterator = tqdm(symbols, desc="Processing symbols") if HAS_TQDM else symbols
+    for sym in iterator:
         sig = signal_df[signal_df["symbol"] == sym].copy()
         if sym not in price_by_sym:
             continue
@@ -512,6 +511,7 @@ def test_signal(
     Test one signal across all its thresholds.
     Returns list of result dicts (one per threshold × window).
     Fully vectorized using numpy boolean masks.
+    Uses Spearman for continuous signals, point‑biserial for binary.
     """
     name      = signal_def["name"]
     col       = signal_def["col"]
@@ -598,15 +598,19 @@ def test_signal(
             stop_rate = float(signal_rows[stp_col].dropna().mean()) \
                         if stp_col in signal_rows.columns else 0.0
 
-            # ── Spearman correlation — signal value vs forward return ─────────
-            if sig_type != "binary" and n_sig >= 10:
+            # ── Correlation: Spearman for continuous, point‑biserial for binary ─
+            if n_sig >= 10:
                 sig_vals = signal_rows[col].values
-                valid    = ~np.isnan(sig_vals) & ~np.isnan(signal_rows[ret_col].values)
+                ret_vals = signal_rows[ret_col].values
+                valid    = ~np.isnan(sig_vals) & ~np.isnan(ret_vals)
                 if valid.sum() >= 10:
-                    rho, p_val = stats.spearmanr(
-                        sig_vals[valid],
-                        signal_rows[ret_col].values[valid]
-                    )
+                    if sig_type == "binary":
+                        # Convert boolean to 0/1 for point‑biserial
+                        x = sig_vals[valid].astype(float)
+                        y = ret_vals[valid]
+                        rho, p_val = stats.pointbiserialr(x, y)
+                    else:
+                        rho, p_val = stats.spearmanr(sig_vals[valid], ret_vals[valid])
                 else:
                     rho, p_val = 0.0, 1.0
             else:
@@ -657,8 +661,8 @@ def test_signal(
                 "avg_net_ret_pct": round(avg_ret, 4),
                 "std_net_ret_pct": round(std_ret, 4),
                 "stop_hit_rate":   round(stop_rate, 4),
-                "spearman_rho":    round(rho, 4),
-                "spearman_p":      round(p_val, 6),
+                "correlation":     round(rho, 4),
+                "corr_p":          round(p_val, 6),
                 "mw_stat":         round(float(mw_stat), 2),
                 "mw_p":            round(mw_p, 6),
                 "baseline_wr":     round(base_wr, 4),
@@ -668,7 +672,7 @@ def test_signal(
                 "passes_pf":       pf >= 1.5,
                 "passes_n":        n_sig >= min_trades,
                 "passes_mw":       mw_p <= 0.05,
-                "passes_spearman": abs(rho) >= 0.05 and p_val <= 0.05,
+                "passes_corr":     (abs(rho) >= 0.05 and p_val <= 0.05) if sig_type != "binary" else (rho > 0 and p_val <= 0.05),
                 "survivor":        (pf >= 1.5 and n_sig >= min_trades and mw_p <= 0.05),
             })
 
@@ -716,7 +720,7 @@ def apply_fdr_correction(all_results: list[dict]) -> list[dict]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SECTION 7 — SPEARMAN CORRELATION MATRIX
+# SECTION 7 — CORRELATION MATRIX (Spearman + point-biserial)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def compute_correlation_matrix(
@@ -724,8 +728,9 @@ def compute_correlation_matrix(
     windows: list[int] = FORWARD_WINDOWS,
 ) -> pd.DataFrame:
     """
-    Compute Spearman correlation matrix between all floorsheet signals
+    Compute correlation matrix between all floorsheet signals
     and all forward return windows.
+    Uses Spearman for continuous, point‑biserial for binary.
     Saves to spearman_correlations.csv.
     """
     signal_cols = [
@@ -749,10 +754,15 @@ def compute_correlation_matrix(
     corr_data = []
     for sc in avail_sig:
         row = {"signal": sc}
+        # Determine if binary
+        is_binary = (sc == "institutional_flag")
         for rc in avail_ret:
             valid = enriched_df[[sc, rc]].dropna()
             if len(valid) >= 10:
-                rho, p = stats.spearmanr(valid[sc], valid[rc])
+                if is_binary:
+                    rho, p = stats.pointbiserialr(valid[sc], valid[rc])
+                else:
+                    rho, p = stats.spearmanr(valid[sc], valid[rc])
                 row[f"rho_{rc}"]  = round(rho, 4)
                 row[f"p_{rc}"]    = round(p, 6)
                 row[f"sig_{rc}"]  = "✓" if p <= 0.05 else ""
@@ -831,9 +841,10 @@ def write_summary(
         f.write("  Fees:       tiered NEPSE brokerage + SEBON 0.015% + DP NPR 25\n")
         f.write("  CGT:        7.5% on profit only (applied at sell)\n")
         f.write("  Windows:    T+5, T+10, T+17 trading days\n")
-        f.write("  Stats:      Spearman rho + Mann-Whitney U + Bootstrap CI(PF)\n")
+        f.write("  Stats:      Spearman (continuous) / point‑biserial (binary) + Mann‑Whitney U + Bootstrap CI(PF)\n")
         f.write("  FDR:        Benjamini-Hochberg correction (q=0.05)\n")
-        f.write("  Survivor:   PF≥1.5 + n≥30 + MW p≤0.05 + FDR adjusted p≤0.05\n\n")
+        f.write("  Survivor:   PF≥1.5 + n≥30 + MW p≤0.05 + FDR adjusted p≤0.05\n")
+        f.write("  Liquidity:  total_volume ≥ 1000, min 50 trading days per symbol\n\n")
 
         f.write("SIGNAL DEFINITIONS\n")
         f.write("-" * 80 + "\n")
@@ -846,7 +857,7 @@ def write_summary(
         if survivors:
             f.write(f"  {'Signal':<22} {'Thresh':<8} {'Win':<5} {'WR%':>6} "
                     f"{'PF':>6} {'PF_lo':>6} {'PF_hi':>6} "
-                    f"{'AvgRet%':>8} {'rho':>6} {'mw_p':>8} {'fdr_p':>8}\n")
+                    f"{'AvgRet%':>8} {'corr':>6} {'mw_p':>8} {'fdr_p':>8}\n")
             f.write("  " + "-" * 78 + "\n")
             for r in sorted(survivors, key=lambda x: x["profit_factor"], reverse=True):
                 f.write(
@@ -857,7 +868,7 @@ def write_summary(
                     f"{str(r.get('pf_ci_lower','?'))[:6]:>6} "
                     f"{str(r.get('pf_ci_upper','?'))[:6]:>6} "
                     f"{r['avg_net_ret_pct']:>8.2f} "
-                    f"{r['spearman_rho']:>6.3f} "
+                    f"{r['correlation']:>6.3f} "
                     f"{r['mw_p']:>8.4f} "
                     f"{r['fdr_adjusted_p']:>8.4f}\n"
                 )
@@ -896,14 +907,14 @@ def write_summary(
             f.write(f"    N signals:       {best['n_signals']}\n")
             f.write(f"    Avg net return:  {best['avg_net_ret_pct']:.2f}%\n")
             f.write(f"    Stop hit rate:   {best['stop_hit_rate']*100:.1f}%\n")
-            f.write(f"    Spearman rho:    {best['spearman_rho']:.4f} (p={best['spearman_p']:.4f})\n")
+            f.write(f"    Correlation:     {best['correlation']:.4f} (p={best['corr_p']:.4f})\n")
             f.write(f"    Mann-Whitney p:  {best['mw_p']:.4f}\n")
             f.write(f"    FDR adjusted p:  {best.get('fdr_adjusted_p', '?')}\n")
             f.write(f"    FDR survivor:    {'YES ✓' if best.get('fdr_survivor') else 'NO'}\n")
             f.write(f"    Edge vs baseline:{best['edge_vs_baseline']:+.2f}% avg net return\n")
 
         f.write("\n\n")
-        f.write("SPEARMAN CORRELATION MATRIX\n")
+        f.write("CORRELATION MATRIX (Spearman for continuous, point‑biserial for binary)\n")
         f.write("-" * 80 + "\n")
         if not corr_df.empty:
             f.write(corr_df.to_string(index=False))
@@ -948,6 +959,7 @@ def run_validation(
     min_trades:     int   = 30,
     bootstrap_iter: int   = 1000,
     windows:        list  = FORWARD_WINDOWS,
+    save_enriched:  bool  = False,
 ) -> dict:
     import time
     t0 = time.time()
@@ -984,10 +996,28 @@ def run_validation(
         return {}
 
     # ── 3. Merge LTP into floorsheet for vwap_dev computation ────────────────
-    # Use EOD close as LTP proxy
+    # Use EOD close as LTP proxy (note: potential intraday vs close mismatch)
     eod_price = price_df[["symbol", "date", "close"]].copy()
     eod_price.columns = ["symbol", "date", "ltp"]
     fs_df = fs_df.merge(eod_price, on=["symbol", "date"], how="left")
+
+    # Warn about missing LTPs
+    missing_ltp = fs_df["ltp"].isna().sum()
+    if missing_ltp > 0:
+        log.warning("Missing LTP for %d rows (%.1f%%) — will be dropped from vwap_dev tests",
+                    missing_ltp, 100 * missing_ltp / len(fs_df))
+
+    # Filter symbols with insufficient trading days
+    sym_days = price_df.groupby("symbol")["date"].nunique()
+    valid_symbols = sym_days[sym_days >= MIN_TRADING_DAYS].index.tolist()
+    before = len(fs_df)
+    fs_df = fs_df[fs_df["symbol"].isin(valid_symbols)].copy()
+    log.info("Kept %d/%d rows after filtering symbols with < %d trading days",
+             len(fs_df), before, MIN_TRADING_DAYS)
+
+    if fs_df.empty:
+        log.error("No symbols passed minimum trading days filter")
+        return {}
 
     trading_dates = get_all_trading_dates(price_df)
     log.info("Trading dates: %d", len(trading_dates))
@@ -1002,6 +1032,12 @@ def run_validation(
 
     log.info("Enriched dataset: %d rows, %d symbols",
              len(enriched_df), enriched_df["symbol"].nunique())
+
+    # Optionally save enriched DataFrame for debugging
+    if save_enriched:
+        enriched_path = RESULTS_DIR / "enriched_data.parquet"
+        enriched_df.to_parquet(enriched_path, index=False)
+        log.info("Saved enriched data to %s", enriched_path)
 
     # ── 5. Save enriched to parquet for worker processes ─────────────────────
     tmp_path = RESULTS_DIR / "_enriched_tmp.parquet"
@@ -1132,6 +1168,8 @@ if __name__ == "__main__":
                         help="Single symbol for quick test (e.g. NABIL)")
     parser.add_argument("--min-trades", type=int, default=30)
     parser.add_argument("--bootstrap",  type=int, default=1000)
+    parser.add_argument("--save-enriched", action="store_true",
+                        help="Save enriched DataFrame to parquet for debugging")
     args = parser.parse_args()
 
     run_validation(
@@ -1141,4 +1179,5 @@ if __name__ == "__main__":
         symbol_filter  = args.symbol,
         min_trades     = args.min_trades,
         bootstrap_iter = args.bootstrap,
+        save_enriched  = args.save_enriched,
     )
