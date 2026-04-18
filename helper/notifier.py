@@ -278,11 +278,11 @@ def _format_buy_signal(result) -> str:
         f"⏳ Hold:        ~{result.suggested_hold} days",
         f"",
         f"🧠 *Reasoning:*",
-        f"_{result.reasoning[:300]}_",
+        f"_{result.reasoning[:1000]}_",
     ]
 
     if result.lesson_applied and result.lesson_applied not in ("NONE", "", "none"):
-        lines.append(f"\n📚 *Lesson:* _{result.lesson_applied[:120]}_")
+        lines.append(f"\n📚 *Lesson:* _{result.lesson_applied[:300]}_")
 
     lines.append(sep)
     lines.append(f"🕒 {nst_now.strftime('%H:%M NST')}")
