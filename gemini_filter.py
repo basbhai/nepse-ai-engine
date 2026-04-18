@@ -89,6 +89,7 @@ def flush_near_misses_to_db() -> None:
                     "tech_score":               str(m.tech_score),
                     "conf_score":               str(m.conf_score),
                     "composite_score_would_be": str(m.composite_score_would_be),
+                    "volume_os_ratio":          str(m.volume_os_ratio) if hasattr(m, "volume_os_ratio") else "0",
                     "outcome":                  None,
                     "tracking_days":            "0",
                 },
@@ -167,6 +168,7 @@ class GeminiFlag:
     vwap_dev:         float      = 0.0
     bid_ask_ratio:    float      = 0.0
     dpr_proximity:    float      = 0.0
+    volume_os_ratio:  float      = 0.0
 
     timestamp: str = field(default_factory=lambda:
                     datetime.now(tz=NST).strftime("%Y-%m-%d %H:%M:%S"))
@@ -270,7 +272,8 @@ def _build_prompt(
         f"{i+1}. {format_candidate_for_gemini(c)} "
         f"VWAPD={getattr(c, 'vwap_dev', 0.0):+.1f}% "
         f"BAR={getattr(c, 'bid_ask_ratio', 0.0):.2f} "
-        f"DPRP={getattr(c, 'dpr_proximity', 0.0):.2f}"
+        f"DPRP={getattr(c, 'dpr_proximity', 0.0):.2f} "
+        f"VOS={getattr(c, 'volume_os_ratio', 0.0):.2f}%OS"
         for i, c in enumerate(candidates[:MAX_CANDIDATES_TO_GEMINI])
     )
 
@@ -309,7 +312,7 @@ Field key: SYM=symbol SEC=sector LTP=price CHG=daily% VOL=volume
 SCORE=composite TECH=tech_score RSI=rsi[signal] MACD=cross
 BB=signal[pct_b] EMA=trend OBV=trend ATR%=volatility CONF=sharesansar
 CANDLE=pattern CSTAR=C*signal HOLD=optimal_days SIG=primary_signal
-VWAPD=vwap_dev% BAR=bid_ask_ratio DPRP=dpr_proximity
+VWAPD=vwap_dev% BAR=bid_ask_ratio DPRP=dpr_proximity VOS=vol_pct_of_outstanding_shares
 
 {candidates_str}
 
@@ -330,10 +333,12 @@ SCREENING RULES (apply in order)
 10. FLAG max {MAX_FLAGS_FOR_CLAUDE} stocks — quality over quantity
 11. If no stock is genuinely worth Claude analysis today, return empty flags
 12. search internet for potiential favourable or unfavourable news/conditions (must be creditable and renouned sources)
-13. APPLY LAGGARD LOGIC: 
+13. APPLY LAGGARD LOGIC:
     - Identify the 'Sector Leader' (highest % CHG and VOL in sector).
-    - If a candidate is in the same sector, has a lower RSI, but VOL > 1.5x avg, 
+    - If a candidate is in the same sector, has a lower RSI, but VOL > 1.5x avg,
       UPGRADE to 'ANALYZE'. This is a 'Catch-up Play'.
+14. UPGRADE to URGENT if VOS > 1.0% AND primary_signal is LAGGARD_PLAY or VOLUME_BREAKOUT
+    (smart money / operator accumulation detected)
 
 ═══════════════════════════════════════
 TASK
@@ -513,9 +518,10 @@ def _assemble_flags(
             fundamental_adj  = c.fundamental_adj,
             fundamental_reason = c.fundamental_reason,
 
-            vwap_dev       = float(getattr(c, "vwap_dev",       0.0) or 0.0),
-            bid_ask_ratio  = float(getattr(c, "bid_ask_ratio",  0.0) or 0.0),
-            dpr_proximity  = float(getattr(c, "dpr_proximity",  0.0) or 0.0),
+            vwap_dev        = float(getattr(c, "vwap_dev",        0.0) or 0.0),
+            bid_ask_ratio   = float(getattr(c, "bid_ask_ratio",   0.0) or 0.0),
+            dpr_proximity   = float(getattr(c, "dpr_proximity",   0.0) or 0.0),
+            volume_os_ratio = float(getattr(c, "volume_os_ratio", 0.0) or 0.0),
         ))
 
     return flags
@@ -579,9 +585,10 @@ def _write_log(
                 "rsi_14":         str(flag.rsi_14),
                 "candle_pattern": flag.best_candle,
                 "timestamp":      flag.timestamp,
-                "vwap_dev":       str(flag.vwap_dev),
-                "bid_ask_ratio":  str(flag.bid_ask_ratio),
-                "dpr_proximity":  str(flag.dpr_proximity),
+                "vwap_dev":        str(flag.vwap_dev),
+                "bid_ask_ratio":   str(flag.bid_ask_ratio),
+                "dpr_proximity":   str(flag.dpr_proximity),
+                "volume_os_ratio": str(flag.volume_os_ratio),
             })
 
             rows = run_raw_sql(
@@ -680,15 +687,16 @@ def run_gemini_filter(
     )
 
     gemini_result = ask_gemini_json(
-    prompt,
-    system  = (
-        "You are a Nepal stock market screening AI. "
-        "You understand NEPSE trading patterns, Nepal macro context, "
-        "and the research-backed signal weights being used. "
-        "You return only valid JSON — no markdown, no fences, no explanation."
-    ),
-    context = "gemini_filter",
-)
+        prompt,
+        system  = (
+            "You are a Nepal stock market screening AI. "
+            "You understand NEPSE trading patterns, Nepal macro context, "
+            "and the research-backed signal weights being used. "
+            "You return only valid JSON — no markdown, no fences, no explanation."
+        ),
+        context    = "gemini_filter",
+        use_search = True,
+    )
 
     if gemini_result is None:
         logger.warning("Gemini unavailable — skipping Claude this cycle, no fallback")
@@ -823,8 +831,9 @@ if __name__ == "__main__":
                 "and the research-backed signal weights being used. "
                 "You return only valid JSON — no markdown, no fences, no explanation."
             ),
-            context = "gemini_filter",
-            )
+            context    = "gemini_filter",
+            use_search = True,
+        )
         if gemini_result is None:
             print("  ⚠️  Gemini unavailable — no fallback, exiting")
             sys.exit(0)

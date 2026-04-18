@@ -153,6 +153,9 @@ DEFAULT_TECH_THRESHOLD = 58
 MIN_CONF_SCORE   = 35
 MIN_HISTORY_DAYS = 20
 
+# Volume/OS ratio soft gate — below this = truly dead stock, not worth trading
+MIN_VOS_PCT = 0.05
+
 # Optimal hold days — Karki et al. 2023
 OPTIMAL_HOLD_DAYS = {
     "macd":       17,
@@ -239,6 +242,7 @@ class FilterCandidate:
     vwap_dev:         float = 0.0
     bid_ask_ratio:    float = 0.0
     dpr_proximity:    float = 0.0
+    volume_os_ratio:  float = 0.0
 
     timestamp: str = field(default_factory=lambda:
                     datetime.now(tz=NST).strftime("%Y-%m-%d %H:%M:%S"))
@@ -270,6 +274,7 @@ class NearMiss:
     tech_score:               int   = 0
     conf_score:               float = 0.0
     composite_score_would_be: float = 0.0
+    volume_os_ratio:          float = 0.0
 
 
 def _categorize_gate_reason(reason: str) -> str:
@@ -281,6 +286,7 @@ def _categorize_gate_reason(reason: str) -> str:
     if r.startswith("HISTORY="):        return "HISTORY"
     if "MUTUAL_FUND" in r:              return "MUTUAL_FUND"
     if "NON_EQUITY" in r:               return "NON_EQUITY"
+    if "VOS=" in r and "<" in r:        return "ILLIQUID"
     return "OTHER"
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 1 — CONTEXT LOADER
@@ -985,10 +991,28 @@ def _get_fundamental_adj(
     return round(adj, 2), reason_str
  
 
+def _compute_vos_adj(vos: float) -> float:
+    """
+    Score adjustment based on volume/outstanding-shares ratio.
+    Additive to composite score — not multiplicative.
+    Range: -1.0 to +4.0
+    """
+    if vos <= 0:
+        return 0.0        # no OS data — neutral, don't penalise
+    elif vos < 0.3:
+        return -1.0       # thin liquidity — mild penalty
+    elif vos < 1.0:
+        return 0.0        # normal — neutral
+    elif vos < 3.0:
+        return +2.0       # high — smart money possible
+    else:
+        return +4.0       # exceptional — operator/institutional signal
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 6 — COMPOSITE SCORE
 # ══════════════════════════════════════════════════════════════════════════════
- 
+
 def _compute_composite_score(
     indicator_score: float,
     sector_mult:     float,
@@ -997,7 +1021,8 @@ def _compute_composite_score(
     conf_score:      float,
     geo_combined:    int,
     ipo_drain:       str,
-    fundamental_adj: float = 0.0,   # ← NEW PARAMETER (safe default = no effect)
+    fundamental_adj: float = 0.0,
+    vos_adj:         float = 0.0,   # volume/OS ratio adjustment
 ) -> float:
     """
     Final composite score for candidate ranking.
@@ -1028,7 +1053,8 @@ def _compute_composite_score(
         geo_adj = -5.0
  
     return round(
-        max(0.0, base + candle_bonus + cstar_b + conf_bonus + geo_adj + ipo_pen + fundamental_adj),
+        max(0.0, base + candle_bonus + cstar_b + conf_bonus
+                 + geo_adj + ipo_pen + fundamental_adj + vos_adj),
         2,
     )
  
@@ -1138,6 +1164,14 @@ def run_filter(
 
         processed += 1
 
+        # ── VOS computation — before sym_ok so it's available for NearMiss ──
+        fund_data  = fund_map.get(sym, {})
+        paidup     = float(fund_data.get("paidup_capital") or 0)
+        os_shares  = paidup / 100.0 if paidup > 0 else 0.0
+        volume_val = float(getattr(price_row, "volume", 0) or 0)
+        volume_os_ratio = round((volume_val / os_shares * 100), 4) if os_shares > 0 else 0.0
+        logger.debug("VOS: %s vol=%.0f os=%.0f ratio=%.3f%%", sym, volume_val, os_shares, volume_os_ratio)
+
         sym_ok, sym_reason = _check_symbol_gates(sym, ind, price_row, ctx)
         if not sym_ok:
             skipped_gate += 1
@@ -1153,7 +1187,8 @@ def run_filter(
                 market_state             = ctx["market_state"],
                 tech_score               = int(ind.get("tech_score", 0) or 0),
                 conf_score               = float(getattr(price_row, "conf_score", 0) or 0),
-                composite_score_would_be = 0.0,  # not computed — gates fired before scoring
+                composite_score_would_be = 0.0,
+                volume_os_ratio          = volume_os_ratio,
             ))
             continue
 
@@ -1163,15 +1198,37 @@ def run_filter(
             logger.debug("GATE: %s — NON_EQUITY_BY_BETA", sym)
             ltp = float(getattr(price_row, "ltp", 0) or getattr(price_row, "close", 0) or 0)
             _last_near_misses.append(NearMiss(
-                symbol        = sym,
-                sector        = sector_map.get(sym, "others"),
-                date          = date,
-                gate_reason   = "NON_EQUITY_BY_BETA",
-                gate_category = "NON_EQUITY",
-                price_at_block= ltp,
-                market_state  = ctx["market_state"],
-                tech_score    = int(ind.get("tech_score", 0) or 0),
-                conf_score    = float(getattr(price_row, "conf_score", 0) or 0),
+                symbol          = sym,
+                sector          = sector_map.get(sym, "others"),
+                date            = date,
+                gate_reason     = "NON_EQUITY_BY_BETA",
+                gate_category   = "NON_EQUITY",
+                price_at_block  = ltp,
+                market_state    = ctx["market_state"],
+                tech_score      = int(ind.get("tech_score", 0) or 0),
+                conf_score      = float(getattr(price_row, "conf_score", 0) or 0),
+                volume_os_ratio = volume_os_ratio,
+            ))
+            continue
+
+        # ── VOS soft gate: truly dead stock ──────────────────────────────────
+        if volume_os_ratio < MIN_VOS_PCT and os_shares > 0:
+            skipped_gate += 1
+            gate_reason = f"VOS={volume_os_ratio:.3f}%<{MIN_VOS_PCT}%"
+            logger.debug("GATE: %s — %s", sym, gate_reason)
+            ltp = float(getattr(price_row, "ltp", 0) or getattr(price_row, "close", 0) or 0)
+            _last_near_misses.append(NearMiss(
+                symbol                   = sym,
+                sector                   = sector_map.get(sym, "others"),
+                date                     = date,
+                gate_reason              = gate_reason,
+                gate_category            = "ILLIQUID",
+                price_at_block           = ltp,
+                market_state             = ctx["market_state"],
+                tech_score               = int(ind.get("tech_score", 0) or 0),
+                conf_score               = float(getattr(price_row, "conf_score", 0) or 0),
+                composite_score_would_be = 0.0,
+                volume_os_ratio          = volume_os_ratio,
             ))
             continue
 
@@ -1190,6 +1247,10 @@ def run_filter(
         fund_adj, fund_reason = _get_fundamental_adj(sym, sector, fund_map, beta_map)
         logger.debug("FUND: %s adj=%.2f [%s]", sym, fund_adj, fund_reason)
 
+        # ── VOS scoring adjustment ────────────────────────────────────────────
+        vos_adj = _compute_vos_adj(volume_os_ratio)
+        logger.debug("VOS_ADJ: %s vos=%.3f%% adj=%+.1f", sym, volume_os_ratio, vos_adj)
+
         composite = _compute_composite_score(
             indicator_score = ind_score,
             sector_mult     = sect_mult,
@@ -1199,7 +1260,9 @@ def run_filter(
             geo_combined    = ctx["combined_geo"],
             ipo_drain       = ctx["ipo_drain"],
             fundamental_adj = fund_adj,
+            vos_adj         = vos_adj,
         )
+        logger.debug("VOS_ADJ: %s composite=%.1f", sym, composite)
 
         candidates.append(FilterCandidate(
             symbol           = sym,
@@ -1257,9 +1320,10 @@ def run_filter(
             fundamental_adj    = fund_adj,
             fundamental_reason = fund_reason,
 
-            vwap_dev       = float(getattr(price_row, "vwap_dev",       0) or 0),
-            bid_ask_ratio  = float(getattr(price_row, "bid_ask_ratio",  0) or 0),
-            dpr_proximity  = float(getattr(price_row, "dpr_proximity",  0) or 0),
+            vwap_dev        = float(getattr(price_row, "vwap_dev",       0) or 0),
+            bid_ask_ratio   = float(getattr(price_row, "bid_ask_ratio",  0) or 0),
+            dpr_proximity   = float(getattr(price_row, "dpr_proximity",  0) or 0),
+            volume_os_ratio = volume_os_ratio,
         ))
 
     # ── Rank and trim ─────────────────────────────────────────────────────────

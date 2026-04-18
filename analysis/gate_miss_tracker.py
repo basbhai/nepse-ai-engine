@@ -66,6 +66,7 @@ TRACKABLE_CATEGORIES = {
     "RSI_OVERBOUGHT",
     "RSI_NO_CONFIRM",
     "HISTORY",
+    "ILLIQUID",
 }
 
 # Minimum sample size before a proposal is surfaced
@@ -539,6 +540,7 @@ def get_summary_for_gpt(days: int = 90) -> dict:
         "RSI_OVERBOUGHT": "RSI_OVERBOUGHT_THRESHOLD",
         "RSI_NO_CONFIRM": "RSI_CONFIRM_REQUIRED",
         "HISTORY":        "MIN_HISTORY_DAYS",
+        "ILLIQUID":       "MIN_VOS_PCT",
     }
 
     # Current threshold values (read from settings for context)
@@ -548,6 +550,7 @@ def get_summary_for_gpt(days: int = 90) -> dict:
         "RSI_OVERBOUGHT_THRESHOLD": 75,
         "RSI_CONFIRM_REQUIRED":     "MACD or BB required",
         "MIN_HISTORY_DAYS":         20,
+        "MIN_VOS_PCT":              0.05,
     }
 
     for cat, stats in by_category.items():
@@ -652,6 +655,13 @@ def _suggest_adjustment(
 
     if category == "HISTORY":
         return "15 (lower from 20 — newer listings being excluded)"
+
+    if category == "ILLIQUID":
+        try:
+            curr = float(current)
+            return str(round(max(0.01, curr * 0.5), 3))  # halve the floor
+        except (ValueError, TypeError):
+            return "0.02"
 
     return f"Loosen slightly (current: {current})"
 

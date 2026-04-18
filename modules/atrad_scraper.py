@@ -189,8 +189,6 @@ def fetch_market_watch(write_db: bool = True) -> pd.DataFrame:
                 df[col] = 0.0
 
         df = df.loc[:, ~df.columns.duplicated()]
-        print("Duplicate cols:", df.columns[df.columns.duplicated()].tolist())
-        print("Col types:", {c: type(df[c]) for c in num_cols if c in df.columns})
 
         # ── Derived signals ───────────────────────────────────────────────
         ltp      = df["ltp"].to_numpy()

@@ -6,7 +6,9 @@
       "Bash(grep -n \"from dotenv import load_dotenv\\\\|load_dotenv\\(\\)\" /f/project/nepse_ai/**/*.py)",
       "Bash(find /f/project/nepse_ai -name \"*.py\" -not -path \"*/nepse_env/*\" -exec grep -l \"from dotenv import load_dotenv\" {} \\\\;)",
       "Bash(nepse_env/Scripts/python.exe -c ':*)",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(python -m db.codegen)",
+      "Bash(python -m db.migrations)"
     ]
   }
 }
