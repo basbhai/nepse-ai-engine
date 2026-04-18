@@ -41,6 +41,7 @@ from bs4 import BeautifulSoup
 
 # Internal imports
 from modules.tms_scraper import get_session, fetch_top25, fetch_indices, dashboard_headers
+from modules import atrad_scraper
 from config import NST, BROWSER_USER_AGENT
 
 logger = logging.getLogger(__name__)
@@ -88,6 +89,9 @@ class PriceRow:
     turnover:      float = 0.0       # NPR
     transactions:  int   = 0
     vwap:          float = 0.0
+    vwap_dev:      float = 0.0       # % deviation of LTP from VWAP
+    bid_ask_ratio: float = 0.0       # bid_qty / (bid_qty + ask_qty)
+    dpr_proximity: float = 0.0       # 0.0=near low DPR, 1.0=near high DPR
     high_52w:      float = 0.0
     low_52w:       float = 0.0
     avg_120d:      float = 0.0       # 120-day average price
@@ -649,36 +653,70 @@ def write_market_breadth(breadth: dict) -> bool:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MAIN PUBLIC API
+# MAIN PUBLIC API — helpers
 # ══════════════════════════════════════════════════════════════════════════════
-def get_all_market_data(
-    write_breadth: bool = True,
-    ss_fallback_ok: bool = True,
-) -> dict[str, PriceRow]:
 
-    # Step 1: Live prices from ShareSansar (fast, no login)
+def _fetch_conf_scores() -> dict[str, dict]:
+    """Fetch ShareSansar conf scores + 120d/180d/52W for ATrad symbol enrichment."""
+    return fetch_sharesansar_data()
+
+
+def _build_from_atrad(df) -> dict[str, PriceRow]:
+    """Build PriceRow dict from ATrad fullWatch DataFrame."""
+    prices: dict[str, PriceRow] = {}
+    for record in df.to_dict(orient="records"):
+        symbol = str(record.get("symbol", "")).strip().upper()
+        if not symbol:
+            continue
+        ltp        = _safe_float(record.get("ltp", 0))
+        net_change = _safe_float(record.get("net_change", 0))
+        prev_close = round(ltp - net_change, 2) if ltp else 0.0
+        # ATrad vwap_dev is a fraction (e.g. 0.023); convert to percent for PriceRow
+        vwap_dev_pct = round(_safe_float(record.get("vwap_dev", 0)) * 100, 4)
+        prices[symbol] = PriceRow(
+            symbol        = symbol,
+            ltp           = ltp,
+            open_price    = _safe_float(record.get("open", 0)),
+            high          = _safe_float(record.get("high", 0)),
+            low           = _safe_float(record.get("low", 0)),
+            close         = ltp,
+            prev_close    = prev_close,
+            change        = net_change,
+            change_pct    = _safe_float(record.get("pct_change", 0)),
+            volume        = _safe_int(record.get("volume", 0)),
+            turnover      = _safe_float(record.get("turnover", 0)),
+            transactions  = _safe_int(record.get("total_trades", 0)),
+            vwap          = _safe_float(record.get("vwap", 0)),
+            vwap_dev      = vwap_dev_pct,
+            bid_ask_ratio = _safe_float(record.get("bid_ask_ratio", 0)),
+            dpr_proximity = _safe_float(record.get("dpr_proximity", 0)),
+            source        = "atrad",
+        )
+    return prices
+
+
+def _fetch_sharesansar_full(write_breadth: bool = True) -> dict[str, PriceRow]:
+    """ShareSansar full scrape — fallback when ATrad is unavailable."""
     live_data = fetch_live_trading()
     if not live_data:
         logger.error("ShareSansar live-trading returned no data")
         return {}
 
-    # Step 2: Conf scores + 120d/180d/52W from today-share-price
     ss_data = fetch_sharesansar_data()
 
-    # Step 3: Enrich live prices with conf scores
     for symbol, row in live_data.items():
         ss = ss_data.get(symbol, {})
         if ss:
-            row.conf_score  = ss.get("conf_score", 0.0)
-            row.conf_signal = _conf_signal(row.conf_score)
-            row.avg_120d    = ss.get("avg_120d", 0.0)
-            row.avg_180d    = ss.get("avg_180d", 0.0)
-            row.high_52w    = ss.get("high_52w", 0.0)
-            row.low_52w     = ss.get("low_52w", 0.0)
-            row.turnover    = ss.get("turnover", 0.0)
-            row.transactions= ss.get("transactions", 0)
-            row.vwap        = ss.get("vwap", 0.0)
-            row.source      = "ss_merged"
+            row.conf_score   = ss.get("conf_score", 0.0)
+            row.conf_signal  = _conf_signal(row.conf_score)
+            row.avg_120d     = ss.get("avg_120d", 0.0)
+            row.avg_180d     = ss.get("avg_180d", 0.0)
+            row.high_52w     = ss.get("high_52w", 0.0)
+            row.low_52w      = ss.get("low_52w", 0.0)
+            row.turnover     = ss.get("turnover", 0.0)
+            row.transactions = ss.get("transactions", 0)
+            row.vwap         = ss.get("vwap", 0.0)
+            row.source       = "ss_merged"
         else:
             row.conf_signal = "NEUTRAL"
 
@@ -686,8 +724,62 @@ def get_all_market_data(
         breadth = compute_market_breadth(live_data, [])
         write_market_breadth(breadth)
 
-    logger.info("scraper: %d symbols | source=sharesansar_only", len(live_data))
+    logger.info("scraper: %d symbols | source=sharesansar_fallback", len(live_data))
     return live_data
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MAIN PUBLIC API
+# ══════════════════════════════════════════════════════════════════════════════
+def get_all_market_data(
+    write_breadth: bool = True,
+    ss_fallback_ok: bool = True,
+) -> dict[str, PriceRow]:
+
+    # Step 1: ATrad fullWatch — primary live price source (542 symbols)
+    # write_db=True inside atrad_scraper.run() handles atrad_market_watch writes
+    atrad_df = None
+    try:
+        atrad_df = atrad_scraper.run()
+    except Exception as exc:
+        logger.warning("ATrad scraper failed: %s — will try ShareSansar fallback", exc)
+
+    if atrad_df is not None and not atrad_df.empty:
+        market_data = _build_from_atrad(atrad_df)
+
+        # Step 2: ShareSansar conf scores — EOD enrichment only
+        # Not all 542 ATrad symbols appear in ShareSansar — missing ones keep conf_score=0.0
+        try:
+            conf_data = _fetch_conf_scores()
+            for symbol, row in market_data.items():
+                ss = conf_data.get(symbol, {})
+                if ss:
+                    row.conf_score  = ss.get("conf_score", 0.0)
+                    row.conf_signal = _conf_signal(row.conf_score)
+                    row.avg_120d    = ss.get("avg_120d", 0.0)
+                    row.avg_180d    = ss.get("avg_180d", 0.0)
+                    row.high_52w    = ss.get("high_52w", 0.0)
+                    row.low_52w     = ss.get("low_52w", 0.0)
+                    row.source      = "atrad_merged"
+                # symbols missing from ShareSansar: conf_score stays 0.0, conf_signal stays "NEUTRAL"
+        except Exception as exc:
+            logger.warning("Conf score fetch failed (non-fatal): %s", exc)
+
+        # Step 3: Market breadth computed from ATrad data
+        if write_breadth and market_data:
+            breadth = compute_market_breadth(market_data, [])
+            write_market_breadth(breadth)
+
+        logger.info("scraper: %d symbols | source=atrad", len(market_data))
+        return market_data
+
+    # Fallback: full ShareSansar scrape
+    if ss_fallback_ok:
+        logger.warning("ATrad returned no data — falling back to ShareSansar full scrape")
+        return _fetch_sharesansar_full(write_breadth=write_breadth)
+
+    logger.error("All data sources failed")
+    return {}
 
 def get_watchlist_data(symbols: list[str]) -> dict[str, PriceRow]:
     """

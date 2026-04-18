@@ -14,7 +14,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
-from sheets import write_row
+from sheets import write_row, upsert_row
 from config import NST
 
 load_dotenv()
@@ -238,9 +238,12 @@ def _write_market_watch(df: pd.DataFrame, now_nst: datetime) -> None:
     existing = [c for c in keep_cols if c in df.columns]
     rows = df[existing].astype(str).to_dict(orient="records")
 
+    fallback_time = now_nst.strftime("%H:%M:%S")
     for row in rows:
+        if not row.get("time"):
+            row["time"] = fallback_time
         try:
-            write_row("atrad_market_watch", row)
+            upsert_row("atrad_market_watch", row, conflict_columns=["date", "time", "symbol"])
         except Exception as e:
             log.debug(f"Write skip {row.get('symbol')}: {e}")
 

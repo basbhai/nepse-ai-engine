@@ -1271,6 +1271,7 @@ model atrad_market_watch {
   prev_dpr_low Text     // popdprlow — yesterday's lower DPR
   prev_dpr_high Text    // popdprhigh — yesterday's upper DPR
   max_al_qty   Text     // maxalqty — max allowable quantity
+  prev_close    Text     // closingprice — previous day close for gap computation
 
   // Derived signals — computed at write time
   vwap_dev     Text     // (ltp - vwap) / vwap — deviation from fair value
