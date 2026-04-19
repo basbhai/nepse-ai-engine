@@ -710,6 +710,7 @@ model learning_hub {
   last_validated       Text
   validation_count     Text
   trade_journal_ids    Text
+  source_weight        Float  @default(1.0)
 
   @@index([symbol])
   @@index([sector])
@@ -1325,4 +1326,57 @@ model monthly_council_checklist {
   go_trigger       Text
   noise_items      Text            // JSON array as text
   confidence_score Text            // NEPSE Confidence Score from Chairman
+}
+
+model monthly_override {
+  id               Serial
+  run_month        Text!  @unique        // e.g. "2026-05"
+  confidence_score Int                   // Chairman NEPSE Confidence Score
+  buy_blocked      Text   @default("false")  // "true" if score <= 20 and BEAR/CRISIS
+  market_state     Text                  // market state at time of council
+  stop_trigger     Text                  // from checklist
+  go_trigger       Text                  // from checklist
+  inserted_at      Text
+  last_read_at     Text                  // updated by claude_analyst each morning
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ACCURACY REVIEW — monthly DeepSeek R1 statistical analysis
+// ─────────────────────────────────────────────────────────────────────────────
+
+model accuracy_review_log {
+  id                    Serial
+  run_month             Text!  @unique
+  trade_count           Int
+  signal_accuracy       Text
+  sector_accuracy       Text
+  market_state_accuracy Text
+  confidence_calibration Text
+  false_block_analysis  Text
+  deepseek_proposals    Text
+  status                Text  @default("PENDING_REVIEW")
+  inserted_at           Text
+}
+
+model system_proposals {
+  id                Serial
+  run_month         Text!
+  source            Text        // "accuracy_review" | "monthly_council"
+  component         Text
+  proposal_type     Text        // "new_data_source" | "signal_weight" | "filter_threshold" | "sector_gate" | "remove_signal" | "add_signal"
+  current_behavior  Text
+  proposed_change   Text
+  data_evidence     Text
+  requires_new_data Text  @default("false")
+  new_data_source   Text
+  confidence        Text
+  status            Text  @default("PENDING")
+  approved_at       Text
+  rejected_at       Text
+  rejection_reason  Text
+  inserted_at       Text
+
+  @@index([run_month])
+  @@index([status])
+  @@index([component])
 }

@@ -49,6 +49,7 @@ TABS: dict[str, str] = {
     "monthly_council_agenda": "monthly_council_agenda",
     "monthly_council_log": "monthly_council_log",
     "monthly_council_checklist": "monthly_council_checklist",
+    "monthly_override": "monthly_override",
 }
 
 TABLE_DDL: dict[str, str] = {
@@ -707,6 +708,7 @@ TABLE_DDL: dict[str, str] = {
         last_validated TEXT,
         validation_count TEXT,
         trade_journal_ids TEXT,
+        source_weight TEXT DEFAULT '1.0',
         inserted_at TIMESTAMPTZ DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS ix_learning_hub_symbol
@@ -1345,6 +1347,21 @@ TABLE_DDL: dict[str, str] = {
         CONSTRAINT ux_monthly_council_checklist_run_month UNIQUE (run_month)
     );
     """,
+
+    "monthly_override": """
+    CREATE TABLE IF NOT EXISTS "monthly_override" (
+        id SERIAL PRIMARY KEY,
+        run_month TEXT NOT NULL,
+        confidence_score TEXT,
+        buy_blocked TEXT DEFAULT 'false',
+        market_state TEXT,
+        stop_trigger TEXT,
+        go_trigger TEXT,
+        inserted_at TEXT,
+        last_read_at TEXT,
+        CONSTRAINT ux_monthly_override_run_month UNIQUE (run_month)
+    );
+    """,
 }
 
 TABLE_COLUMNS: dict[str, list[str]] = {
@@ -1365,7 +1382,7 @@ TABLE_COLUMNS: dict[str, list[str]] = {
     "dividend_announcements": ["symbol", "company", "sector", "announcement_date", "fiscal_year", "dividend_type", "cash_dividend_pct", "bonus_share_pct", "total_dividend_pct", "book_close_date", "direction", "prev_dividend_pct", "source", "scraped_at"],
     "dividend_pattern_study": ["symbol", "announcement_date", "sector", "direction", "price_drift_d10", "price_drift_d6", "price_drift_d4", "price_drift_d2", "vol_ratio_d6", "vol_ratio_d4", "vol_ratio_d2", "vol_ratio_d1", "rsi_d6", "rsi_d4", "obv_trend_d6_to_d1", "atr_ratio_d6", "macd_state_d4", "return_d0", "return_d1", "return_d2_d9", "vs_nepse_d1", "pattern_detected", "pattern_type", "pattern_strength", "entry_feasible", "optimal_entry_day", "in_dividend_season", "event_type", "fiscal_year", "dividend_type", "run_date"],
     "trade_journal": ["created_at", "symbol", "sector", "paper_mode", "entry_date", "entry_price", "shares", "allocation_npr", "primary_signal", "secondary_signal", "candle_pattern", "confidence_at_entry", "rsi_entry", "macd_hist_entry", "bb_signal_entry", "ema_trend_entry", "obv_trend_entry", "conf_score_entry", "volume_ratio_entry", "atr_pct_entry", "market_state_entry", "geo_score_entry", "nepal_score_entry", "combined_geo_entry", "nepse_index_entry", "stop_loss_planned", "target_planned", "hold_days_planned", "exit_date", "exit_price", "exit_reason", "market_state_exit", "geo_score_exit", "nepal_score_exit", "combined_geo_exit", "nepse_index_exit", "hold_days_actual", "return_pct", "pnl_npr", "result", "geo_delta", "nepal_delta", "combined_geo_delta", "nepse_return_pct", "alpha_vs_nepse", "loss_cause", "lesson_ids"],
-    "learning_hub": ["created_at", "date", "lesson_type", "source", "symbol", "sector", "applies_to", "condition", "finding", "action", "trade_count", "win_count", "loss_count", "win_rate", "avg_return_pct", "avg_pnl_npr", "confidence_level", "loss_cause_primary", "geo_delta_avg", "nepal_delta_avg", "alpha_vs_nepse_avg", "active", "superseded_by", "supersedes_lesson_id", "review_week", "evidence_window_days", "market_log_ids", "gpt_reasoning", "last_validated", "validation_count", "trade_journal_ids"],
+    "learning_hub": ["created_at", "date", "lesson_type", "source", "symbol", "sector", "applies_to", "condition", "finding", "action", "trade_count", "win_count", "loss_count", "win_rate", "avg_return_pct", "avg_pnl_npr", "confidence_level", "loss_cause_primary", "geo_delta_avg", "nepal_delta_avg", "alpha_vs_nepse_avg", "active", "superseded_by", "supersedes_lesson_id", "review_week", "evidence_window_days", "market_log_ids", "gpt_reasoning", "last_validated", "validation_count", "trade_journal_ids", "source_weight"],
     "backtest_results": ["test_name", "parameter_tested", "optimal_value", "win_rate_at_optimal", "sample_size", "confidence", "date_run", "notes", "sim_mode", "period_start", "period_end", "total_trades", "wins", "losses", "win_rate_pct", "profit_factor", "annual_ret_pct", "total_pnl_npr", "total_fees_npr", "sharpe_ratio", "max_drawdown_pct", "alpha_vs_nepse", "signal_breakdown"],
     "capital_allocation": ["date", "market_state", "nepse_vs_200dma", "stocks_pct", "fd_pct", "savings_pct", "od_pct", "fd_rate_used", "expected_return", "reasoning", "review_date", "status"],
     "financial_advisor": ["date", "recommendation_type", "market_phase", "confidence_pct", "capital_in_stocks_pct", "capital_in_fd_pct", "capital_in_savings_pct", "capital_in_od_pct", "three_month_outlook", "expected_return_pct", "fd_rate_used", "trigger_to_change", "review_date", "actual_outcome", "was_forecast_correct"],
@@ -1392,4 +1409,5 @@ TABLE_COLUMNS: dict[str, list[str]] = {
     "monthly_council_agenda": ["run_month", "item_number", "agenda_item", "approved_by"],
     "monthly_council_log": ["run_month", "stage", "agenda_item", "model", "direction", "confidence", "key_driver", "risk_factor", "full_response"],
     "monthly_council_checklist": ["run_month", "stop_trigger", "go_trigger", "noise_items", "confidence_score"],
+    "monthly_override": ["run_month", "confidence_score", "buy_blocked", "market_state", "stop_trigger", "go_trigger", "inserted_at", "last_read_at"],
 }

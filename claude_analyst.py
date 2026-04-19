@@ -30,6 +30,10 @@ from config import NST
 
 logger = logging.getLogger(__name__)
 
+# Module-level buy-block state set once per run_analysis() call
+_BUY_BLOCKED:     bool = False
+_BUY_BLOCK_SCORE: int  = 0
+
 
 # =============================================================================
 # RESULT DATACLASS
@@ -218,42 +222,106 @@ def _load_macro_context() -> dict:
 
 def _load_lessons(symbol: str, sector: str, limit: int = 6) -> list[str]:
     try:
-        from sheets import run_raw_sql
+        from sheets import run_raw_sql, get_setting
+
+        # Load weights from settings — used only for fallback when source_weight is NULL
+        w_council = float(get_setting("LESSON_WEIGHT_COUNCIL",    "1.5"))
+        w_gpt     = float(get_setting("LESSON_WEIGHT_GPT_WEEKLY", "1.0"))
+        w_seeder  = float(get_setting("LESSON_WEIGHT_SEEDER",     "0.8"))
+        _source_defaults = {
+            "monthly_council": w_council,
+            "gpt_weekly":      w_gpt,
+            "learning_seeder": w_seeder,
+        }
+        _conf_mult = {"HIGH": 1.2, "MEDIUM": 1.0, "LOW": 0.8}
+
         rows = run_raw_sql(
             """
             SELECT symbol, sector, lesson_type, condition, finding, action,
-                   confidence_level, win_rate, trade_count
+                   confidence_level, win_rate, trade_count, source, source_weight
             FROM learning_hub
             WHERE active = 'true'
               AND (symbol = %s OR sector = %s OR symbol = 'MARKET' OR applies_to = 'ALL')
-            ORDER BY
-                CASE WHEN symbol = %s    THEN 0
-                     WHEN sector = %s    THEN 1
-                     ELSE 2 END,
-                CASE WHEN confidence_level = 'HIGH'   THEN 0
-                     WHEN confidence_level = 'MEDIUM' THEN 1
-                     ELSE 2 END,
-                id DESC
-            LIMIT %s
             """,
-            (symbol.upper(), sector.lower(), symbol.upper(), sector.lower(), limit)
+            (symbol.upper(), sector.lower()),
         )
+
+        def _eff_weight(r: dict) -> float:
+            # Prefer stored source_weight; fall back to settings default for that source
+            sw_raw = r.get("source_weight")
+            if sw_raw is not None and sw_raw != "":
+                sw = float(sw_raw)
+            else:
+                sw = _source_defaults.get(r.get("source", ""), 1.0)
+            cm = _conf_mult.get(r.get("confidence_level", "LOW"), 1.0)
+            return sw * cm
+
+        sorted_rows = sorted(rows or [], key=_eff_weight, reverse=True)[:limit]
+
         lessons = []
-        for r in rows:
-            sym  = r.get("symbol", "?")
-            ltype= r.get("lesson_type", "")
-            cond = r.get("condition",   "")[:80]
-            find = r.get("finding",     "")[:120]
-            act  = r.get("action",      "")
-            conf = r.get("confidence_level", "LOW")
-            wr   = r.get("win_rate",    "")
-            n    = r.get("trade_count", "")
-            stat = f" (win_rate={wr}, n={n})" if n else ""
+        for r in sorted_rows:
+            sym   = r.get("symbol", "?")
+            ltype = r.get("lesson_type", "")
+            cond  = r.get("condition",   "")[:80]
+            find  = r.get("finding",     "")[:120]
+            act   = r.get("action",      "")
+            conf  = r.get("confidence_level", "LOW")
+            wr    = r.get("win_rate",    "")
+            n     = r.get("trade_count", "")
+            stat  = f" (win_rate={wr}, n={n})" if n else ""
             lessons.append(f"[{sym}|{ltype}|{conf}] IF {cond} -> {act}: {find}{stat}")
         return lessons
     except Exception as exc:
         logger.warning("_load_lessons failed: %s", exc)
         return []
+
+
+def _load_monthly_override() -> None:
+    """
+    Read monthly_override for the current month, set module-level _BUY_BLOCKED flag,
+    and stamp last_read_at.  Always runs — DB reads are allowed in all modes.
+    """
+    global _BUY_BLOCKED, _BUY_BLOCK_SCORE
+    from sheets import run_raw_sql, upsert_row
+
+    now           = datetime.now(tz=NST)
+    current_month = now.strftime("%Y-%m")
+
+    try:
+        rows = run_raw_sql(
+            "SELECT buy_blocked, confidence_score, stop_trigger "
+            "FROM monthly_override WHERE run_month = %s",
+            (current_month,),
+        )
+        if rows:
+            row              = rows[0]
+            _BUY_BLOCKED     = (row.get("buy_blocked", "false") == "true")
+            _BUY_BLOCK_SCORE = int(row.get("confidence_score") or 0)
+            if _BUY_BLOCKED:
+                logger.warning(
+                    "[monthly_override] BUY signals BLOCKED — "
+                    "council confidence=%d. All BUY → WAIT.",
+                    _BUY_BLOCK_SCORE,
+                )
+            # Stamp last_read_at — DB write always allowed
+            try:
+                upsert_row(
+                    "monthly_override",
+                    {
+                        "run_month":   current_month,
+                        "last_read_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+                    },
+                    conflict_columns=["run_month"],
+                )
+            except Exception as e:
+                logger.warning("[monthly_override] last_read_at stamp failed: %s", e)
+        else:
+            _BUY_BLOCKED     = False
+            _BUY_BLOCK_SCORE = 0
+    except Exception as exc:
+        logger.warning("_load_monthly_override failed: %s", exc)
+        _BUY_BLOCKED     = False
+        _BUY_BLOCK_SCORE = 0
 
 
 def _load_market_state() -> str:
@@ -935,6 +1003,9 @@ def run_analysis(flags: list) -> list[AnalystResult]:
     logger.info("=" * 60)
     logger.info("claude_analyst.run_analysis() -- %d flags", len(flags))
 
+    # Read monthly_override before any analysis (DB read — always allowed)
+    _load_monthly_override()
+
     portfolio    = _load_portfolio()
     geo          = _load_geo_context()
     macro        = _load_macro_context()
@@ -1002,6 +1073,20 @@ def run_analysis(flags: list) -> list[AnalystResult]:
             continue
 
         result = _assemble_result(claude_json, flag, geo)
+
+        # 2b: monthly_override buy block
+        if _BUY_BLOCKED and result.action == "BUY":
+            logger.warning(
+                "[monthly_override] BUY blocked for %s → WAIT (reason=monthly_override_block)",
+                sym,
+            )
+            result.action    = "WAIT"
+            result.reasoning = (
+                f"[monthly_override_block] Council confidence={_BUY_BLOCK_SCORE} ≤ 20 "
+                f"in BEAR/CRISIS regime. BUY overridden to WAIT. "
+                f"Original: {result.reasoning}"
+            )
+
         results.append(result)
         _write_to_db(result, flag=flag)
         logger.info("Result: %s", result.summary())

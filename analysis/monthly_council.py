@@ -45,7 +45,7 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 from AI.openrouter import _call
-from sheets import run_raw_sql, write_row, upsert_row
+from sheets import run_raw_sql, write_row, upsert_row, get_setting
 
 NST = ZoneInfo("Asia/Kathmandu")
 
@@ -245,6 +245,48 @@ def _load_prior_councils(run_month: str) -> list[dict]:
         return []
 
 
+def _load_accuracy_review() -> dict:
+    """Last accuracy_review_log row. Returns {} if no rows. Never raises."""
+    try:
+        rows = run_raw_sql(
+            """
+            SELECT run_month, trade_count, signal_accuracy, sector_accuracy,
+                   false_block_analysis, deepseek_proposals, inserted_at
+            FROM accuracy_review_log
+            ORDER BY run_month DESC
+            LIMIT 1
+            """,
+        )
+        result = rows[0] if rows else {}
+        log.info("accuracy_review loaded: %d rows", 1 if result else 0)
+        return result
+    except Exception as e:
+        log.error("accuracy_review_log load failed: %s", e)
+        log.info("accuracy_review loaded: 0 rows")
+        return {}
+
+
+def _load_pending_proposals() -> list[dict]:
+    """Unreviewed system proposals (status=PENDING). Returns [] if none. Never raises."""
+    try:
+        rows = run_raw_sql(
+            """
+            SELECT id, component, proposal_type, proposed_change,
+                   data_evidence, confidence, source, inserted_at
+            FROM system_proposals
+            WHERE status = 'PENDING'
+            ORDER BY inserted_at DESC
+            LIMIT 10
+            """,
+        ) or []
+        log.info("pending_proposals loaded: %d rows", len(rows))
+        return rows
+    except Exception as e:
+        log.error("system_proposals load failed: %s", e)
+        log.info("pending_proposals loaded: 0 rows")
+        return []
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # TOKEN BUDGET HELPERS
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -435,6 +477,49 @@ def _write_checklist(run_month: str, checklist: dict) -> None:
         log.error("Failed to write monthly_council_checklist: %s", e)
 
 
+def _write_monthly_override(
+    run_month: str,
+    confidence_score: int,
+    market_state: str,
+    checklist: dict,
+    dry_run: bool = False,
+) -> None:
+    """Upsert monthly_override row after Stage 6 completes."""
+    buy_blocked = (
+        "true"
+        if confidence_score <= 20 and market_state in ("BEAR", "CRISIS")
+        else "false"
+    )
+    now_nst = datetime.now(NST).strftime("%Y-%m-%d %H:%M:%S")
+    if dry_run:
+        log.info(
+            "[DRY RUN] Would write monthly_override — run_month=%s confidence=%d buy_blocked=%s",
+            run_month, confidence_score, buy_blocked,
+        )
+        return
+    try:
+        upsert_row(
+            "monthly_override",
+            {
+                "run_month":        run_month,
+                "confidence_score": str(confidence_score),
+                "buy_blocked":      buy_blocked,
+                "market_state":     market_state,
+                "stop_trigger":     checklist.get("stop_trigger", ""),
+                "go_trigger":       checklist.get("go_trigger", ""),
+                "inserted_at":      now_nst,
+                "last_read_at":     "",
+            },
+            conflict_columns=["run_month"],
+        )
+        log.info(
+            "[monthly_override] written — confidence=%d buy_blocked=%s",
+            confidence_score, buy_blocked,
+        )
+    except Exception as e:
+        log.error("_write_monthly_override failed: %s", e)
+
+
 # ── Lesson writer (exact same pattern as learning_hub.py _write_lessons) ──────
 
 _REQUIRED_LESSON_FIELDS = {"lesson_type", "condition", "finding", "action", "confidence_level"}
@@ -595,14 +680,60 @@ def _build_agenda_draft_messages(
     data_context: str,
     audit_text: str,
     run_month: str,
+    accuracy_review: dict = None,
+    pending_proposals: list[dict] = None,
 ) -> list[dict]:
     system = (
         "You are the NEPSE Monthly Council Moderator. "
         "Based on the hindsight audit and current market data, draft 3-5 focused agenda items "
         "for this month's council deliberation. "
         "Each item should be a specific, debatable market question — not a generic topic. "
-        "Output ONLY valid JSON."
+        "Output ONLY valid JSON.\n\n"
+        "AGENDA ROTATION RULE: If any agenda item is identical or substantially similar to an "
+        "item from last month's council, you must either: (a) provide 30-day evidence that the "
+        "situation has materially changed and justify keeping it, or (b) replace it with a new "
+        "item. Do not repeat agenda items without justification.\n\n"
+        "You have been provided last month's accuracy review findings "
+        "and pending system proposals (if any exist).\n\n"
+        "Generate TWO tracks of agenda items:\n\n"
+        "TRACK A — Market direction (2 items max):\n"
+        "  What does NEPSE look like for the next 30 days?\n"
+        "  Label each: [TRACK_A]\n\n"
+        "TRACK B — System improvement (2 items max):\n"
+        "  Based on accuracy_review findings and pending proposals:\n"
+        "  What is structurally wrong with the current pipeline?\n"
+        "  What data is missing that would improve decisions?\n"
+        "  What signal or filter needs changing based on evidence?\n"
+        "  Label each: [TRACK_B]\n\n"
+        "If no accuracy review exists yet: generate Track B from "
+        "trade_journal loss patterns and gate_misses false block rate only.\n"
+        "If no data exists for Track B: generate 1 item asking the council "
+        "to establish a baseline for system accuracy measurement.\n\n"
+        "Format each item as:\n"
+        "[TRACK_A|TRACK_B] Item N: <clear one-sentence agenda item>"
     )
+
+    accuracy_block = ""
+    if accuracy_review:
+        accuracy_block = (
+            f"\nLAST ACCURACY REVIEW ({accuracy_review.get('run_month', '?')}):\n"
+            + json.dumps(
+                {k: v for k, v in accuracy_review.items() if v is not None},
+                ensure_ascii=False,
+            )
+        )
+    else:
+        accuracy_block = "\nACCURACY REVIEW: No prior accuracy review available."
+
+    proposals_block = ""
+    if pending_proposals:
+        proposals_block = (
+            f"\nPENDING SYSTEM PROPOSALS ({len(pending_proposals)} items):\n"
+            + json.dumps(pending_proposals, ensure_ascii=False)
+        )
+    else:
+        proposals_block = "\nPENDING SYSTEM PROPOSALS: None."
+
     user = f"""AGENDA DRAFTING — {run_month}
 
 Hindsight audit findings:
@@ -610,12 +741,14 @@ Hindsight audit findings:
 
 Current market data:
 {data_context}
+{accuracy_block}
+{proposals_block}
 
 Output JSON:
 {{
   "agenda_items": [
-    "Specific debatable question 1 (max 120 chars)",
-    "Specific debatable question 2 (max 120 chars)",
+    "[TRACK_A] Item 1: Specific debatable question (max 120 chars)",
+    "[TRACK_B] Item 2: System improvement question (max 120 chars)",
     ...
   ],
   "draft_rationale": "1-2 sentences on why these items were selected"
@@ -656,22 +789,44 @@ Keep 3-5 items. Output JSON:
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
+_POSITION_ANCHOR_GUARD = (
+    "\n\nYou have been provided current open positions. Do not assume these positions are "
+    "correct. Evaluate the agenda item as if entering the market fresh with no existing "
+    "positions. Your role is objective analysis, not justification of current holdings."
+)
+
 _MODEL_PERSONAS = {
     COUNCIL_GROK_MODEL: (
         "You are Grok 3, a contrarian market analyst on the NEPSE Monthly Council. "
-        "You tend to challenge conventional wisdom and look for non-obvious drivers."
+        "You tend to challenge conventional wisdom and look for non-obvious drivers.\n\n"
+        "CONTRARIAN STALENESS RULE: If your contrarian view is similar to last month's Stage 1 "
+        "response, you must first state whether the 30-day evidence strengthened or weakened the "
+        "case. Then decide to maintain or revise. Do not simply explain why the market has not "
+        "priced it in — that presumes you were correct. Re-evaluate from evidence first."
+        + _POSITION_ANCHOR_GUARD
     ),
     COUNCIL_GPT_MODEL: (
         "You are GPT-4o, a systematic quantitative analyst on the NEPSE Monthly Council. "
         "You anchor in data, statistics, and historical patterns."
+        + _POSITION_ANCHOR_GUARD
     ),
     COUNCIL_GEMINI_PRO_MODEL: (
         "You are Gemini 2.5 Pro, a macro-focused analyst on the NEPSE Monthly Council. "
-        "You prioritize global macro, NRB policy, and sector rotation signals."
+        "You prioritize global macro, NRB policy, and sector rotation signals.\n\n"
+        "VOLUME DATA CONSTRAINT: Volume data and advance/decline breadth are NOT available in "
+        "daily_context_log. Your technical analysis must rely on sector-level patterns from "
+        "trade_journal, market_state trends, and nepal_score. When you would normally cite "
+        "volume, state explicitly: 'VOLUME DATA UNAVAILABLE — using market_state proxy' and "
+        "reduce your confidence score by 10 points.\n\n"
+        "CIRCUIT LIMIT EXCEPTION: Do NOT apply the low-volume trap flag to any stock showing "
+        "price at upper or lower circuit limit. Circuit-limit moves suppress volume artificially "
+        "and must not be treated as low-volume traps."
+        + _POSITION_ANCHOR_GUARD
     ),
     COUNCIL_OPUS_MODEL: (
         "You are Claude Opus, a risk-focused senior analyst on the NEPSE Monthly Council. "
         "You stress-test positions, weigh tail risks, and consider second-order effects."
+        + _POSITION_ANCHOR_GUARD
     ),
 }
 
@@ -683,8 +838,9 @@ def _build_discussion_messages(
     total_items: int,
     data_context: str,
     prior_responses: list[dict],
+    open_positions: list[dict] = None,
 ) -> list[dict]:
-    persona = _MODEL_PERSONAS.get(model, "You are a senior NEPSE market analyst.")
+    persona = _MODEL_PERSONAS.get(model, "You are a senior NEPSE market analyst." + _POSITION_ANCHOR_GUARD)
     system = (
         f"{persona}\n"
         "Output ONLY valid JSON with keys: direction (Bullish/Bearish/Neutral), "
@@ -707,12 +863,20 @@ def _build_discussion_messages(
         )
         prior_block = "\nPRIOR COUNCIL RESPONSES:\n" + "\n".join(lines) + adversarial
 
+    positions_block = ""
+    if open_positions:
+        positions_block = (
+            "\nCURRENT OPEN POSITIONS (for context — evaluate independently):\n"
+            + json.dumps(open_positions, ensure_ascii=False)
+        )
+
     user = f"""MONTHLY COUNCIL DELIBERATION — Agenda item {item_number}/{total_items}
 
 AGENDA ITEM: {agenda_item}
 
 MARKET DATA (last 30 days):
 {data_context}
+{positions_block}
 {prior_block}
 
 Analyse this agenda item and output your structured assessment as JSON."""
@@ -770,6 +934,8 @@ def _build_chairman_messages(
     agenda_items: list[str],
     run_month: str,
     disagreement_scores: dict,
+    open_positions: list[dict] = None,
+    pending_proposals: list[dict] = None,
 ) -> list[dict]:
     system = (
         "You are the NEPSE Monthly Council Chairman (Opus instance C, fully independent). "
@@ -784,10 +950,53 @@ def _build_chairman_messages(
         "  action: MONITOR|REDUCE_CONFIDENCE_BY_15|REDUCE_CONFIDENCE_BY_25|"
         "REQUIRE_VOLUME_CONFIRM|REQUIRE_MACRO_STABLE|WAIT_FOR_CONFIRMATION|TIGHTEN_STOP|BLOCK_ENTRY\n"
         "  confidence_level: LOW|MEDIUM|HIGH\n"
-        "  BLOCK_ENTRY requires 25+ supporting trades — use REDUCE_CONFIDENCE_BY_25 otherwise."
+        "  BLOCK_ENTRY requires 25+ supporting trades — use REDUCE_CONFIDENCE_BY_25 otherwise.\n\n"
+        "UNVALIDATED LESSON CHECK: For every conclusion you draw, check if it rests solely on a "
+        "lesson in learning_hub that has not been validated against this month's trade_journal or "
+        "gate_misses data. If so, flag it in unvalidated_lesson_warnings.\n\n"
+        "POSITION ANCHORING GUARD: After your synthesis, explicitly evaluate each current open "
+        "position and state whether the council's findings support holding or exiting, even if "
+        "the conclusion contradicts the current portfolio direction.\n\n"
+        "After your market synthesis, review all pending system proposals provided. "
+        "For each proposal produce a council assessment. "
+        "Also generate new findings if the discussion revealed system improvement opportunities "
+        "not already in the proposals.\n\n"
+        "Add to your JSON output:\n"
+        "'system_verdict': {\n"
+        "  'proposals_reviewed': [\n"
+        "    {\n"
+        "      'proposal_id': N,\n"
+        "      'component': 'string',\n"
+        "      'council_assessment': 'ENDORSE|REJECT|NEEDS_MORE_DATA',\n"
+        "      'reasoning': 'string',\n"
+        "      'confidence': 'HIGH|MEDIUM|LOW'\n"
+        "    }\n"
+        "  ],\n"
+        "  'new_system_findings': [\n"
+        "    {\n"
+        "      'component': 'string',\n"
+        "      'finding': 'string',\n"
+        "      'proposed_change': 'string',\n"
+        "      'data_evidence': 'string',\n"
+        "      'requires_new_data': bool,\n"
+        "      'new_data_source': 'string or null',\n"
+        "      'confidence': 'HIGH|MEDIUM|LOW'\n"
+        "    }\n"
+        "  ],\n"
+        "  'accuracy_improvement_priority': [\n"
+        "    '1. Fix X — highest impact',\n"
+        "    '2. Add Y — medium impact'\n"
+        "  ]\n"
+        "}"
     )
     ds_str = json.dumps(disagreement_scores, ensure_ascii=False)
     items_str = "\n".join(f"{i+1}. {item}" for i, item in enumerate(agenda_items))
+    positions_str = json.dumps(open_positions, ensure_ascii=False) if open_positions else "No open positions."
+    proposals_str = (
+        json.dumps(pending_proposals, ensure_ascii=False)
+        if pending_proposals
+        else "No pending proposals."
+    )
     user = f"""CHAIRMAN SYNTHESIS — {run_month}
 
 AGENDA ITEMS:
@@ -795,6 +1004,12 @@ AGENDA ITEMS:
 
 DISAGREEMENT SCORES (std dev of confidences per item):
 {ds_str}
+
+CURRENT OPEN POSITIONS:
+{positions_str}
+
+PENDING SYSTEM PROPOSALS:
+{proposals_str}
 
 FULL COUNCIL DISCUSSION TRANSCRIPT:
 {transcript}
@@ -820,13 +1035,360 @@ Produce the final council synthesis. Output JSON:
       "gpt_reasoning": "why this lesson is warranted by this month's evidence"
     }}
   ],
+  "overruled_lessons": [
+    {{"lesson_id": 0, "lesson_text": "...", "reason": "why council evidence overrules this lesson"}}
+  ],
+  "unvalidated_lesson_warnings": [
+    "lesson_id N conclusion rests on lesson not validated against this month's data"
+  ],
   "trading_checklist": {{
     "stop_trigger": "one specific condition that should stop all new entries",
     "go_trigger": "one specific condition that confirms it is safe to enter",
     "noise_items": ["item to ignore 1", "item to ignore 2", "item to ignore 3"]
+  }},
+  "position_evaluations": [
+    {{"symbol": "...", "holding_supported": true, "reasoning": "..."}}
+  ],
+  "system_verdict": {{
+    "proposals_reviewed": [
+      {{
+        "proposal_id": 0,
+        "component": "string",
+        "council_assessment": "ENDORSE|REJECT|NEEDS_MORE_DATA",
+        "reasoning": "string",
+        "confidence": "HIGH|MEDIUM|LOW"
+      }}
+    ],
+    "new_system_findings": [
+      {{
+        "component": "string",
+        "finding": "string",
+        "proposed_change": "string",
+        "data_evidence": "string",
+        "requires_new_data": false,
+        "new_data_source": null,
+        "confidence": "HIGH|MEDIUM|LOW"
+      }}
+    ],
+    "accuracy_improvement_priority": [
+      "1. Fix X — highest impact",
+      "2. Add Y — medium impact"
+    ]
   }}
 }}"""
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# QUARTERLY LESSON WEIGHT REVIEW (1h)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+COUNCIL_DEEPSEEK_MODEL = "deepseek/deepseek-r1"
+
+
+def _run_weight_review(dry_run: bool = False) -> Optional[dict]:
+    """
+    Quarterly lesson weight review.
+    Calls DeepSeek R1 to compute per-source hit-rates, then Opus [C] to validate.
+    Writes gate_proposal on endorsement.  dry_run=True → zero API calls, zero DB writes.
+    """
+    # ── Step 0: sample size check ─────────────────────────────────────────────
+    try:
+        rows = run_raw_sql(
+            """
+            SELECT COUNT(*) AS cnt FROM learning_hub
+            WHERE active = 'true'
+              AND source IN ('gpt_weekly', 'monthly_council', 'learning_seeder')
+            """,
+        )
+        sample_size = int((rows[0].get("cnt") or 0)) if rows else 0
+    except Exception as e:
+        log.error("_run_weight_review: sample size check failed: %s", e)
+        sample_size = 0
+
+    if sample_size < 20:
+        log.warning(
+            "Weight review skipped — insufficient lesson history (%d lessons). Minimum 20 required.",
+            sample_size,
+        )
+        return None
+
+    # ── Load lesson stats grouped by source ──────────────────────────────────
+    try:
+        lessons_rows = run_raw_sql(
+            """
+            SELECT id, source, confidence_level, created_at, active,
+                   validation_count, source_weight
+            FROM learning_hub
+            WHERE source IN ('gpt_weekly', 'monthly_council', 'learning_seeder')
+            ORDER BY source, created_at
+            LIMIT 100
+            """,
+        ) or []
+    except Exception as e:
+        log.error("_run_weight_review: lesson load failed: %s", e)
+        lessons_rows = []
+
+    # ── Load trade_journal performance ────────────────────────────────────────
+    try:
+        trade_perf = run_raw_sql(
+            """
+            SELECT return_pct, result, exit_reason, entry_date
+            FROM trade_journal
+            ORDER BY entry_date DESC
+            LIMIT 100
+            """,
+        ) or []
+    except Exception as e:
+        log.error("_run_weight_review: trade_journal load failed: %s", e)
+        trade_perf = []
+
+    # ── Load claude_audit last 8 rows ─────────────────────────────────────────
+    try:
+        audit_rows = run_raw_sql(
+            """
+            SELECT buy_win_rate, avoid_accuracy, overall_accuracy
+            FROM claude_audit
+            ORDER BY review_week DESC
+            LIMIT 8
+            """,
+        ) or []
+    except Exception as e:
+        log.error("_run_weight_review: claude_audit load failed: %s", e)
+        audit_rows = []
+
+    # ── Load current weights ──────────────────────────────────────────────────
+    w_council = get_setting("LESSON_WEIGHT_COUNCIL",    "1.5")
+    w_gpt     = get_setting("LESSON_WEIGHT_GPT_WEEKLY", "1.0")
+    w_seeder  = get_setting("LESSON_WEIGHT_SEEDER",     "0.8")
+
+    deepseek_prompt = (
+        f"You are a quantitative analyst reviewing lesson source weights for the NEPSE AI Engine.\n\n"
+        f"CURRENT WEIGHTS:\n"
+        f"- monthly_council: {w_council}\n"
+        f"- gpt_weekly: {w_gpt}\n"
+        f"- learning_seeder: {w_seeder}\n\n"
+        f"LESSON DATA BY SOURCE ({len(lessons_rows)} rows):\n"
+        f"{json.dumps(lessons_rows[:50], ensure_ascii=False)}\n\n"
+        f"TRADE JOURNAL PERFORMANCE (last 100 trades, {len(trade_perf)} rows):\n"
+        f"{json.dumps(trade_perf[:50], ensure_ascii=False)}\n\n"
+        f"CLAUDE AUDIT ACCURACY (last 8 weeks):\n"
+        f"{json.dumps(audit_rows, ensure_ascii=False)}\n\n"
+        f"TASK:\n"
+        f"Compute per source: hit_rate, false_rate, avg_return_when_followed.\n"
+        f"Compare against current weights. Propose new weights with statistical reasoning.\n"
+        f"Confidence: HIGH (>=30 samples), MEDIUM (20-29 samples), LOW (<20 — set proposed "
+        f"weights to current values and explain why sample is insufficient).\n"
+        f"Return ONLY valid JSON, no markdown fences:\n"
+        f'{{"proposed_weight_council": float, "proposed_weight_gpt_weekly": 1.0, '
+        f'"proposed_weight_seeder": float, "sample_size": {sample_size}, '
+        f'"council_hit_rate": float, "gpt_hit_rate": float, "seeder_hit_rate": float, '
+        f'"reasoning": "string", "confidence": "HIGH|MEDIUM|LOW"}}'
+    )
+    est_tokens = len(deepseek_prompt) // 4
+
+    if dry_run:
+        print(f"\n{'='*65}")
+        print(f"WEIGHT REVIEW — sample_size={sample_size} (≥20 → proceeding)")
+        print(f"DeepSeek R1 prompt (~{est_tokens} tokens input):")
+        print(deepseek_prompt[:500] + "...\n")
+        print(f"[DRY RUN] Would call DeepSeek R1 for weight stats — ~{est_tokens} tokens input")
+        print(f"[DRY RUN] Would call Opus [C] for weight validation")
+        return None
+
+    # ── Step 1: DeepSeek R1 computes stats ───────────────────────────────────
+    from AI.openrouter import ask_deepseek
+    deepseek_result = ask_deepseek(
+        deepseek_prompt, max_tokens=800, context="council_weight_review",
+    )
+
+    if not deepseek_result:
+        log.error("_run_weight_review: DeepSeek returned no result — aborting")
+        return None
+
+    if deepseek_result.get("confidence") == "LOW":
+        log.warning(
+            "Weight review aborted by DeepSeek — confidence=LOW. Reasoning: %s",
+            deepseek_result.get("reasoning", "none"),
+        )
+        return None
+
+    # ── Step 2: Opus [C] validates ────────────────────────────────────────────
+    opus_msgs = [
+        {
+            "role": "system",
+            "content": (
+                "You are the NEPSE Monthly Council Chairman validating a lesson weight review. "
+                "Check: is sample size sufficient, do proposed weights fit current market regime, "
+                "any conflict with recent council findings? "
+                "Return ONLY valid JSON, no markdown fences."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"WEIGHT REVIEW VALIDATION\n\n"
+                f"DeepSeek analysis:\n{json.dumps(deepseek_result, ensure_ascii=False)}\n\n"
+                f"Council run month: {datetime.now(NST).strftime('%Y-%m')}\n\n"
+                f"Validate and return JSON:\n"
+                f'{{"endorsed": true_or_false, "reasoning": "string", '
+                f'"final_weight_council": float, "final_weight_seeder": float}}'
+            ),
+        },
+    ]
+    opus_raw    = _council_call(COUNCIL_OPUS_MODEL, opus_msgs, 500, "council_weight_validation")
+    opus_result = _parse_json_safe(opus_raw, "council_weight_validation") or {}
+
+    endorsed = opus_result.get("endorsed", False)
+    log.info(
+        "[weight_review] Opus endorsed=%s | council_hit=%.2f%% gpt_hit=%.2f%%",
+        endorsed,
+        deepseek_result.get("council_hit_rate", 0) * 100,
+        deepseek_result.get("gpt_hit_rate",     0) * 100,
+    )
+
+    # ── Step 3: Write gate_proposal ───────────────────────────────────────────
+    final_w_council = opus_result.get(
+        "final_weight_council", deepseek_result.get("proposed_weight_council", 1.5)
+    )
+    final_w_seeder  = opus_result.get(
+        "final_weight_seeder", deepseek_result.get("proposed_weight_seeder", 0.8)
+    )
+    combined_reasoning = (
+        f"DeepSeek: {deepseek_result.get('reasoning', '')} | "
+        f"Opus: {opus_result.get('reasoning', '')}"
+    )[:500]
+
+    proposal_id: Optional[int] = None
+    try:
+        write_row("gate_proposals", {
+            "review_week":      datetime.now(NST).strftime("%Y-%m"),
+            "proposal_number":  "1",
+            "parameter_name":   "LESSON_WEIGHT_COUNCIL / LESSON_WEIGHT_SEEDER",
+            "current_value":    f"council={w_council} seeder={w_seeder}",
+            "proposed_value":   f"council={final_w_council} seeder={final_w_seeder}",
+            "reasoning":        combined_reasoning,
+            "sample_size":      str(deepseek_result.get("sample_size", sample_size)),
+            "status":           "PENDING",
+        })
+        prop_rows = run_raw_sql(
+            "SELECT id FROM gate_proposals WHERE parameter_name = %s ORDER BY id DESC LIMIT 1",
+            ("LESSON_WEIGHT_COUNCIL / LESSON_WEIGHT_SEEDER",),
+        )
+        proposal_id = prop_rows[0]["id"] if prop_rows else None
+        log.info("[weight_review] gate_proposal written id=%s", proposal_id)
+    except Exception as e:
+        log.error("_run_weight_review: gate_proposal write failed: %s", e)
+
+    # ── Step 4: Update settings ───────────────────────────────────────────────
+    try:
+        today_nst = datetime.now(NST).strftime("%Y-%m-%d")
+        upsert_row("settings",
+                   {"key": "LESSON_WEIGHT_LAST_REVIEW", "value": today_nst},
+                   conflict_columns=["key"])
+        upsert_row("settings",
+                   {"key": "LESSON_WEIGHT_SAMPLE_SIZE",
+                    "value": str(deepseek_result.get("sample_size", sample_size))},
+                   conflict_columns=["key"])
+        log.info("[weight_review] settings LESSON_WEIGHT_LAST_REVIEW + SAMPLE_SIZE updated")
+    except Exception as e:
+        log.error("_run_weight_review: settings update failed: %s", e)
+
+    # ── Step 5: Telegram notification ─────────────────────────────────────────
+    try:
+        from helper.notifier import _send_admin_only
+        endorsed_str   = "Yes" if endorsed else "No"
+        council_hr_pct = deepseek_result.get("council_hit_rate", 0.0) * 100
+        gpt_hr_pct     = deepseek_result.get("gpt_hit_rate",     0.0) * 100
+        prop_suffix    = f"/approve_{proposal_id} | Reject: /reject_{proposal_id}" if proposal_id else "N/A"
+        msg = (
+            f"⚖️ *Lesson Weight Review Complete*\n\n"
+            f"Council hit rate: {council_hr_pct:.1f}% | GPT hit rate: {gpt_hr_pct:.1f}%\n"
+            f"Proposed: council={final_w_council} seeder={final_w_seeder}\n"
+            f"Opus endorsed: {endorsed_str}\n"
+            f"Approve: /{prop_suffix}"
+        )
+        _send_admin_only(msg, parse_mode="Markdown")
+        log.info("[weight_review] Telegram notification sent")
+    except Exception as e:
+        log.warning("_run_weight_review: Telegram notification failed: %s", e)
+
+    return {
+        "deepseek":    deepseek_result,
+        "opus":        opus_result,
+        "sample_size": sample_size,
+        "endorsed":    endorsed,
+    }
+
+
+def _write_council_system_proposals(
+    run_month: str,
+    system_verdict: dict,
+    dry_run: bool = False,
+) -> tuple[int, int]:
+    """
+    Write system_verdict proposals to DB after Stage 6.
+    Endorsed proposals → UPDATE system_proposals status to COUNCIL_ENDORSED.
+    New findings → INSERT into system_proposals with source='monthly_council'.
+    Returns (n_endorsed, n_new).
+    """
+    if not system_verdict:
+        return 0, 0
+
+    now_nst     = datetime.now(NST).strftime("%Y-%m-%d %H:%M:%S")
+    n_endorsed  = 0
+    n_new       = 0
+
+    for review in system_verdict.get("proposals_reviewed", []):
+        if review.get("council_assessment") != "ENDORSE":
+            continue
+        proposal_id = review.get("proposal_id")
+        if not proposal_id:
+            continue
+        if dry_run:
+            log.info("[DRY RUN] Would endorse proposal id=%s", proposal_id)
+            n_endorsed += 1
+            continue
+        try:
+            run_raw_sql(
+                "UPDATE system_proposals SET status = 'COUNCIL_ENDORSED' WHERE id = %s",
+                (int(proposal_id),),
+            )
+            n_endorsed += 1
+            log.info("[DB] system_proposals id=%s endorsed", proposal_id)
+        except Exception as e:
+            log.error("_write_council_system_proposals endorse id=%s failed: %s", proposal_id, e)
+
+    for finding in system_verdict.get("new_system_findings", []):
+        if dry_run:
+            log.info("[DRY RUN] Would write council system finding: %s", finding.get("component"))
+            n_new += 1
+            continue
+        try:
+            write_row("system_proposals", {
+                "run_month":         run_month,
+                "source":            "monthly_council",
+                "component":         str(finding.get("component", "")),
+                "proposal_type":     "add_signal",
+                "current_behavior":  "",
+                "proposed_change":   str(finding.get("proposed_change", "")),
+                "data_evidence":     str(finding.get("data_evidence", "")),
+                "requires_new_data": str(finding.get("requires_new_data", False)).lower(),
+                "new_data_source":   str(finding.get("new_data_source") or ""),
+                "confidence":        str(finding.get("confidence", "LOW")),
+                "status":            "PENDING",
+                "inserted_at":       now_nst,
+            })
+            n_new += 1
+            log.info("[DB] council system_finding written — component=%s", finding.get("component"))
+        except Exception as e:
+            log.error("_write_council_system_proposals new finding failed: %s", e)
+
+    log.info(
+        "[system_verdict] %d proposals endorsed, %d new findings written",
+        n_endorsed, n_new,
+    )
+    return n_endorsed, n_new
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -839,6 +1401,7 @@ def _send_council_notification(
     agenda_items: list[str],
     lessons_written: int,
     checklist: dict,
+    system_verdict: dict = None,
 ) -> None:
     try:
         from helper.notifier import _send_admin_only
@@ -847,13 +1410,30 @@ def _send_council_notification(
         return
 
     items_str = "\n".join(f"  {i+1}. {item[:80]}" for i, item in enumerate(agenda_items))
+
+    system_verdict_block = ""
+    if system_verdict:
+        sv        = system_verdict
+        endorsed  = sum(
+            1 for p in sv.get("proposals_reviewed", [])
+            if p.get("council_assessment") == "ENDORSE"
+        )
+        n_new     = len(sv.get("new_system_findings", []))
+        priority  = sv.get("accuracy_improvement_priority", [])
+        prio_str  = priority[0] if priority else "N/A"
+        system_verdict_block = (
+            f"\n⚙️ System proposals: *{endorsed} endorsed* | *{n_new} new findings*\n"
+            f"Priority: _{prio_str}_"
+        )
+
     msg = (
         f"🏛 *NEPSE MONTHLY COUNCIL — {run_month}*\n\n"
         f"📊 NEPSE Confidence Score: *{confidence_score}/100*\n\n"
         f"📋 Agenda ({len(agenda_items)} items):\n{items_str}\n\n"
         f"✅ GO trigger: _{checklist.get('go_trigger', 'N/A')}_\n"
         f"🛑 STOP trigger: _{checklist.get('stop_trigger', 'N/A')}_\n\n"
-        f"📚 Lessons written to learning_hub: *{lessons_written}*\n"
+        f"📚 Lessons written to learning_hub: *{lessons_written}*"
+        f"{system_verdict_block}\n"
         f"_Next council: first Sunday of next month._"
     )
     try:
@@ -918,14 +1498,16 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
         return
 
     # ── Load all data ─────────────────────────────────────────────────────────
-    daily_context  = _load_daily_context()
-    trade_journal  = _load_trade_journal()
-    gate_misses    = _load_gate_misses()
-    nrb            = _load_nrb_monthly()
-    audit_history  = _load_claude_audit()
-    lessons        = _load_active_lessons()
-    open_positions = _load_open_positions()
-    prior_councils = _load_prior_councils(run_month)
+    daily_context     = _load_daily_context()
+    trade_journal     = _load_trade_journal()
+    gate_misses       = _load_gate_misses()
+    nrb               = _load_nrb_monthly()
+    audit_history     = _load_claude_audit()
+    lessons           = _load_active_lessons()
+    open_positions    = _load_open_positions()
+    prior_councils    = _load_prior_councils(run_month)
+    accuracy_review   = _load_accuracy_review()
+    pending_proposals = _load_pending_proposals()
 
     data_context, counts = _build_data_context(
         daily_context, trade_journal, gate_misses,
@@ -965,7 +1547,10 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
     # ═════════════════════════════════════════════════════════════════════════
     # STAGE 0a: GPT-4o agenda drafting
     # ═════════════════════════════════════════════════════════════════════════
-    draft_msgs = _build_agenda_draft_messages(data_context, audit_text, run_month)
+    draft_msgs = _build_agenda_draft_messages(
+        data_context, audit_text, run_month,
+        accuracy_review=accuracy_review, pending_proposals=pending_proposals,
+    )
     est_draft = (sum(len(m["content"]) for m in draft_msgs)) // 4
 
     if dry_run or print_prompts:
@@ -1048,6 +1633,7 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
             msgs = _build_discussion_messages(
                 model, agenda_item, item_idx, n_items,
                 data_context, item_responses,
+                open_positions=open_positions,
             )
             est_tokens = (sum(len(m["content"]) for m in msgs)) // 4
 
@@ -1167,6 +1753,8 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
     # ═════════════════════════════════════════════════════════════════════════
     chairman_msgs = _build_chairman_messages(
         transcript, approved_items, run_month, disagreement_scores,
+        open_positions=open_positions,
+        pending_proposals=pending_proposals,
     )
     est_chairman = (sum(len(m["content"]) for m in chairman_msgs)) // 4
 
@@ -1174,12 +1762,16 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
         print(f"\n{'='*65}")
         print(f"STAGE 6 (Opus[C] chairman) — ~{est_chairman} tokens input")
         if print_prompts:
+            print(f"SYSTEM: {chairman_msgs[0]['content'][:400]}...")
             print(f"USER (first 600): {chairman_msgs[1]['content'][:600]}...")
         print(f"[{'DRY RUN' if dry_run else 'PROMPT'}] Would call {COUNCIL_OPUS_MODEL} "
               f"for stage_6_chairman — ~{est_chairman} tokens input, max {MAX_CHAIRMAN_TOKENS} out")
         confidence_score = 50
         lessons_from_chairman: list[dict] = []
-        checklist = {"stop_trigger": "[DRY RUN]", "go_trigger": "[DRY RUN]", "noise_items": []}
+        overruled_lessons: list[dict] = []
+        unvalidated_warnings: list[str] = []
+        checklist = {"stop_trigger": "DRY_RUN", "go_trigger": "DRY_RUN", "noise_items": []}
+        system_verdict: dict = {}
     else:
         log.info("[stage_6_chairman] Calling Opus[C] for chairman synthesis...")
         chairman_raw = _council_call(
@@ -1187,15 +1779,23 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
         )
         chairman_json = _parse_json_safe(chairman_raw, "council_6_chairman") or {}
 
-        confidence_score = int(chairman_json.get("confidence_score", 50))
+        confidence_score      = int(chairman_json.get("confidence_score", 50))
         lessons_from_chairman = chairman_json.get("lessons", [])
+        overruled_lessons     = chairman_json.get("overruled_lessons", [])
+        unvalidated_warnings  = chairman_json.get("unvalidated_lesson_warnings", [])
+        system_verdict        = chairman_json.get("system_verdict", {})
         checklist_raw = chairman_json.get("trading_checklist", {})
         checklist = {
-            "stop_trigger":   checklist_raw.get("stop_trigger", ""),
-            "go_trigger":     checklist_raw.get("go_trigger", ""),
-            "noise_items":    checklist_raw.get("noise_items", []),
+            "stop_trigger":     checklist_raw.get("stop_trigger", ""),
+            "go_trigger":       checklist_raw.get("go_trigger", ""),
+            "noise_items":      checklist_raw.get("noise_items", []),
             "confidence_score": confidence_score,
         }
+
+        if overruled_lessons:
+            log.warning("[chairman] %d lessons overruled by Chairman", len(overruled_lessons))
+        if unvalidated_warnings:
+            log.warning("[chairman] %d unvalidated lesson warnings", len(unvalidated_warnings))
 
         _write_log_entry({
             "run_month":     run_month,
@@ -1208,15 +1808,30 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
         })
         _write_checklist(run_month, checklist)
 
+    # ── Extract market_state for monthly_override ─────────────────────────────
+    market_state_now = (
+        daily_context[0].get("market_state", "SIDEWAYS")
+        if daily_context else "SIDEWAYS"
+    )
+
     # ── Write lessons from Chairman ────────────────────────────────────────
     lessons_written = _write_lessons(lessons_from_chairman, run_month, dry_run=dry_run)
+
+    # ── Write monthly_override (1g) ────────────────────────────────────────
+    _write_monthly_override(
+        run_month, confidence_score, market_state_now, checklist, dry_run=dry_run,
+    )
+
+    # ── Write council system_verdict proposals (2e) ────────────────────────
+    _write_council_system_proposals(run_month, system_verdict, dry_run=dry_run)
 
     # ═════════════════════════════════════════════════════════════════════════
     # STAGE 7: Telegram notification
     # ═════════════════════════════════════════════════════════════════════════
     if not dry_run and not print_prompts:
         _send_council_notification(
-            run_month, confidence_score, approved_items, lessons_written, checklist,
+            run_month, confidence_score, approved_items, lessons_written,
+            checklist, system_verdict=system_verdict,
         )
 
     log.info(
@@ -1245,13 +1860,22 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="NEPSE Monthly Council")
-    parser.add_argument("--dry-run", action="store_true",
+    parser.add_argument("--dry-run",       action="store_true",
                         help="Load data, print token estimates, no API, no DB")
-    parser.add_argument("--force",   action="store_true",
+    parser.add_argument("--force",         action="store_true",
                         help="Skip first-Sunday guard (manual run)")
-    parser.add_argument("--prompt",  action="store_true",
+    parser.add_argument("--prompt",        action="store_true",
                         help="Print all stage prompts, no API, no DB")
+    parser.add_argument("--weight-review", action="store_true",
+                        help="Run quarterly lesson weight review in dry-run mode (no API, no DB)")
     args = parser.parse_args()
+
+    if args.weight_review:
+        result = _run_weight_review(dry_run=True)
+        if result is None:
+            # Either skipped (< 20 lessons) or aborted — message already logged/printed
+            sys.exit(0)
+        sys.exit(0)
 
     run(dry_run=args.dry_run, force=args.force, print_prompts=args.prompt)
 

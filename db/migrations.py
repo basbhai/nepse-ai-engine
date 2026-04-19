@@ -282,6 +282,11 @@ def seed_settings():
         ("MARKET_OPEN_TIME",       "10:45",    "NEPSE open time NST"),
         ("MARKET_CLOSE_TIME",      "15:00",    "NEPSE close time NST"),
         ("LAST_MACRO_UPDATE",      "",         "Date of last macro data entry"),
+        ("LESSON_WEIGHT_COUNCIL",     "1.5",  "Effective weight multiplier for monthly_council lessons"),
+        ("LESSON_WEIGHT_GPT_WEEKLY",  "1.0",  "Effective weight multiplier for gpt_weekly lessons"),
+        ("LESSON_WEIGHT_SEEDER",      "0.8",  "Effective weight multiplier for learning_seeder lessons"),
+        ("LESSON_WEIGHT_LAST_REVIEW", "",     "NST date of last quarterly lesson weight review"),
+        ("LESSON_WEIGHT_SAMPLE_SIZE", "0",    "Sample size used in last lesson weight review"),
     ]
 
     inserted = 0

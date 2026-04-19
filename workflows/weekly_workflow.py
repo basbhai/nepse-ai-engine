@@ -51,6 +51,12 @@ def _step(name: str, fn, dry_run: bool):
         return False
 
 
+def _is_quarterly_review_month() -> bool:
+    """True on the first Sunday of March, June, September, or December (NST)."""
+    now = datetime.now(tz=NST)
+    return now.month in (3, 6, 9, 12) and _is_first_sunday_of_month()
+
+
 def _should_run_interest_scraper() -> bool:
     """Only run interest_scraper if last run was > 25 days ago (monthly task)."""
     try:
@@ -85,6 +91,17 @@ def run(dry_run: bool = False) -> int:
             from analysis.monthly_council import run as run_council
             run_council()
         results["monthly_council"] = _step("monthly_council", _council, dry_run)
+
+        # ── Step 1c: Quarterly lesson weight review (Mar/Jun/Sep/Dec only) ──
+        if _is_quarterly_review_month():
+            def _weight_review():
+                from analysis.monthly_council import _run_weight_review
+                _run_weight_review(dry_run=dry_run)
+            results["weight_review"] = _step(
+                "lesson_weight_review (DeepSeek quarterly)", _weight_review, dry_run,
+            )
+        else:
+            log.info("── weight_review — skipped (not quarterly month)")
     else:
         log.info("── monthly_council — skipped (not first Sunday of month)")
 
