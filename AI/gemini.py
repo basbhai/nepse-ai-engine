@@ -24,6 +24,8 @@ import time
 from typing import Optional
 
 log = logging.getLogger(__name__)
+from dotenv import load_dotenv
+load_dotenv()
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -37,7 +39,7 @@ JITTER_MAX  = 15
 
 # 3 rotating API keys — key1 used as fallback for GEMINI_API_KEY backwards compat
 _GEMINI_KEYS = [
-    os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY", ""),
+    os.getenv("GEMINI_API_KEY_1") ,
     os.getenv("GEMINI_API_KEY_2", ""),
     os.getenv("GEMINI_API_KEY_3", ""),
 ]
@@ -127,6 +129,8 @@ def _sdk_call(
         contents= prompt,
         config  = types.GenerateContentConfig(**config_kwargs),
     )
+    if response.text is None:
+        raise ValueError("Gemini returned None response.text — likely safety filter or empty response")
     return response.text.strip()
 
 
