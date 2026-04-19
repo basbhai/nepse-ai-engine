@@ -46,6 +46,9 @@ TABS: dict[str, str] = {
     "floorsheet": "floorsheet",
     "floorsheet_signals": "floorsheet_signals",
     "atrad_market_watch": "atrad_market_watch",
+    "monthly_council_agenda": "monthly_council_agenda",
+    "monthly_council_log": "monthly_council_log",
+    "monthly_council_checklist": "monthly_council_checklist",
 }
 
 TABLE_DDL: dict[str, str] = {
@@ -1299,6 +1302,49 @@ TABLE_DDL: dict[str, str] = {
     CREATE INDEX IF NOT EXISTS ix_atrad_market_watch_date
         ON "atrad_market_watch" (date);
     """,
+
+    "monthly_council_agenda": """
+    CREATE TABLE IF NOT EXISTS "monthly_council_agenda" (
+        id SERIAL PRIMARY KEY,
+        run_month TEXT NOT NULL,
+        item_number TEXT,
+        agenda_item TEXT,
+        approved_by TEXT,
+        inserted_at TIMESTAMPTZ DEFAULT NOW(),
+        CONSTRAINT ux_monthly_council_agenda_run_month_item_number UNIQUE (run_month, item_number)
+    );
+    """,
+
+    "monthly_council_log": """
+    CREATE TABLE IF NOT EXISTS "monthly_council_log" (
+        id SERIAL PRIMARY KEY,
+        run_month TEXT NOT NULL,
+        stage TEXT,
+        agenda_item TEXT,
+        model TEXT,
+        direction TEXT,
+        confidence TEXT,
+        key_driver TEXT,
+        risk_factor TEXT,
+        full_response TEXT,
+        inserted_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS ix_monthly_council_log_run_month
+        ON "monthly_council_log" (run_month);
+    """,
+
+    "monthly_council_checklist": """
+    CREATE TABLE IF NOT EXISTS "monthly_council_checklist" (
+        id SERIAL PRIMARY KEY,
+        run_month TEXT NOT NULL,
+        stop_trigger TEXT,
+        go_trigger TEXT,
+        noise_items TEXT,
+        confidence_score TEXT,
+        inserted_at TIMESTAMPTZ DEFAULT NOW(),
+        CONSTRAINT ux_monthly_council_checklist_run_month UNIQUE (run_month)
+    );
+    """,
 }
 
 TABLE_COLUMNS: dict[str, list[str]] = {
@@ -1343,4 +1389,7 @@ TABLE_COLUMNS: dict[str, list[str]] = {
     "floorsheet": ["date", "symbol", "contract_id", "buyer_broker_id", "seller_broker_id", "buyer_broker", "seller_broker", "quantity", "rate", "amount", "trade_time", "source"],
     "floorsheet_signals": ["date", "symbol", "vwap", "total_trades", "total_volume", "total_turnover", "avg_trade_size", "large_order_count", "large_order_volume", "large_order_pct", "buyer_pressure", "seller_pressure", "top_buyer_broker_id", "top_seller_broker_id", "broker_concentration", "institutional_flag", "source", "computed_at"],
     "atrad_market_watch": ["date", "time", "symbol", "ltp", "open", "high", "low", "vwap", "avg_price", "bid_price", "bid_qty", "ask_price", "ask_qty", "volume", "turnover", "total_trades", "net_change", "pct_change", "low_dpr", "high_dpr", "prev_dpr_low", "prev_dpr_high", "max_al_qty", "prev_close", "vwap_dev", "bid_ask_ratio", "dpr_proximity"],
+    "monthly_council_agenda": ["run_month", "item_number", "agenda_item", "approved_by"],
+    "monthly_council_log": ["run_month", "stage", "agenda_item", "model", "direction", "confidence", "key_driver", "risk_factor", "full_response"],
+    "monthly_council_checklist": ["run_month", "stop_trigger", "go_trigger", "noise_items", "confidence_score"],
 }
