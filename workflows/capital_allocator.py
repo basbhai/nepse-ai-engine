@@ -75,7 +75,7 @@ import sys
 from datetime import datetime
 from typing import Optional
 
-from AI.gemini import ask_ai
+from AI import ask_gemini_json
 
 from sheets import (
     get_setting,
@@ -419,7 +419,7 @@ Return ONLY this JSON with no other text:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _ask_claude(prompt: str) -> Optional[dict]:
-     return ask_ai(prompt)
+     return ask_gemini_json(prompt)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -612,8 +612,8 @@ def _print_result(result: dict) -> None:
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CLI
-#   python capital_allocator.py        → full analysis
-#   python capital_allocator.py latest → print last rec from Neon
+#   python -m workflows.capital_allocator        → full analysis
+#   python -m workflows.capital_allocator latest → print last rec from Neon
 # ══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":

@@ -625,10 +625,7 @@ def _build_user_prompt(
     claude_audit_history: list[dict],
 ) -> str:
 
-    nrb_str = json.dumps(
-        {k: v for k, v in nrb.items() if v is not None},
-        ensure_ascii=False,
-    ) if nrb else "No NRB data available"
+    nrb_str = json.dumps({k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in nrb.items() if v is not None}, ensure_ascii=False, default=str) if nrb else "No NRB data available"
 
     # Aggregate stats  -  all time (not just windowed)
     total_all  = int(trade_agg.get("total", 0) or 0)
@@ -1121,7 +1118,7 @@ def _write_claude_audit(audit: dict, review_week: str) -> bool:
         return False
 
 
-def run_weekly_review(dry_run: bool = False):
+def run(dry_run: bool = False):
     """Full GPT Sunday review cycle."""
 
     now     = datetime.now(NST)
@@ -1262,7 +1259,7 @@ def main():
         print(f"--- Total tokens: ~{(len(system_prompt) + len(user_prompt)) // 4} ---")
         return
 
-    result = run_weekly_review(dry_run=args.dry_run)
+    result = run(dry_run=args.dry_run)
 
     if result:
         log.info(
