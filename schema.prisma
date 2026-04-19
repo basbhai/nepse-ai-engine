@@ -1289,4 +1289,40 @@ model atrad_market_watch {
   @@index([date])
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MONTHLY COUNCIL — multi-model deliberation (first Sunday of month)
+// ─────────────────────────────────────────────────────────────────────────────
 
+model monthly_council_agenda {
+  id           Serial
+  run_month    Text!           // e.g. "2026-05"
+  item_number  Text
+  agenda_item  Text
+  approved_by  Text            // "sonnet"
+
+  @@unique([run_month, item_number])
+}
+
+model monthly_council_log {
+  id            Serial
+  run_month     Text!
+  stage         Text            // "stage_1_grok", "stage_2_gpt", "disagreement_score", etc.
+  agenda_item   Text
+  model         Text
+  direction     Text            // Bullish | Bearish | Neutral
+  confidence    Text
+  key_driver    Text
+  risk_factor   Text
+  full_response Text
+
+  @@index([run_month])
+}
+
+model monthly_council_checklist {
+  id               Serial
+  run_month        Text!  @unique
+  stop_trigger     Text
+  go_trigger       Text
+  noise_items      Text            // JSON array as text
+  confidence_score Text            // NEPSE Confidence Score from Chairman
+}

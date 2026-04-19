@@ -25,6 +25,8 @@ from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 load_dotenv()
 
+from analysis.monthly_council import _is_first_sunday_of_month
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [WEEKLY] %(levelname)s: %(message)s",
@@ -76,6 +78,15 @@ def run(dry_run: bool = False) -> int:
         from analysis.learning_hub import run as run_hub
         run_hub()
     results["learning_hub"] = _step("learning_hub (GPT review)", _learning_hub, dry_run)
+
+    # ── Step 1b: Monthly council (first Sunday of month only) ────────────────
+    if _is_first_sunday_of_month():
+        def _council():
+            from analysis.monthly_council import run as run_council
+            run_council()
+        results["monthly_council"] = _step("monthly_council", _council, dry_run)
+    else:
+        log.info("── monthly_council — skipped (not first Sunday of month)")
 
     # ── Step 2: Capital allocator (deep weekly) ───────────────────────────────
     def _allocator():
