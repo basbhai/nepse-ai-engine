@@ -88,6 +88,8 @@ def parse_prisma(text: str) -> list:
             default_m = re.search(r'@default\("([^"]+)"\)', attrs)
             if not default_m:
                 default_m = re.search(r"@default\('([^']+)'\)", attrs)
+            if not default_m:
+                default_m = re.search(r'@default\(([0-9][0-9.]*)\)', attrs)  # unquoted numeric
             default = default_m.group(1) if default_m else None
 
             # @unique on a field = single-col unique constraint
@@ -131,7 +133,10 @@ def model_to_ddl(model: dict) -> str:
         default_part = f" DEFAULT '{f['default']}'" if f['default'] else ''
         col_lines.append(f'        {col} TEXT{null_part}{default_part}')
 
-    col_lines.append('        inserted_at TIMESTAMPTZ DEFAULT NOW()')
+    # Only auto-add inserted_at if the model doesn't already define it explicitly
+    field_names = {f['name'] for f in fields}
+    if 'inserted_at' not in field_names:
+        col_lines.append('        inserted_at TIMESTAMPTZ DEFAULT NOW()')
 
     # Inline UNIQUE constraints (skip if already primary key)
     pk_names = {f['name'] for f in fields if f['is_pk']}

@@ -813,11 +813,20 @@ def _write_lessons(
         if not _validate_lesson(lesson, i):
             continue
 
+        # Resolve source_weight from settings for this source
+        _source_key_map = {
+            "monthly_council": "LESSON_WEIGHT_COUNCIL",
+            "gpt_weekly":      "LESSON_WEIGHT_GPT_WEEKLY",
+        }
+        src = lesson.get("source", "gpt_weekly")
+        settings_key   = _source_key_map.get(src, "LESSON_WEIGHT_SEEDER")
+        lesson_sw = float(get_setting(settings_key, "1.0"))
+
         # Build the column values
         columns = {
             "created_at":           now_nst,
             "lesson_type":          lesson.get("lesson_type"),
-            "source":               lesson.get("source", "gpt_weekly"),
+            "source":               src,
             "symbol":               lesson.get("symbol", "MARKET"),
             "sector":               lesson.get("sector", "ALL"),
             "applies_to":           lesson.get("applies_to", "ALL"),
@@ -845,6 +854,7 @@ def _write_lessons(
             "last_validated":       now_nst[:10],
             "validation_count":     "1",
             "trade_journal_ids":    lesson.get("trade_journal_ids"),
+            "source_weight":        str(lesson_sw),
         }
 
         if dry_run:
