@@ -7,7 +7,7 @@ UPDATED: April 2026 Schedule (Mon-Fri Trading + Sunday Review)
 
 Schedule (NST):
     Monday–Friday (Trading):
-        Wake  10:20 AM  → morning workflow starts 10:30 AM
+        Wake  10:00 AM  → morning workflow starts 10:30 AM
         Sleep  3:45 PM  → after EOD workflow completes
     Sunday (Weekly Review):
         Wake   5:30 PM  → Review starts 5:45 PM
@@ -55,9 +55,9 @@ def _next_wake_time():
         check_date = (now + timedelta(days=i)).date()
         wd = (now + timedelta(days=i)).weekday()
 
-        # 1. TRADING DAY WAKE (Mon-Fri) @ 10:20 AM
+        # 1. TRADING DAY WAKE (Mon-Fri) @ 10:00 AM (UPDATED)
         if wd in TRADING_DAYS:
-            wake = datetime.combine(check_date, time(10, 20), tzinfo=NST)
+            wake = datetime.combine(check_date, time(10, 00), tzinfo=NST)
             if wake > now:
                 return wake
 

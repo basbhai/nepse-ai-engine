@@ -1,10 +1,20 @@
 [Unit]
-Description=NEPSE AI Engine — Git pull latest code from main
+Description=NEPSE AI Engine — Git pull + codegen + migrations
 After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=oneshot
-WorkingDirectory=/home/shanvi/nepse-ai-engine
-ExecStart=/bin/bash -c 'git fetch origin && git reset --hard origin/main'
+WorkingDirectory=/home/shanvi/nepse-engine
+ExecStart=/bin/bash -c '\
+    git fetch origin && \
+    git reset --hard origin/main && \
+    /home/shanvi/nepse-engine/venv/bin/python -m db.codegen && \
+    /home/shanvi/nepse-engine/venv/bin/python -m db.migrations'
 StandardOutput=journal
 StandardError=journal
+SyslogIdentifier=nepse-gitpull
+EnvironmentFile=/home/shanvi/nepse-engine/.env
+
+[Install]
+WantedBy=default.target

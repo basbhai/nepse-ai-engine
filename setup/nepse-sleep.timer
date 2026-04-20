@@ -1,13 +1,11 @@
 [Unit]
-Description=NEPSE AI — Sleep Scheduler Timer (Updated April 2026)
+Description=NEPSE AI — Sleep Scheduler Timer (April 2026)
 
 [Timer]
-# Standard Trading Days (Mon–Fri): sleep at 3:45 PM NST = 10:00 UTC
 OnCalendar=Mon,Tue,Wed,Thu,Fri 10:00:00 UTC
-
-# Weekly Review: Now on Friday evening after the new final trading day
-OnCalendar=Fri 12:30:00 UTC
+OnCalendar=Sun 12:30:00 UTC
 Persistent=false
 AccuracySec=60s
+
 [Install]
 WantedBy=timers.target
