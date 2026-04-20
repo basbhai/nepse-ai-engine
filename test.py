@@ -7,6 +7,9 @@ from dotenv import load_dotenv
 load_dotenv()  # Load environment variables from .env file
 
 
+
+
+
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 # First API call with reasoning
 response = requests.post(
@@ -20,10 +23,10 @@ response = requests.post(
     "messages": [
         {
           "role": "user",
-          "content": "How many r's are in the word 'strawberry'?"
+          "content": {"How many r's are in the word 'strawberry'?"}
         }
       ],
-    "reasoning": {"enabled": True}
+    "reasoning": {"enabled": False}
   })
 )
 

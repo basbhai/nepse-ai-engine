@@ -31,6 +31,8 @@ load_dotenv()  # Load environment variables from .env file
 # ---------------------------------------------------------------------------
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_URL     = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
 
 CLAUDE_MODEL   = os.getenv("CLAUDE_MODEL",   "anthropic/claude-sonnet-4-6")
 GPT_MODEL      = os.getenv("GPT_MODEL",      "openai/gpt-4o")
@@ -354,15 +356,22 @@ def ask_deepseek(
         return None
 
 
+
 def ask_free(
     prompt: str,
     system: Optional[str] = None,
     context: str = "free",
 ) -> Optional[str]:
     """
-    Call a free OpenRouter model for lightweight NLP tasks.
-    No retry — free tier is flaky, fail fast and let caller handle it.
-    Returns raw text or None on failure.
+    Call a free OpenRouter model for lightweight NLP tasks (telegram_nlp).
+    Uses OpenAI SDK with OpenRouter base URL.
+    Tries model chain — first non-empty response wins.
+    No reasoning — simple JSON parsing doesn't need it.
+
+    Chain:
+        1. google/gemma-4-26b-a4b-it:free   — reliable, good JSON
+        2. openai/gpt-oss-120b:free          — largest free model, best fallback
+        3. minimax/minimax-m2.5:free         — last resort
 
     Usage:
         from AI.openrouter import ask_free
@@ -372,48 +381,55 @@ def ask_free(
         log.error("OPENROUTER_API_KEY not set in .env")
         return None
 
-    # Gemma free models don't support system role — merge into user message
+    from openai import OpenAI
+
+    FREE_MODEL_CHAIN = [
+        "google/gemma-4-26b-a4b-it:free",
+        "openai/gpt-oss-120b:free",
+        "minimax/minimax-m2.5:free",
+    ]
+
+    # Free models — merge system into user message for compatibility
     combined = f"{system}\n\n{prompt}" if system else prompt
     messages = [{"role": "user", "content": combined}]
 
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type":  "application/json",
-        "HTTP-Referer":  "https://github.com/basbhai/nepse-ai-engine",
-        "X-Title":       "NEPSE AI Engine",
-    }
-    payload = {
-        "model":       "google/gemma-3n-e2b-it:free",
-        "max_tokens":  200,
-        "temperature": 0.1,
-        "messages":    messages,
-    }
+    client = OpenAI(
+        base_url="https://openrouter.ai/api/v1",
+        api_key=OPENROUTER_API_KEY,
+        default_headers={
+            "HTTP-Referer": "https://github.com/basbhai/nepse-ai-engine",
+            "X-Title":      "NEPSE AI Engine",
+        },
+    )
 
-    try:
-        log.info("[%s] Free model call...", context)
-        resp = requests.post(
-            OPENROUTER_URL,
-            headers=headers,
-            data=json.dumps(payload),
-            timeout=30,
-        )
-        if resp.status_code != 200:
-            log.warning(
-                "[%s] Free model HTTP %d: %s",
-                context, resp.status_code, resp.text[:200],
+    for model in FREE_MODEL_CHAIN:
+        try:
+            log.info("[%s] Free model call (%s)...", context, model)
+            response = client.chat.completions.create(
+                model       = model,
+                messages    = messages,
+                max_tokens  = 300,
+                temperature = 0.1,
+                timeout     = 30,
+                # NO reasoning — content field is empty when reasoning dominates
             )
-            return None
-        content = resp.json()["choices"][0]["message"].get("content") or ""
-        if not content:
-            log.warning("[%s] Free model returned empty content", context)
-            return None
-        log.info("[%s] Free model responded", context)
-        return content.strip()
-    except Exception as exc:
-        log.warning("[%s] Free model failed: %s", context, exc)
-        return None
-    
+            content = (response.choices[0].message.content or "").strip()
+            if not content:
+                log.warning("[%s] %s returned empty content — trying next", context, model)
+                continue
 
+            log.info("[%s] Free model responded (%s)", context, model)
+            return content
+
+        except Exception as exc:
+            log.warning("[%s] %s failed: %s — trying next", context, model, exc)
+            continue
+
+    log.error("[%s] All free models in chain failed", context)
+    return None
+
+
+    
 def ask_gemini_lite(
     prompt: str,
     system: Optional[str] = None,
@@ -436,7 +452,7 @@ def ask_gemini_lite(
     return _call(
         model       = "google/gemini-2.5-flash-lite",
         messages    = messages,
-        max_tokens  = 1000,
+        max_tokens  = 10000,
         temperature = temperature,
         context     = context,
     )
