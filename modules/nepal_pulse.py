@@ -82,7 +82,8 @@ NEPAL_ANCHORS = [
 
 # ── Keywords ──────────────────────────────────────────────────────────────────
 BANDH_KEYWORDS = [
-    "बन्द", "चक्काजाम", "आम हड्ताल",
+    "नेपाल बन्द", "आम बन्द", "चक्काजाम", "आम हड्ताल",
+    "सर्वदलीय बन्द", "जिल्ला बन्द", "काठमाडौं बन्द",
     "nepal bandh", "nepal strike", "chakka jam",
     "nepal shutdown", "nepal transport strike",
     "nepse closed", "nepse closure",
@@ -96,13 +97,13 @@ IPO_KEYWORDS = [
 ]
 
 CRISIS_KEYWORDS = [
-    "राजीनामा", "संसद विघटन", "अविश्वास प्रस्ताव", "सरकार ढल्यो",
+    "संसद विघटन", "अविश्वास प्रस्ताव", "सरकार ढल्यो",
+    "प्रधानमन्त्रीले राजीनामा", "सरकार पतन",          # ← PM-specific resignation
     "nepal prime minister resign", "nepal government collapse",
     "nepal parliament dissolve", "nepal political crisis",
     "nepal no confidence", "pm oli resign", "pm dahal resign",
     "pm prachanda resign",
 ]
-
 # ══════════════════════════════════════════════════════════════════════════════
 # SCORE MAP
 # Evidence-based weights — see research paper synthesis in session notes.

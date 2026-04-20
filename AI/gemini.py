@@ -160,7 +160,7 @@ def _openrouter_fallback(
         return _call(
             model       = OPENROUTER_GEMINI_MODEL,
             messages    = messages,
-            max_tokens  = 2000,
+            max_tokens  = 10000,
             temperature = temperature,
             context     = f"{context}_openrouter_fallback",
         )
