@@ -48,9 +48,10 @@ except ImportError as e:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# THE 15 SEEDS
+# THE 1 SEEDS
 # Sourced from: Karki 2023, Khadka & Rajopadhyaya 2023, Adhikari 2023 +
-#               4 additional NEPSE research papers cited in handoff.
+#               4 additional NEPSE research papers cited in handoff +
+#               Vaidya 2020 (MA forecasting accuracy, JNBS Vol XIII).
 #
 # Schema fields used (all Text in DB):
 #   lesson_type, source, symbol, sector, applies_to,
@@ -600,6 +601,83 @@ def _build_seeds() -> list[dict]:
             "trade_journal_ids":   "",
             "created_at":          now,
         },
+        # ──────────────────────────────────────────────────────────────────────
+        # MOVING AVERAGE PERIOD RESEARCH (2) — Vaidya 2020, JNBS Vol XIII
+        # ──────────────────────────────────────────────────────────────────────
+
+        {
+            # Seed 16: 100-SMA and 100-EMA — worst forecasters for NEPSE, avoid
+            "lesson_type":         "FAILURE_MODE",
+            "source":              "research_paper",
+            "symbol":              "MARKET",
+            "sector":              "ALL",
+            "applies_to":          "ALL",
+            "condition":           "indicator_period = '100'",
+            "finding":             (
+                "100-SMA and 100-EMA are the worst moving average forecasters for NEPSE with MAPE "
+                "values of 8.0554 and 5.7011 respectively — over 1000x worse than 5-SMA (MAPE 0.0003) "
+                "(Vaidya 2020, JNBS Vol XIII). The 100-day window aligns with quarterly reporting "
+                "cycles which research confirms do NOT drive NEPSE movement. Never use 100-period MA "
+                "as a signal component or trend filter in any NEPSE model. If indicators.py computes "
+                "a 100-SMA, its contribution must be zeroed out in filter_engine scoring."
+            ),
+            "action":              "BLOCK_ENTRY",
+            "trade_count":         "0",
+            "win_count":           "0",
+            "loss_count":          "0",
+            "win_rate":            "0.0",
+            "avg_return_pct":      "0",
+            "avg_pnl_npr":         "0",
+            "confidence_level":    "HIGH",
+            "loss_cause_primary":  "SIGNAL_FAILURE",
+            "geo_delta_avg":       "0",
+            "nepal_delta_avg":     "0",
+            "alpha_vs_nepse_avg":  "0",
+            "active":              "true",
+            "superseded_by":       "",
+            "last_validated":      now[:10],
+            "validation_count":    "1",
+            "trade_journal_ids":   "",
+            "created_at":          now,
+        },
+
+        {
+            # Seed 17: Optimal MA periods for NEPSE — 5-SMA short-term, 200-SMA long-term
+            "lesson_type":         "SIGNAL_FILTER",
+            "source":              "research_paper",
+            "symbol":              "MARKET",
+            "sector":              "ALL",
+            "applies_to":          "ALL",
+            "condition":           "indicator_type IN ('SMA', 'EMA', 'WMA')",
+            "finding":             (
+                "Vaidya 2020 (JNBS, 4876 NEPSE trading days 1998-2020): optimal MA periods are "
+                "5-SMA for short-term (MAPE 0.0003, best tracker of weekly price action) and "
+                "200-SMA for long-term trend (MAPE 0.0019). 50-SMA and 50-EMA are tied second-best "
+                "long-term (MAPE 0.0021). SMA type outperforms WMA and EMA at equivalent periods. "
+                "Note: this measures index-tracking accuracy, not trading profitability — "
+                "use Karki 2023 for profitability. Use 5-SMA as momentum context (ltp > sma_5 = "
+                "positive weekly momentum). Use 200-SMA as market regime filter. "
+                "Preferred combo: 50-SMA + 200-SMA for golden/death cross. Avoid 100-period entirely."
+            ),
+            "action":              "ADD_TO_REASONING",
+            "trade_count":         "0",
+            "win_count":           "0",
+            "loss_count":          "0",
+            "win_rate":            "0.0",
+            "avg_return_pct":      "0",
+            "avg_pnl_npr":         "0",
+            "confidence_level":    "HIGH",
+            "loss_cause_primary":  "NULL",
+            "geo_delta_avg":       "0",
+            "nepal_delta_avg":     "0",
+            "alpha_vs_nepse_avg":  "0",
+            "active":              "true",
+            "superseded_by":       "",
+            "last_validated":      now[:10],
+            "validation_count":    "1",
+            "trade_journal_ids":   "",
+            "created_at":          now,
+        },
     ]
 
     return seeds
@@ -744,10 +822,10 @@ def cmd_status() -> None:
     # Show seeder readiness
     if len(research) == 0:
         print("  ⚠  NO SEEDS LOADED. Run: python learning_seeder.py --execute\n")
-    elif len(research) < 15:
-        print(f"  ⚠  Only {len(research)}/15 seeds present. Re-run --execute.\n")
+    elif len(research) < 17:
+        print(f"  ⚠  Only {len(research)}/17 seeds present. Re-run --execute.\n")
     else:
-        print(f"  ✅ All 15 research seeds present. System ready.\n")
+        print(f"  ✅ All 17 research seeds present. System ready.\n")
 
 
 def cmd_reset() -> None:
