@@ -720,6 +720,7 @@ def run_eod_audit(dry_run: bool = False) -> dict:
     if not open_positions:
         log.info("No open positions — running KPI update only.")
         _update_financials_kpis()
+        _update_market_state()
         return summary
 
     still_open = []
@@ -916,6 +917,7 @@ def run_paper_audit(dry_run: bool = False) -> dict:
     if not closed_rows:
         log.info("No unaudited paper trades — running KPI update only.")
         _update_financials_kpis()
+        _update_market_state()
         return summary
 
     processed_trades = []
