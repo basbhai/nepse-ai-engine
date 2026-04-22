@@ -19,7 +19,6 @@ Called by:
 """
 
 from curses import raw
-from curses import raw
 import os
 import sys
 import logging
@@ -28,7 +27,7 @@ import json
 import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from AI import ask_gemini_text
+from AI import ask_deepseek_text
 
 
 from sheets import run_raw_sql, upsert_row, get_setting
@@ -551,7 +550,7 @@ def build_daily_context(target_date: str, dry_run: bool = False) -> dict | None:
         target_date, geo_data, pulse_data, breadth, nrb, signals, nepse_idx,
         gate_data=gate_data, avg_conf=avg_conf
     )
-    raw        = ask_gemini_text(prompt, context="daily_summarizer")
+    raw        = ask_deepseek_text(prompt, context="daily_summarizer")
     narratives = _parse_gemini_response(raw) if raw else {}
 
     if not narratives:
