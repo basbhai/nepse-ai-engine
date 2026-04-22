@@ -132,7 +132,7 @@ def _call(
     if extra_body:
         payload.update(extra_body)
     if use_search:
-        payload["tools"] = [{"type": "web_search"}]
+        payload["tools"] = [{"type": "openrouter:web_search"}]
         payload["tool_choice"] = "auto"
 
     last_error = ""
