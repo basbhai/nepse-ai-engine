@@ -45,7 +45,7 @@ from sheets import (
     get_macro_data,
 )
 from calendar_guard import flag_adhoc_closure, today_nst
-from AI import ask_gemini_json
+from AI import ask_deepseek_text
 from config import NST
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -523,7 +523,7 @@ def _scrape_and_analyze(force_keywords: bool = False) -> dict:
 
     result = {}
     if not force_keywords:
-        result = ask_gemini_json(
+        result = ask_deepseek_text(
             prompt  = _build_gemini_prompt(df),
             context = "nepal_pulse",
         )

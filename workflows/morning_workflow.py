@@ -122,10 +122,15 @@ def run(dry_run: bool = False, skip_guard: bool = False) -> int:
 
     # ── Step 6: Nepal pulse ───────────────────────────────────────────────────
     def _nepal():
-        from modules.nepal_pulse import run as run_nepal
-        run_nepal()
-    results["nepal"] = _step("nepal_pulse (news + Gemini)", _nepal, dry_run)
+        import subprocess
+        result = subprocess.run(
+            ["xvfb-run", "python", "-m", "modules.nepal_pulse"],
+            capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr[-500:])
 
+    results["nepal"] = _step("nepal_pulse (news + Gemini)", _nepal, dry_run)
     # ── Step 7: Capital allocator ─────────────────────────────────────────────
     def _allocator():
         from workflows.capital_allocator import run as run_alloc

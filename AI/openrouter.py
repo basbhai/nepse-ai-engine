@@ -19,6 +19,7 @@ import os
 import random
 import time
 from typing import Optional
+from xml.parsers.expat import model
 from dotenv import load_dotenv
 
 import requests
@@ -104,6 +105,7 @@ def _call(
     temperature: float,
     context:    str,
     extra_body: Optional[dict] = None,
+    use_search: bool = False,
 ) -> Optional[str]:
     """
     Core HTTP call to OpenRouter with retry logic.
@@ -125,9 +127,13 @@ def _call(
         "max_tokens":  max_tokens,
         "temperature": temperature,
         "messages":    messages,
+
     }
     if extra_body:
         payload.update(extra_body)
+    if use_search:
+        payload["tools"] = [{"type": "web_search"}]
+        payload["tool_choice"] = "auto"
 
     last_error = ""
     for attempt in range(1, MAX_RETRIES + 1):
