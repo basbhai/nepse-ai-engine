@@ -551,7 +551,7 @@ def build_daily_context(target_date: str, dry_run: bool = False) -> dict | None:
         gate_data=gate_data, avg_conf=avg_conf
     )
     raw        = ask_deepseek_text(prompt, context="daily_summarizer")
-    narratives = _parse_gemini_response(raw) if raw else {}
+    narratives = raw if isinstance(raw, dict) else (_parse_gemini_response(raw) if raw else {})
 
     if not narratives:
         log.warning("Gemini narrative failed for %s — using fallback", target_date)
