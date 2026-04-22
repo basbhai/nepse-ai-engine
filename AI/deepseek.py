@@ -36,11 +36,12 @@ JITTER_MAX       = 15
 
 STABLE_CHECKS    = 4      # consecutive unchanged polls → generation done
 POLL_INTERVAL_MS = 500    # ms between polls
-RESPONSE_TIMEOUT = 90_000 # ms — max wait for <pre> to appear
+RESPONSE_TIMEOUT = 90_000 # ms — max wait for markdown div to appear
 
-SEL_EMAIL    = 'input[placeholder="Phone number / email address"]'
-SEL_PASSWORD = 'input[placeholder="Password"]'
-SEL_TEXTAREA = 'textarea[placeholder="Message DeepSeek"]'
+SEL_EMAIL       = 'input[placeholder="Phone number / email address"]'
+SEL_PASSWORD    = 'input[placeholder="Password"]'
+SEL_TEXTAREA    = 'textarea[placeholder="Message DeepSeek"]'
+SEL_MARKDOWN    = '.ds-markdown'   # new selector for response div
 
 _EMAIL    = os.getenv("DEEPSEEK_EMAIL", "")
 _PASSWORD = os.getenv("DEEPSEEK_PASSWORD", "")
@@ -153,11 +154,9 @@ def close_session() -> None:
 # ---------------------------------------------------------------------------
 def _playwright_call(prompt: str, system: Optional[str]) -> str:
     """
-    Send a prompt to the DeepSeek chat UI and return the raw <pre> text.
-
-    System prompt is prepended to the user prompt since the chat UI
-    has no separate system prompt field.
-    Raises on timeout or page errors — caller handles retry.
+    Send a prompt to the DeepSeek chat UI and return the raw text from
+    the .ds-markdown div (instead of <pre>). Waits for generation to finish
+    by polling the text content until stable.
     """
     full_prompt = f"{system}\n\n{prompt}" if system else prompt
 
@@ -170,17 +169,18 @@ def _playwright_call(prompt: str, system: Optional[str]) -> str:
     _page.locator(SEL_TEXTAREA).fill(full_prompt)
     _page.press(SEL_TEXTAREA, "Enter")
 
-    # Wait for response block to appear
-    _page.wait_for_selector("pre", state="visible", timeout=RESPONSE_TIMEOUT)
+    # Wait for response markdown div to appear
+    _page.wait_for_selector(SEL_MARKDOWN, state="visible", timeout=RESPONSE_TIMEOUT)
 
     # Poll until text stops changing (generation complete)
-    pre    = _page.locator("pre").last
+    md_div = _page.locator(SEL_MARKDOWN).first
     last   = ""
     stable = 0
 
     while stable < STABLE_CHECKS:
         _page.wait_for_timeout(POLL_INTERVAL_MS)
-        current = pre.inner_text()
+        # Get combined text content of the div (includes all nested spans)
+        current = md_div.inner_text()
         if current and current == last:
             stable += 1
         else:
@@ -226,7 +226,7 @@ def ask_deepseek_text(
     Internally:
       1. Launches a singleton browser session (login once, reuse)
       2. Sends the prompt via the DeepSeek chat UI
-      3. Waits for generation to finish (stable <pre> text)
+      3. Waits for generation to finish (stable .ds-markdown text)
       4. Strips markdown fences and parses JSON
       5. Retries up to MAX_RETRIES times with jitter on transient errors
       6. Alerts admin via Telegram if all retries fail
