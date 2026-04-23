@@ -109,13 +109,8 @@ def run(dry_run: bool = False, skip_guard: bool = False) -> int:
 
     # ── Step 3: Daily context summarizer (if built) ───────────────────────────
     def _summarizer():
-        import subprocess
-        result = subprocess.run(
-            ["xvfb-run", "python", "-m", "analysis.daily_context_summarizer"],
-            capture_output=True, text=True
-        )
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr[-500:])
+        from analysis.daily_context_summarizer import run as run_summarizer
+        run_summarizer()
 
     results["summarizer"] = _step("daily_context_summarizer", _summarizer, dry_run)
     # ── Summary ───────────────────────────────────────────────────────────────
