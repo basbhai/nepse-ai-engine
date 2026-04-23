@@ -1,0 +1,19 @@
+[Unit]
+Description=NEPSE AI — Execution Monitor (30-sec intraday position intelligence)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/shanvi/nepse-engine
+ExecStart=/home/shanvi/nepse-engine/venv/bin/python -m modules.execution_monitor
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nepse-monitor
+EnvironmentFile=/home/shanvi/nepse-engine/.env
+TimeoutStartSec=600
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=default.target

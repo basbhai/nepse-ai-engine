@@ -284,6 +284,62 @@ def fetch_order_book(symbol: str) -> dict:
         log.error(f"fetch_order_book {symbol}: {e}")
         return {}
 
+def get_ltp_live(symbol: str) -> Optional[dict]:
+    """
+    Fetch live price + market data for a single symbol via getQuickWatch.
+    Used by execution_monitor (30-sec loop) — always fresh, no DB read.
+    Returns dict with ltp, vwap, bid_price, bid_qty, ask_price, ask_qty,
+    low_dpr, high_dpr, volume, or None on failure.
+    """
+    if not _ensure_session():
+        return None
+    try:
+        r = _session.get(
+            f"{BASE_URL}/watch",
+            params={
+                "action":                "getQuickWatch",
+                "format":                "json",
+                "exchange":              "NEPSE",
+                "bookDefId":             "1",
+                "securityid":            symbol,
+                "watchId":               WATCH_ID,
+                "isquickwatchsecurity":  "true",
+                "lastUpdatedId":         "0",
+                "dojo.preventCache":     str(int(time.time() * 1000)),
+            },
+            timeout=10,
+        )
+        data = _parse(r)
+        if data.get("code") != "0":
+            return None
+
+        w = data.get("data", {}).get("watch", [])
+        if not w:
+            return None
+        w = w[0]
+
+        def _f(key):
+            try:
+                return float(str(w.get(key, "0")).replace(",", "") or 0)
+            except (ValueError, TypeError):
+                return 0.0
+
+        return {
+            "symbol":    symbol,
+            "ltp":       _f("ltp"),
+            "vwap":      _f("vwap"),
+            "bid_price": _f("bidprice"),
+            "bid_qty":   _f("bidqty"),
+            "ask_price": _f("askprice"),
+            "ask_qty":   _f("askqty"),
+            "low_dpr":   _f("lowdpr"),
+            "high_dpr":  _f("highdpr"),
+            "volume":    _f("totvolume"),
+            "vwap_dev":  (_f("ltp") - _f("vwap")) / _f("vwap") if _f("vwap") > 0 else 0.0,
+        }
+    except Exception as e:
+        log.error("get_ltp_live(%s): %s", symbol, e)
+        return None
 
 def run():
     if not login():
