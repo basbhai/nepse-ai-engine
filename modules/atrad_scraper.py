@@ -13,7 +13,7 @@ import pandas as pd
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
-
+from typing import Optional
 from sheets import write_row, upsert_row
 from config import NST
 
