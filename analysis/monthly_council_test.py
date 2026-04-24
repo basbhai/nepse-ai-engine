@@ -2,33 +2,31 @@
 """
 analysis/monthly_council_test.py — NEPSE AI Engine
 ==============================================
-TEST VERSION of monthly_council.py using free models only.
-Validates the 5-model pipeline end-to-end before committing to paid models.
+TEST VERSION — Full 4-trade review council.
+Analyses all 4 closed paper trades: AHL (WIN), NHPC (LOSS), PPCL (LOSS), CHL (LOSS).
 
-FREE MODEL STACK:
-  Stage -1 : GPT-OSS-120b    (openai/gpt-oss-120b:free)       — hindsight audit
-  Stage 0a : GPT-OSS-120b    (openai/gpt-oss-120b:free)       — agenda draft
-  Stage 0b : Hy3-Preview     (tencent/hy3-preview:free)       — agenda review
-  Stage 1  : DeepSeek R1     (ask_deepseek_text — Playwright)  — math/contrarian
-  Stage 2  : Hy3-Preview     (tencent/hy3-preview:free)       — sentiment/news
-  Stage 3  : Minimax-M2.5    (minimax/minimax-m2.5:free)      — technical
-  Stage 4  : GPT-OSS-120b    (openai/gpt-oss-120b:free)       — macro/narrative
-  Stage 5  : Gemini Flash     (ask_gemini_text — native SDK)   — red team
-  Stage 6  : Gemini Flash     (ask_gemini_text — native SDK)   — chairman
-  Stage 7  : Telegram notification
+CHEAP MULTI-MODEL STACK:
+  Stage -1 : Qwen3.5-flash    (qwen/qwen3.5-flash-02-23)    — hindsight audit
+  Stage 0a : GPT-4.1-nano     (openai/gpt-4.1-nano)         — agenda draft
+  Stage 0b : Qwen3.5-flash    (qwen/qwen3.5-flash-02-23)    — agenda review
+  Stage 1  : DeepSeek v3.1    (deepseek/deepseek-chat-v3.1) — quant/contrarian
+  Stage 2  : Grok-4.1-fast    (x-ai/grok-4.1-fast)          — sentiment/news
+  Stage 3  : Qwen3.5-flash    (qwen/qwen3.5-flash-02-23)    — technical
+  Stage 4  : GPT-4.1-nano     (openai/gpt-4.1-nano)         — macro
+  Stage 5  : Gemini Flash      (native SDK — FREE)           — red team
+  Stage 6  : Claude-3-haiku   (anthropic/claude-3-haiku)    — chairman
 
-THREE RUN MODES:
-  python -m analysis.monthly_council_test            # full API + read DB + NO writes + full logs
-  python -m analysis.monthly_council_test --write    # full API + read DB + WITH writes + full logs
-  python -m analysis.monthly_council_test --dry-run  # no API + no writes (structure test only)
-  python -m analysis.monthly_council_test --prompt   # print prompts only
+DESIGN:
+  - Always writes to DB (no flag needed)
+  - DB tag: TEST-FULL-4TRADES-2026-04 (isolated from production)
+  - Full prompt + response logging — zero truncation
+  - Resume: skips agenda items already written to DB on rerun
+  - Agenda explicitly focused on all 4 trades
 
-KEY DESIGN:
-  - dry_run=True  → skips ALL API calls (structure/data test)
-  - write_db=True → enables DB writes (off by default — safe to run anytime)
-  - Logs EVERYTHING regardless of dry_run or write_db
-  - DB tag: TEST-YYYY-MM (never conflicts with production)
-  - $0 cost (all free models)
+RUN:
+  python -m analysis.monthly_council_test            # full run
+  python -m analysis.monthly_council_test --dry-run  # structure test, no API, no DB
+  python -m analysis.monthly_council_test --prompt   # print all prompts, no API, no DB
 """
 
 import argparse
@@ -41,7 +39,7 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 from AI.openrouter import _call
-from AI import ask_gemini_text, ask_deepseek_text
+from AI import ask_gemini_text
 from sheets import run_raw_sql, write_row, upsert_row, get_setting
 
 NST = ZoneInfo("Asia/Kathmandu")
@@ -53,22 +51,21 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# ── TEST model constants — all free ──────────────────────────────────────────
-TEST_GPT_MODEL      = "qwen/qwen3-coder:free"
-TEST_HY3_MODEL      = "tencent/hy3-preview:free"
-TEST_MINIMAX_MODEL  = "minimax/minimax-m2.5:free"
-# Stage 1   → ask_deepseek_text() Playwright browser (free)
-# Stage 5,6 → ask_gemini_text()   native SDK free keys
+# ── Model constants ───────────────────────────────────────────────────────────
+M_QWEN     = "qwen/qwen3.5-flash-02-23"
+M_GPT      = "openai/gpt-4.1-nano"
+M_DEEPSEEK = "deepseek/deepseek-chat-v3.1"
+M_GROK     = "x-ai/grok-4.1-fast"
+M_HAIKU    = "anthropic/claude-3-haiku"
+# Stage 5 → ask_gemini_text() native SDK (free)
 
-TEST_RUN_PREFIX = "TEST"
-
-# Token budget (same as production)
-MAX_DATA_TOKENS       = 2000
-MAX_DISCUSSION_TOKENS = 600
-MAX_CHAIRMAN_TOKENS   = 1500
-MAX_REDTEAM_TOKENS    = 800
-MAX_AGENDA_TOKENS     = 400
-DATA_LOOKBACK_DAYS    = 30
+RUN_MONTH_TAG  = "TEST-FULL-4TRADES-2026-04"
+MAX_DATA_TOK   = 3000   # increased — 4 trades need more context
+MAX_DISC_TOK   = 800
+MAX_CHAIR_TOK  = 2000
+MAX_RED_TOK    = 1000
+MAX_AGENDA_TOK = 600
+DATA_LOOKBACK  = 45     # 45 days to ensure all 4 trades captured
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
@@ -78,47 +75,36 @@ TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
 # SECTION 1 — CALL WRAPPERS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _openrouter(model: str, messages: list, max_tokens: int, context: str,
-                temperature: float = 0.3) -> Optional[str]:
-    log.info("[API] OpenRouter → %s (%s)", model, context)
-    result = _call(model, messages, max_tokens, temperature, context)
+def _or(model: str, messages: list, max_tokens: int, ctx: str,
+        temp: float = 0.3) -> Optional[str]:
+    log.info("[API] %s (%s)", model, ctx)
+    result = _call(model, messages, max_tokens, temp, ctx)
     if result:
-        log.info("[API] %s responded — %d chars", model, len(result))
-        # Full response logged separately in caller
+        log.info("[API] %s → %d chars", model.split("/")[-1], len(result))
     else:
-        log.warning("[API] %s returned None", model)
+        log.warning("[API] %s returned None", model.split("/")[-1])
     return result
 
 
-def _gemini(prompt: str, system: str, context: str) -> Optional[str]:
-    log.info("[API] Gemini Flash native SDK (%s)", context)
-    result = ask_gemini_text(prompt=prompt, system=system, context=context)
+def _gemini(prompt: str, system: str, ctx: str) -> Optional[str]:
+    log.info("[API] Gemini Flash native SDK (%s)", ctx)
+    result = ask_gemini_text(prompt=prompt, system=system, context=ctx)
     if result:
-        log.info("[API] Gemini responded — %d chars", len(result))
+        log.info("[API] Gemini → %d chars", len(result))
     else:
         log.warning("[API] Gemini returned None")
     return result
 
 
-def _deepseek(prompt: str, system: str, context: str) -> Optional[str]:
-    log.info("[API] DeepSeek Playwright browser (%s)", context)
-    result = ask_deepseek_text(prompt=prompt, system=system, context=context)
-    if result is None:
-        log.warning("[API] DeepSeek returned None")
-        return None
-    if isinstance(result, dict):
-        serialized = json.dumps(result, ensure_ascii=False)
-        log.info("[API] DeepSeek responded (dict) — %d chars", len(serialized))
-        return serialized
-    log.info("[API] DeepSeek responded — %d chars", len(str(result)))
-    return str(result)
+def _msgs(system: str, user: str) -> list:
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # SECTION 2 — JSON HELPER
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _parse_json_safe(raw: str, context: str = "") -> Optional[dict]:
+def _parse(raw: str, ctx: str = "") -> Optional[dict]:
     if not raw:
         return None
     text = raw.strip()
@@ -130,62 +116,89 @@ def _parse_json_safe(raw: str, context: str = "") -> Optional[dict]:
             text = text[4:].strip()
     try:
         parsed = json.loads(text)
-        log.info("[JSON] %s parsed OK", context)
+        log.info("[JSON] %s OK", ctx)
         return parsed
     except json.JSONDecodeError as e:
-        log.error("[JSON] %s parse failed: %s | raw[:200]: %s", context, e, raw[:200])
+        log.error("[JSON] %s failed: %s\nFull raw response:\n%s", ctx, e, raw)
         return None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SECTION 3 — DATA LOADERS (logging suppressed per user request)
+# SECTION 3 — AGENDA FLATTENER
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _flatten(items: list) -> list[str]:
+    """
+    Ensure all agenda items are plain strings.
+    GPT-nano sometimes returns {item:..., details:...} dicts — extract text.
+    """
+    result = []
+    for item in items:
+        if isinstance(item, dict):
+            text = (
+                item.get("item") or item.get("title") or
+                item.get("agenda_item") or item.get("topic") or
+                next((v for v in item.values() if isinstance(v, str)), None) or
+                json.dumps(item, ensure_ascii=False)
+            )
+            result.append(str(text).strip())
+        else:
+            result.append(str(item).strip())
+    return [i for i in result if i]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SECTION 4 — DATA LOADERS
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _cutoff() -> str:
-    return (datetime.now(NST) - timedelta(days=DATA_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+    return (datetime.now(NST) - timedelta(days=DATA_LOOKBACK)).strftime("%Y-%m-%d")
 
 
 def _load(query: str, params=None, label: str = "") -> list[dict]:
     try:
         rows = run_raw_sql(query, params) or []
-        # Logging removed per user request: "skip logging like fetching data etc."
+        log.info("[DB] %s: %d rows", label, len(rows))
         return rows
     except Exception as e:
-        log.error("[DB] %s load failed: %s", label, e)
+        log.error("[DB] %s failed: %s", label, e)
         return []
 
 
-def _load_open_positions() -> list[dict]:
+def _load_positions() -> list[dict]:
     try:
-        paper_mode = get_setting("PAPER_MODE", "true").lower() == "true"
-        if paper_mode:
+        paper = get_setting("PAPER_MODE", "true").lower() == "true"
+        if paper:
             rows = run_raw_sql(
-                "SELECT symbol, wacc, total_shares, first_buy_date "
-                "FROM paper_portfolio WHERE status='OPEN'"
+                "SELECT symbol, wacc, total_shares, first_buy_date, status "
+                "FROM paper_portfolio ORDER BY id DESC LIMIT 10"
             ) or []
         else:
             rows = run_raw_sql(
-                "SELECT symbol, entry_price, shares, entry_date "
-                "FROM portfolio WHERE status='OPEN'"
+                "SELECT symbol, entry_price, shares, entry_date, status "
+                "FROM portfolio ORDER BY id DESC LIMIT 10"
             ) or []
+        log.info("[DB] positions: %d rows", len(rows))
         return rows
     except Exception as e:
-        log.error("[DB] open_positions load failed: %s", e)
+        log.error("[DB] positions failed: %s", e)
         return []
 
 
-def _load_all_data() -> dict:
-    log.info("[DATA] Loading all context data...")
+def _load_all() -> dict:
+    c = _cutoff()
+    log.info("[DATA] Loading context (cutoff=%s, lookback=%dd)...", c, DATA_LOOKBACK)
     return {
+        # All closed trades — extended lookback to catch all 4
+        "trade_journal":  _load(
+            "SELECT * FROM trade_journal WHERE entry_date >= %s ORDER BY entry_date ASC",
+            (c,), "trade_journal"),
         "daily_context":  _load(
             "SELECT * FROM daily_context_log WHERE date >= %s ORDER BY date DESC LIMIT 30",
-            (_cutoff(),), "daily_context"),
-        "trade_journal":  _load(
-            "SELECT * FROM trade_journal WHERE entry_date >= %s ORDER BY entry_date DESC LIMIT 30",
-            (_cutoff(),), "trade_journal"),
+            (c,), "daily_context"),
         "gate_misses":    _load(
             "SELECT * FROM gate_misses WHERE date >= %s ORDER BY date DESC LIMIT 50",
-            (_cutoff(),), "gate_misses"),
+            (c,), "gate_misses"),
         "nrb":            _load(
             "SELECT * FROM nrb_monthly ORDER BY id DESC LIMIT 3",
             label="nrb_monthly"),
@@ -195,30 +208,31 @@ def _load_all_data() -> dict:
         "lessons":        _load(
             "SELECT * FROM learning_hub WHERE active = 'true' ORDER BY id DESC LIMIT 20",
             label="learning_hub"),
-        "open_positions": _load_open_positions(),
+        "positions":      _load_positions(),
     }
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SECTION 4 — DATA CONTEXT BUILDER (logging suppressed)
+# SECTION 5 — DATA CONTEXT BUILDER
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _trim(rows: list, max_tokens: int) -> tuple[list, int]:
+def _trim(rows: list, max_tok: int) -> tuple[list, int]:
     if not rows:
         return rows, 0
-    max_chars = max_tokens * 4
-    trimmed, omitted = list(rows), 0
-    while trimmed and len(json.dumps(trimmed, ensure_ascii=False, default=str)) > max_chars:
-        trimmed.pop(0)
-        omitted += 1
-    return trimmed, omitted
+    mc = max_tok * 4
+    t, om = list(rows), 0
+    while t and len(json.dumps(t, ensure_ascii=False, default=str)) > mc:
+        t.pop(0); om += 1
+    return t, om
 
 
-def _build_data_context(data: dict) -> tuple[str, dict]:
-    budget = MAX_DATA_TOKENS // 6
+def _build_context(data: dict) -> tuple[str, dict]:
+    # Trade journal gets bigger budget — it's the focus
+    trade_budget   = MAX_DATA_TOK // 3
+    other_budget   = MAX_DATA_TOK // 8
 
-    def _section(title, rows, omitted):
-        note  = f" [{omitted} oldest omitted]" if omitted else ""
+    def _sec(title, rows, om):
+        note  = f" [{om} oldest omitted]" if om else ""
         lines = [f"=== {title}{note} ==="]
         for r in rows:
             lines.append(json.dumps(
@@ -227,187 +241,182 @@ def _build_data_context(data: dict) -> tuple[str, dict]:
             ))
         return "\n".join(lines)
 
-    sections = [
-        ("DAILY CONTEXT (last 30 days)",        "daily_context"),
-        ("TRADE JOURNAL (last 30 days)",         "trade_journal"),
-        ("GATE MISSES (last 30 days)",           "gate_misses"),
-        ("NRB MONTHLY (last 3)",                 "nrb"),
-        ("CLAUDE ACCURACY AUDIT (last 4 weeks)", "audit"),
-        ("ACTIVE LEARNING LESSONS (top 20)",     "lessons"),
-    ]
-
     parts, counts = [], {}
-    for title, key in sections:
-        rows, omit = _trim(data.get(key, []), budget)
+
+    # Trade journal — primary focus, full budget
+    tj, tj_om = _trim(data.get("trade_journal", []), trade_budget)
+    counts["trade_journal"] = len(tj)
+    if tj:
+        parts.append(_sec("CLOSED TRADES — ALL 4 PAPER TRADES (primary review focus)", tj, tj_om))
+
+    # Others with smaller budget
+    for title, key, budget in [
+        ("DAILY CONTEXT (30d)",   "daily_context", other_budget),
+        ("GATE MISSES (30d)",     "gate_misses",   other_budget),
+        ("NRB MONTHLY (3)",       "nrb",           other_budget),
+        ("CLAUDE AUDIT (4wk)",    "audit",         other_budget),
+        ("LESSONS (top 20)",      "lessons",       other_budget),
+    ]:
+        rows, om = _trim(data.get(key, []), budget)
         counts[key] = len(rows)
         if rows:
-            parts.append(_section(title, rows, omit))
+            parts.append(_sec(title, rows, om))
 
-    context = "\n\n".join(parts)
-    counts["est_tokens"] = len(context) // 4
-    # Removed logging of estimated tokens per user request
-    return context, counts
+    ctx = "\n\n".join(parts)
+    counts["est_tokens"] = len(ctx) // 4
+    log.info("[DATA] Context built: %d tokens | trades=%d dc=%d gm=%d nrb=%d lessons=%d",
+             counts["est_tokens"], counts["trade_journal"], counts.get("daily_context", 0),
+             counts.get("gate_misses", 0), counts.get("nrb", 0), counts.get("lessons", 0))
+    return ctx, counts
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SECTION 5 — PROMPT BUILDERS
+# SECTION 6 — PERSONAS & DISCUSSION PROMPT
 # ═══════════════════════════════════════════════════════════════════════════════
 
-_JSON_GUARD = "\n\nOutput ONLY valid JSON. No markdown fences. No preamble."
+_J = "\n\nOutput ONLY valid JSON. No markdown fences. No preamble. No explanation."
 
 _PERSONAS = {
     "deepseek": (
-        "You are a rigorous quantitative analyst specialising in emerging market microstructure. "
-        "Challenge consensus with mathematical evidence. Deeply sceptical of narrative-driven analysis. "
-        "Focus on: statistical patterns, liquidity conditions, mean-reversion, risk-adjusted metrics."
-        + _JSON_GUARD
+        "You are a rigorous quantitative analyst specialising in NEPSE microstructure. "
+        "Challenge consensus with mathematical evidence. Deeply sceptical of narrative. "
+        "Focus: trade statistics, risk-adjusted returns, signal quality, drawdown analysis, "
+        "liquidity conditions, mean-reversion." + _J
     ),
-    "hy3": (
-        "You are a NEPSE sentiment analyst with deep knowledge of Nepal's political economy. "
-        "Focus on: news sentiment, political risk, remittance flows, retail investor behaviour, social signals."
-        + _JSON_GUARD
+    "grok": (
+        "You are a NEPSE sentiment and macro news analyst. "
+        "Focus: political risk, market sentiment, remittance flows, retail behaviour, "
+        "NRB policy signals, news context around each trade's entry/exit." + _J
     ),
-    "minimax": (
+    "qwen": (
         "You are a technical analysis specialist for NEPSE. "
-        "Focus on: price patterns, volume profiles, MACD/RSI/Bollinger, sector rotation, DPR dynamics."
-        + _JSON_GUARD
+        "Focus: price patterns, volume profile, MACD/RSI/OBV/Bollinger signals, "
+        "sector rotation, DPR proximity, entry/exit timing quality." + _J
     ),
-    "gpt_oss": (
+    "gpt": (
         "You are a macro analyst covering Nepal's economy and NEPSE. "
-        "Focus on: NRB monetary policy, inflation, forex reserves, remittances, banking health, BOP."
-        + _JSON_GUARD
+        "Focus: NRB monetary policy, inflation, forex reserves, remittances, "
+        "banking sector health, BOP impact on market conditions during each trade." + _J
     ),
 }
 
-_DISCUSSION_SCHEMA = (
-    "Output ONLY valid JSON with keys: "
-    "direction (Bullish/Bearish/Neutral), "
-    "confidence (integer 0-100), "
-    "key_driver (string ≤120 chars), "
-    "risk_factor (string ≤120 chars)."
+_DISC_SCHEMA = (
+    "Output ONLY valid JSON with exactly these keys:\n"
+    "{\n"
+    '  "direction": "Bullish" | "Bearish" | "Neutral",\n'
+    '  "confidence": <integer 0-100>,\n'
+    '  "key_driver": "<string, max 150 chars>",\n'
+    '  "risk_factor": "<string, max 150 chars>"\n'
+    "}"
 )
 
 
-def _discussion_prompt(persona_key, agenda_item, item_idx, n_items,
-                       data_context, prior_responses, open_positions):
-    persona = _PERSONAS.get(persona_key, "You are a NEPSE analyst." + _JSON_GUARD)
-    system  = f"{persona}\n{_DISCUSSION_SCHEMA}"
+def _disc_prompt(persona: str, agenda_item: str, idx: int, n: int,
+                 ctx: str, prior: list, positions: list) -> tuple[str, str]:
+    system = f"{_PERSONAS.get(persona, 'You are a NEPSE analyst.' + _J)}\n\n{_DISC_SCHEMA}"
 
     prior_block = ""
-    if prior_responses:
+    if prior:
         lines = [
-            f"[{r['model_label']}] direction={r['direction']}, "
-            f"confidence={r['confidence']}, key_driver={r['key_driver']}"
-            for r in prior_responses
+            f"[{r['label']}] direction={r['direction']}, "
+            f"confidence={r['confidence']}%, "
+            f"key_driver={r['key_driver']}"
+            for r in prior
         ]
-        last = prior_responses[-1]
+        last = prior[-1]
         adversarial = (
-            f"\nADVERSARIAL INSTRUCTION: Engage directly with this claim by "
-            f"{last['model_label']}: \"{last['key_driver']}\". "
-            "Agree, refine, or rebut it with evidence from the data."
+            f"\n\nADVERSARIAL INSTRUCTION:\n"
+            f"The previous analyst ({last['label']}) claimed: \"{last['key_driver']}\"\n"
+            f"You MUST directly engage with this claim — agree with evidence, refine it, "
+            f"or rebut it using data from the trades and market context provided."
         )
-        prior_block = "\nPRIOR COUNCIL RESPONSES:\n" + "\n".join(lines) + adversarial
+        prior_block = "\n\nPRIOR COUNCIL RESPONSES:\n" + "\n".join(lines) + adversarial
 
     pos_block = ""
-    if open_positions:
+    if positions:
         pos_block = (
-            "\nCURRENT OPEN POSITIONS:\n"
-            + json.dumps(open_positions, ensure_ascii=False, default=str)
+            "\n\nPORTFOLIO CONTEXT:\n"
+            + json.dumps(positions, ensure_ascii=False, default=str)
         )
 
     user = (
-        f"MONTHLY COUNCIL TEST — Agenda item {item_idx}/{n_items}\n\n"
-        f"AGENDA ITEM: {agenda_item}\n\n"
-        f"MARKET DATA (last 30 days):\n{data_context}\n"
-        f"{pos_block}\n{prior_block}\n\n"
-        f"Analyse this agenda item and output your structured assessment as JSON."
+        f"NEPSE MONTHLY COUNCIL — 4-TRADE REVIEW\n"
+        f"Agenda Item {idx} of {n}\n\n"
+        f"TOPIC: {agenda_item}\n\n"
+        f"MARKET & TRADE DATA (last {DATA_LOOKBACK} days):\n"
+        f"{ctx}\n"
+        f"{pos_block}"
+        f"{prior_block}\n\n"
+        f"Analyse this agenda item using the trade data above. Output your JSON assessment."
     )
     return system, user
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SECTION 6 — DB WRITERS (only called when write_db=True)
+# SECTION 7 — DB WRITERS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _write_log(entry: dict, write_db: bool) -> None:
-    if not write_db:
-        log.info("[WRITE SKIPPED] monthly_council_log — stage=%s", entry.get("stage", "?"))
-        return
+def _wlog(entry: dict) -> None:
     try:
         write_row("monthly_council_log", entry)
-        log.info("[DB WRITE] monthly_council_log — stage=%s", entry.get("stage", "?"))
+        log.info("[DB] monthly_council_log — stage=%s", entry.get("stage", "?"))
     except Exception as e:
-        log.error("[DB WRITE FAILED] monthly_council_log: %s", e)
+        log.error("[DB FAIL] monthly_council_log: %s", e)
 
 
-def _write_agenda(run_month: str, items: list, write_db: bool) -> None:
-    if not write_db:
-        log.info("[WRITE SKIPPED] monthly_council_agenda — %d items", len(items))
-        return
+def _wagenda(run_month: str, items: list[str]) -> None:
     try:
         for i, item in enumerate(items, 1):
             upsert_row("monthly_council_agenda", {
                 "run_month":   run_month,
                 "item_number": str(i),
                 "agenda_item": item,
-                "approved_by": "hy3_test",
+                "approved_by": "council_test_qwen",
             }, conflict_columns=["run_month", "item_number"])
-        log.info("[DB WRITE] monthly_council_agenda — %d items", len(items))
+        log.info("[DB] agenda — %d items written", len(items))
     except Exception as e:
-        log.error("[DB WRITE FAILED] monthly_council_agenda: %s", e)
+        log.error("[DB FAIL] agenda: %s", e)
 
 
-def _write_checklist(run_month: str, chairman: dict, write_db: bool) -> None:
-    if not write_db:
-        log.info("[WRITE SKIPPED] monthly_council_checklist")
-        return
+def _wchecklist(run_month: str, ch: dict) -> None:
     try:
         upsert_row("monthly_council_checklist", {
             "run_month":        run_month,
-            "stop_trigger":     chairman.get("stop_trigger", ""),
-            "go_trigger":       chairman.get("go_trigger", ""),
-            "noise_items":      json.dumps(chairman.get("noise_items", [])),
-            "confidence_score": str(chairman.get("nepse_confidence_score", 50)),
+            "stop_trigger":     ch.get("stop_trigger", ""),
+            "go_trigger":       ch.get("go_trigger", ""),
+            "noise_items":      json.dumps(ch.get("noise_items", [])),
+            "confidence_score": str(ch.get("nepse_confidence_score", 50)),
         }, conflict_columns=["run_month"])
-        log.info("[DB WRITE] monthly_council_checklist")
+        log.info("[DB] checklist written")
     except Exception as e:
-        log.error("[DB WRITE FAILED] monthly_council_checklist: %s", e)
+        log.error("[DB FAIL] checklist: %s", e)
 
 
-def _write_override(run_month: str, confidence: int, market_state: str,
-                    chairman: dict, write_db: bool) -> None:
-    buy_blocked  = confidence <= 35 and market_state in ("BEAR", "CRISIS")
-    buy_cautious = confidence <= 50
-    log.info("[OVERRIDE] confidence=%d blocked=%s cautious=%s",
-             confidence, buy_blocked, buy_cautious)
-    if not write_db:
-        log.info("[WRITE SKIPPED] monthly_override")
-        return
+def _woverride(run_month: str, conf: int, mstate: str, ch: dict) -> None:
+    blocked  = conf <= 35 and mstate in ("BEAR", "CRISIS")
+    cautious = conf <= 50
+    log.info("[OVERRIDE] confidence=%d buy_blocked=%s buy_cautious=%s",
+             conf, blocked, cautious)
     try:
         upsert_row("monthly_override", {
             "run_month":    run_month,
-            "confidence":   str(confidence),
-            "buy_blocked":  str(buy_blocked).lower(),
-            "buy_cautious": str(buy_cautious).lower(),
-            "go_trigger":   chairman.get("go_trigger", ""),
-            "stop_trigger": chairman.get("stop_trigger", ""),
+            "confidence":   str(conf),
+            "buy_blocked":  str(blocked).lower(),
+            "buy_cautious": str(cautious).lower(),
+            "go_trigger":   ch.get("go_trigger", ""),
+            "stop_trigger": ch.get("stop_trigger", ""),
         }, conflict_columns=["run_month"])
-        log.info("[DB WRITE] monthly_override")
+        log.info("[DB] monthly_override written")
     except Exception as e:
-        log.error("[DB WRITE FAILED] monthly_override: %s", e)
+        log.error("[DB FAIL] override: %s", e)
 
 
-def _write_lessons(run_month: str, chairman: dict, now_str: str,
-                   write_db: bool) -> int:
-    lessons = chairman.get("lessons", [])
-    count   = 0
-    for lesson in lessons:
+def _wlessons(run_month: str, ch: dict, now_str: str) -> int:
+    count = 0
+    for lesson in ch.get("lessons", []):
         if not lesson or len(lesson.strip()) <= 10:
             continue
-        log.info("[LESSON] %s", lesson.strip()[:120])  # kept reasonable length
-        if not write_db:
-            log.info("[WRITE SKIPPED] learning_hub lesson")
-            continue
+        log.info("[LESSON] %s", lesson.strip())
         try:
             write_row("learning_hub", {
                 "week":        run_month,
@@ -417,55 +426,78 @@ def _write_lessons(run_month: str, chairman: dict, now_str: str,
                 "source":      "monthly_council_test",
                 "inserted_at": now_str,
             })
-            log.info("[DB WRITE] learning_hub lesson written")
+            log.info("[DB] learning_hub lesson written")
             count += 1
         except Exception as e:
-            log.error("[DB WRITE FAILED] learning_hub: %s", e)
+            log.error("[DB FAIL] lesson: %s", e)
     return count
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SECTION 7 — HELPERS
+# SECTION 8 — RESUME HELPER
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _format_transcript(approved_items: list, discussion_log: list) -> str:
-    lines = []
-    for item in approved_items:
-        lines.append(f"\n── AGENDA: {item} ──")
-        for e in discussion_log:
+def _get_completed_items(run_month: str) -> set[str]:
+    """Return set of agenda_item strings already written to monthly_council_log."""
+    try:
+        rows = run_raw_sql(
+            "SELECT DISTINCT agenda_item FROM monthly_council_log "
+            "WHERE run_month = %s AND agenda_item != 'ALL'",
+            (run_month,),
+        ) or []
+        completed = {r["agenda_item"] for r in rows if r.get("agenda_item")}
+        if completed:
+            log.info("[RESUME] Found %d completed items in DB — will skip them", len(completed))
+            for item in completed:
+                log.info("[RESUME]   SKIP: %s", item[:80])
+        return completed
+    except Exception as e:
+        log.error("[RESUME] Failed to check completed items: %s", e)
+        return set()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SECTION 9 — HELPERS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _transcript(items: list[str], dlog: list) -> str:
+    lines = ["FULL COUNCIL DISCUSSION TRANSCRIPT", "=" * 60]
+    for item in items:
+        lines.append(f"\n── AGENDA ITEM: {item} ──")
+        for e in dlog:
             if e.get("agenda_item") == item:
                 lines.append(
-                    f"  [{e['model_label']}] {e['direction']} "
-                    f"({e['confidence']}%) — {e['key_driver']}"
+                    f"  [{e['label']}] {e['direction']} ({e['confidence']}%)\n"
+                    f"    KEY DRIVER:  {e['key_driver']}\n"
+                    f"    RISK FACTOR: {e['risk_factor']}"
                 )
     return "\n".join(lines)
 
 
-def _disagreement_score(confidences: list) -> float:
-    if len(confidences) < 2:
+def _ds(confs: list) -> float:
+    if len(confs) < 2:
         return 0.0
     try:
-        return statistics.stdev(confidences)
+        return statistics.stdev(confs)
     except Exception:
         return 0.0
 
 
-def _send_telegram(run_month: str, confidence: int, approved_items: list,
-                   lessons_count: int, chairman: dict) -> None:
+def _telegram(run_month: str, conf: int, items: list, lessons: int, ch: dict) -> None:
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        log.info("[TELEGRAM] Not configured — skipping notification")
+        log.info("[TELEGRAM] Not configured — skipping")
         return
     try:
         import requests
-        verdict = chairman.get("system_verdict", "UNKNOWN")
+        verdict = ch.get("system_verdict", "?")
         emoji   = {"PROCEED": "🟢", "CAUTION": "🟡", "HALT": "🔴"}.get(verdict, "⚪")
         text = (
-            f"🧪 *MONTHLY COUNCIL TEST — {run_month}*\n\n"
-            f"{emoji} Verdict: *{verdict}*\n"
-            f"Confidence: {confidence}/100\n"
-            f"Agenda: {len(approved_items)} items | Lessons: {lessons_count}\n\n"
-            f"Go: {chairman.get('go_trigger','?')[:80]}\n"
-            f"Stop: {chairman.get('stop_trigger','?')[:80]}"
+            f"🧪 *COUNCIL TEST — {run_month}*\n\n"
+            f"{emoji} *{verdict}* | Confidence: {conf}/100\n"
+            f"Agenda: {len(items)} items | Lessons: {lessons}\n\n"
+            f"📈 Go:   {ch.get('go_trigger','?')[:100]}\n"
+            f"🛑 Stop: {ch.get('stop_trigger','?')[:100]}\n\n"
+            f"Assessment: {ch.get('market_assessment','?')[:200]}"
         )
         requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
@@ -478,192 +510,232 @@ def _send_telegram(run_month: str, confidence: int, approved_items: list,
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SECTION 8 — MAIN RUN
+# SECTION 10 — MAIN RUN
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def run(dry_run: bool = False, print_prompts: bool = False,
-        write_db: bool = False) -> None:
+def run(dry_run: bool = False, print_prompts: bool = False) -> None:
     """
-    dry_run=True  → skip all API calls (structure test only)
-    write_db=True → enable DB writes (off by default)
-    Logs everything regardless of mode.
+    dry_run=True  → skip all API calls, no DB writes
+    Always writes to DB unless dry_run.
+    Full prompt + response logging — no truncation.
     """
     now_nst   = datetime.now(NST)
-    run_month = f"{TEST_RUN_PREFIX}-{now_nst.strftime('%Y-%m')}"
+    run_month = RUN_MONTH_TAG
     now_str   = now_nst.strftime("%Y-%m-%d %H:%M:%S")
 
     log.info("=" * 65)
     log.info("NEPSE MONTHLY COUNCIL TEST — %s", run_month)
-    log.info("Stack: DeepSeek(browser) + Hy3 + Minimax + GPT-OSS + Gemini(SDK)")
-    log.info("Mode:  dry_run=%-5s | write_db=%-5s | print_prompts=%s",
-             dry_run, write_db, print_prompts)
+    log.info("Focus: All 4 closed paper trades (AHL WIN, NHPC/PPCL/CHL LOSS)")
+    log.info("Stack: DeepSeek + Grok + Qwen + GPT-nano + Gemini(free) + Haiku")
+    log.info("Mode:  dry_run=%s | write_db=%s", dry_run, not dry_run)
     log.info("=" * 65)
 
     # ── Load data ─────────────────────────────────────────────────────────────
-    data           = _load_all_data()
-    data_context, counts = _build_data_context(data)
-    open_positions = data["open_positions"]
-    daily_context  = data["daily_context"]
+    data      = _load_all()
+    ctx, cnts = _build_context(data)
+    positions = data["positions"]
+    dc        = data["daily_context"]
 
-    # ── Data logging suppressed per user request (no counts logged) ──────────
+    # ── Resume: find completed items ──────────────────────────────────────────
+    completed_items: set[str] = set()
+    if not dry_run:
+        completed_items = _get_completed_items(run_month)
 
     # ═════════════════════════════════════════════════════════════════════════
-    # STAGE -1: GPT-OSS hindsight audit
+    # STAGE -1: Qwen hindsight audit
     # ═════════════════════════════════════════════════════════════════════════
-    log.info("── STAGE -1: GPT-OSS hindsight audit")
-    audit_msgs = [
-        {"role": "system", "content": (
-            "You are a NEPSE trading system auditor. "
-            "Summarise last month's trading outcomes vs predictions in ≤200 words. Plain text."
-        )},
-        {"role": "user", "content": (
-            f"AUDIT — {run_month}\n\nDATA:\n{data_context[:1000]}\n\n"
-            f"What worked and what failed last month?"
-        )},
-    ]
+    log.info("=" * 65)
+    log.info("STAGE -1: Qwen hindsight audit")
+    log.info("=" * 65)
+
+    audit_sys = (
+        "You are a NEPSE paper trading system auditor. "
+        "You have 4 closed trades to review: AHL (WIN +4.34%), NHPC (LOSS), PPCL (LOSS), CHL (LOSS). "
+        "Summarise what worked and what failed across all 4 trades in ≤250 words. "
+        "Focus on: entry timing, market state alignment, confidence scores, signal quality, "
+        "position sizing, stop loss adherence. Plain text only — no JSON."
+    )
+    audit_user = (
+        f"AUDIT — {run_month}\n\n"
+        f"TRADE DATA:\n{ctx}\n\n"
+        f"Review all 4 closed trades. What patterns explain the 1 win and 3 losses?"
+    )
+
+    log.info("[STAGE -1] System prompt:\n%s", audit_sys)
+    log.info("[STAGE -1] User prompt:\n%s", audit_user)
+
     if dry_run:
-        log.info("[DRY RUN] Stage -1 skipped — would call %s", TEST_GPT_MODEL)
-        audit_text = "[DRY RUN]"
+        audit_text = "[DRY RUN — audit skipped]"
+        log.info("[DRY RUN] Stage -1 skipped")
     else:
-        audit_text = _openrouter(TEST_GPT_MODEL, audit_msgs, MAX_AGENDA_TOKENS, "test_audit") or ""
-        # Full response logged without truncation
-        log.info("Stage -1 audit response:\n%s", audit_text)
+        audit_text = _or(M_QWEN, _msgs(audit_sys, audit_user), MAX_AGENDA_TOK, "audit") or ""
+        log.info("[STAGE -1] Full response:\n%s", audit_text)
 
     # ═════════════════════════════════════════════════════════════════════════
-    # STAGE 0a: GPT-OSS agenda draft
+    # STAGE 0a: GPT-nano agenda draft
     # ═════════════════════════════════════════════════════════════════════════
-    log.info("── STAGE 0a: GPT-OSS agenda draft")
-    draft_msgs = [
-        {"role": "system", "content": (
-            "You are a NEPSE market analyst. "
-            "Draft 3-5 specific, actionable agenda items for the monthly council deliberation. "
-            "Output ONLY JSON: {\"agenda_items\": [\"item1\", ...]}"
-        )},
-        {"role": "user", "content": (
-            f"MONTHLY COUNCIL TEST — {run_month}\n\n"
-            f"MARKET DATA:\n{data_context}\n\n"
-            f"Draft 3-5 agenda items as JSON."
-        )},
-    ]
-    if print_prompts:
-        print(f"\n{'='*65}\nSTAGE 0a PROMPT:\n{draft_msgs[1]['content']}\n")
+    log.info("=" * 65)
+    log.info("STAGE 0a: GPT-nano agenda draft")
+    log.info("=" * 65)
+
+    draft_sys = (
+        "You are a NEPSE monthly council agenda coordinator. "
+        "Draft exactly 5 specific, actionable agenda items for council deliberation. "
+        "The council must review 4 closed paper trades: "
+        "AHL (WIN +4.34%), NHPC (LOSS -820.94 NPR), PPCL (LOSS -311.99 NPR), CHL (LOSS -2396.20 NPR). "
+        "Agenda items must be specific — reference actual trade data, signals, and patterns. "
+        "Cover: trade execution quality, signal failures, risk management, system improvements, "
+        "macro context. "
+        "Output ONLY valid JSON: {\"agenda_items\": [\"item1\", \"item2\", ...]}"
+        + _J
+    )
+    draft_user = (
+        f"COUNCIL AGENDA DRAFT — {run_month}\n\n"
+        f"AUDIT SUMMARY:\n{audit_text}\n\n"
+        f"FULL TRADE & MARKET DATA:\n{ctx}\n\n"
+        f"Draft 5 specific agenda items for council review of all 4 trades."
+    )
+
+    log.info("[STAGE 0a] System prompt:\n%s", draft_sys)
+    log.info("[STAGE 0a] User prompt:\n%s", draft_user)
 
     if dry_run:
-        log.info("[DRY RUN] Stage 0a skipped — would call %s", TEST_GPT_MODEL)
-        proposed_items = [
-            "Is NEPSE in sustained BEAR or nearing reversal? [DRY RUN]",
-            "Should position sizing reduce given 25% win rate? [DRY RUN]",
-            "Which sectors show accumulation in floorsheet data? [DRY RUN]",
+        log.info("[DRY RUN] Stage 0a skipped")
+        proposed = [
+            "AHL WIN vs NHPC/PPCL/CHL LOSS: What signals differentiated the winner from the losers? [DRY RUN]",
+            "CHL: Largest loss (-2396 NPR, 100 shares). Was position sizing proportionate to confidence? [DRY RUN]",
+            "Market state was BEAR for all 4 trades. Should BEAR state block entries entirely? [DRY RUN]",
+            "RSI lesson #16 (-4.81% drag): Were any of the 3 losses RSI-influenced entries? [DRY RUN]",
+            "Gate misses (CORBLP/CITPO/CFCLPO NO_LTP): Does the filter engine need liquidity pre-screening? [DRY RUN]",
         ]
     else:
-        raw            = _openrouter(TEST_GPT_MODEL, draft_msgs, MAX_AGENDA_TOKENS, "test_0a")
-        log.info("Stage 0a raw response:\n%s", raw)  # full response
-        parsed         = _parse_json_safe(raw, "test_0a")
-        proposed_items = parsed.get("agenda_items", []) if parsed else []
-        if not proposed_items:
-            log.warning("Stage 0a returned no items — using fallback")
-            proposed_items = ["General NEPSE market outlook [FALLBACK]"]
-        log.info("Stage 0a complete — %d proposed items: %s",
-                 len(proposed_items), proposed_items)
+        raw      = _or(M_GPT, _msgs(draft_sys, draft_user), MAX_AGENDA_TOK, "0a_draft")
+        log.info("[STAGE 0a] Full response:\n%s", raw)
+        parsed   = _parse(raw, "0a_draft")
+        proposed = _flatten(parsed.get("agenda_items", []) if parsed else [])
+        if not proposed:
+            log.warning("[STAGE 0a] No items returned — using fallback")
+            proposed = [
+                "Review AHL WIN vs 3 losses: signal quality comparison across all 4 trades",
+                "CHL loss analysis: was -2396 NPR loss preventable given entry signals?",
+                "BEAR market state and trade entry: should market state gate be stricter?",
+                "RSI lesson applicability: did RSI influence any of the 3 losing trades?",
+                "Position sizing review: was allocation proportionate to confidence scores?",
+            ]
+        log.info("[STAGE 0a] Proposed items (%d):", len(proposed))
+        for i, item in enumerate(proposed, 1):
+            log.info("  %d. %s", i, item)
 
     # ═════════════════════════════════════════════════════════════════════════
-    # STAGE 0b: Hy3 agenda review (replaced GLM)
+    # STAGE 0b: Qwen agenda review
     # ═════════════════════════════════════════════════════════════════════════
-    log.info("── STAGE 0b: Hy3 agenda review")
-    review_msgs = [
-        {"role": "system", "content": (
-            "You are reviewing a NEPSE council agenda. "
-            "Approve, reorder, or refine the proposed items. "
-            "Output ONLY JSON: {\"approved_agenda\": [\"item1\", ...]}"
-        )},
-        {"role": "user", "content": (
-            f"PROPOSED AGENDA:\n{json.dumps(proposed_items, ensure_ascii=False)}\n\n"
-            f"MARKET CONTEXT:\n{data_context[:600]}\n\n"
-            f"Approve the agenda as JSON."
-        )},
-    ]
-    if print_prompts:
-        print(f"\n{'='*65}\nSTAGE 0b PROMPT:\n{review_msgs[1]['content']}\n")
+    log.info("=" * 65)
+    log.info("STAGE 0b: Qwen agenda review")
+    log.info("=" * 65)
+
+    review_sys = (
+        "You are reviewing a NEPSE council agenda focused on 4 closed paper trades. "
+        "Approve, reorder, or improve the proposed agenda items. "
+        "Ensure items are specific and actionable — not generic. "
+        "Output ONLY valid JSON: {\"approved_agenda\": [\"item1\", ...]}"
+        + _J
+    )
+    review_user = (
+        f"PROPOSED AGENDA:\n{json.dumps(proposed, ensure_ascii=False)}\n\n"
+        f"TRADE CONTEXT:\n{ctx[:1000]}\n\n"
+        f"Review and approve as plain string list in JSON."
+    )
+
+    log.info("[STAGE 0b] System prompt:\n%s", review_sys)
+    log.info("[STAGE 0b] User prompt:\n%s", review_user)
 
     if dry_run:
-        log.info("[DRY RUN] Stage 0b skipped — would call %s", TEST_HY3_MODEL)
-        approved_items = proposed_items
+        log.info("[DRY RUN] Stage 0b skipped")
+        approved = proposed
     else:
-        raw            = _openrouter(TEST_HY3_MODEL, review_msgs, MAX_AGENDA_TOKENS, "test_0b")
-        log.info("Stage 0b raw response:\n%s", raw)  # full response
-        parsed         = _parse_json_safe(raw, "test_0b")
-        approved_items = parsed.get("approved_agenda", proposed_items) if parsed else proposed_items
-        if not approved_items:
-            approved_items = proposed_items
-        log.info("Stage 0b complete — %d approved items: %s",
-                 len(approved_items), approved_items)
-        _write_agenda(run_month, approved_items, write_db)
+        raw      = _or(M_QWEN, _msgs(review_sys, review_user), MAX_AGENDA_TOK, "0b_review")
+        log.info("[STAGE 0b] Full response:\n%s", raw)
+        parsed   = _parse(raw, "0b_review")
+        approved = _flatten(parsed.get("approved_agenda", proposed) if parsed else proposed)
+        if not approved:
+            approved = proposed
+        log.info("[STAGE 0b] Approved items (%d):", len(approved))
+        for i, item in enumerate(approved, 1):
+            log.info("  %d. %s", i, item)
+        _wagenda(run_month, approved)
 
-    n_items = len(approved_items)
+    n = len(approved)
 
     # ═════════════════════════════════════════════════════════════════════════
-    # STAGES 1-4: Per-agenda-item discussion (4 models)
+    # STAGES 1-4: Per-agenda-item discussion (4 models, adversarial)
     # ═════════════════════════════════════════════════════════════════════════
-    discussion_log:      list[dict] = []
-    disagreement_scores: dict       = {}
-
-    # (persona_key, model_label, stage_key, call_type, model_str_or_None)
-    _MODELS = [
-        ("deepseek", "deepseek_r1",   "stage_1_deepseek",  "deepseek",   None),
-        ("hy3",      "hy3_preview",   "stage_2_hy3",       "openrouter", TEST_HY3_MODEL),
-        ("minimax",  "minimax_m2.5",  "stage_3_minimax",   "openrouter", TEST_MINIMAX_MODEL),
-        ("gpt_oss",  "gpt_oss_120b",  "stage_4_gpt_oss",   "openrouter", TEST_GPT_MODEL),
+    _DISC = [
+        ("deepseek", "DeepSeek_Quant",  "stage_1_deepseek", M_DEEPSEEK),
+        ("grok",     "Grok_Sentiment",  "stage_2_grok",     M_GROK),
+        ("qwen",     "Qwen_Tech",       "stage_3_qwen",     M_QWEN),
+        ("gpt",      "GPT_Macro",       "stage_4_gpt",      M_GPT),
     ]
 
-    for item_idx, agenda_item in enumerate(approved_items, start=1):
-        log.info("── Discussion %d/%d: %s", item_idx, n_items, agenda_item)
-        item_responses:   list[dict] = []
-        item_confidences: list[int]  = []
+    dlog:   list[dict] = []
+    ds_map: dict       = {}
 
-        for persona_key, model_label, stage_key, call_type, model_str in _MODELS:
-            system, user = _discussion_prompt(
-                persona_key, agenda_item, item_idx, n_items,
-                data_context, item_responses, open_positions,
-            )
+    for idx, agenda_item in enumerate(approved, start=1):
+        agenda_item = str(agenda_item).strip()
+
+        # ── Resume: skip if already completed ────────────────────────────────
+        if agenda_item in completed_items:
+            log.info("=" * 65)
+            log.info("SKIP item %d/%d (already in DB): %s", idx, n, agenda_item[:80])
+            log.info("=" * 65)
+            # Still need to populate dlog for transcript building
+            dlog.append({
+                "label": "RESUMED", "stage": "skipped",
+                "agenda_item": agenda_item,
+                "direction": "N/A", "confidence": 0,
+                "key_driver": "[resumed from previous run]",
+                "risk_factor": "",
+            })
+            ds_map[agenda_item[:80]] = 0.0
+            continue
+
+        log.info("=" * 65)
+        log.info("DISCUSSION %d/%d: %s", idx, n, agenda_item)
+        log.info("=" * 65)
+
+        prior:  list[dict] = []
+        confs:  list[int]  = []
+
+        for persona, label, stage_key, model in _DISC:
+            system, user = _disc_prompt(persona, agenda_item, idx, n, ctx, prior, positions)
+
+            log.info("── [%s] ─────────────────────────────────────────────", stage_key)
+            log.info("[%s] System prompt:\n%s", stage_key, system)
+            log.info("[%s] User prompt:\n%s", stage_key, user)
 
             if print_prompts:
-                print(f"\n{'='*65}\n{stage_key} PROMPT:")
-                print(f"SYSTEM: {system}")
-                print(f"USER:   {user}\n")
+                print(f"\n{'='*65}\n[{stage_key}] SYSTEM:\n{system}\nUSER:\n{user}\n")
 
             if dry_run:
-                log.info("[DRY RUN] %s skipped — would call %s (%s)",
-                         stage_key, call_type, model_str or "browser")
+                log.info("[DRY RUN] %s skipped", stage_key)
                 direction, confidence = "Neutral", 50
-                key_driver  = f"[DRY RUN — {model_label}]"
+                key_driver  = f"[DRY RUN — {label}]"
                 risk_factor = "[DRY RUN]"
-                raw = json.dumps({"direction": direction, "confidence": confidence,
-                                  "key_driver": key_driver, "risk_factor": risk_factor})
+                raw = "{}"
             else:
-                log.info("[%s] calling %s (%s)...", stage_key, call_type,
-                         model_str or "playwright")
-                if call_type == "deepseek":
-                    raw = _deepseek(user, system, f"test_{stage_key}")
-                else:
-                    msgs = [{"role": "system", "content": system},
-                            {"role": "user",   "content": user}]
-                    raw  = _openrouter(model_str, msgs,
-                                       MAX_DISCUSSION_TOKENS, f"test_{stage_key}")
-
-                # Full raw response logged
-                log.info("[%s] full response:\n%s", stage_key, raw)
-
-                parsed      = _parse_json_safe(raw, stage_key) if raw else None
+                raw    = _or(model, _msgs(system, user), MAX_DISC_TOK, stage_key)
+                log.info("[%s] Full response:\n%s", stage_key, raw)
+                parsed = _parse(raw, stage_key) if raw else None
                 direction   = str(parsed.get("direction",   "Neutral")) if parsed else "Neutral"
                 confidence  = int(parsed.get("confidence",  50))        if parsed else 50
                 key_driver  = str(parsed.get("key_driver",  ""))        if parsed else ""
                 risk_factor = str(parsed.get("risk_factor", ""))        if parsed else ""
-
-                log.info("[%s] result: direction=%s confidence=%d key_driver=%s",
-                         stage_key, direction, confidence, key_driver)
+                log.info("[%s] Parsed: direction=%s confidence=%d",
+                         stage_key, direction, confidence)
+                log.info("[%s] key_driver:  %s", stage_key, key_driver)
+                log.info("[%s] risk_factor: %s", stage_key, risk_factor)
 
             entry = {
-                "model_label": model_label,
+                "label":       label,
                 "stage":       stage_key,
                 "agenda_item": agenda_item,
                 "direction":   direction,
@@ -671,110 +743,136 @@ def run(dry_run: bool = False, print_prompts: bool = False,
                 "key_driver":  key_driver,
                 "risk_factor": risk_factor,
             }
-            item_responses.append(entry)
-            item_confidences.append(confidence)
-            discussion_log.append(entry)
+            prior.append(entry)
+            confs.append(confidence)
+            dlog.append(entry)
 
-            _write_log({
-                "run_month":     run_month,
-                "stage":         stage_key,
-                "agenda_item":   agenda_item,
-                "model":         model_str or "deepseek_browser",
-                "direction":     direction,
-                "confidence":    str(confidence),
-                "key_driver":    key_driver,
-                "risk_factor":   risk_factor,
-                "full_response": raw or "",
-                "inserted_at":   now_str,
-            }, write_db)
+            if not dry_run:
+                _wlog({
+                    "run_month":     run_month,
+                    "stage":         stage_key,
+                    "agenda_item":   agenda_item,
+                    "model":         model,
+                    "direction":     direction,
+                    "confidence":    str(confidence),
+                    "key_driver":    key_driver,
+                    "risk_factor":   risk_factor,
+                    "full_response": raw or "",
+                    "inserted_at":   now_str,
+                })
 
-        ds = _disagreement_score(item_confidences)
-        disagreement_scores[agenda_item[:80]] = round(ds, 2)
-        log.info("Item %d disagreement score: %.1f | confidences: %s",
-                 item_idx, ds, item_confidences)
-        if ds > 25:
-            log.warning("HIGH disagreement on item %d (DS=%.1f) — good debate", item_idx, ds)
-        elif ds < 8 and not dry_run:
-            log.warning("LOW disagreement on item %d (DS=%.1f) — possible groupthink", item_idx, ds)
+        score = _ds(confs)
+        ds_map[str(agenda_item)[:80]] = round(score, 2)
+        log.info("[DISCUSSION %d] Disagreement score: %.1f | confidences: %s",
+                 idx, score, confs)
+        if score > 20:
+            log.info("  ✅ HIGH disagreement — genuine debate")
+        elif score < 8 and not dry_run:
+            log.warning("  ⚠️  LOW disagreement (%.1f) — possible groupthink", score)
 
     # ═════════════════════════════════════════════════════════════════════════
-    # STAGE 5: Gemini Flash red team
+    # STAGE 5: Gemini red team (FREE)
     # ═════════════════════════════════════════════════════════════════════════
-    log.info("── STAGE 5: Gemini Flash red team")
-    transcript = _format_transcript(approved_items, discussion_log)
-    log.info("Transcript built — %d chars", len(transcript))
+    log.info("=" * 65)
+    log.info("STAGE 5: Gemini Flash red team")
+    log.info("=" * 65)
+
+    ts = _transcript(approved, dlog)
+    log.info("[STAGE 5] Transcript (%d chars):\n%s", len(ts), ts)
 
     rt_sys = (
-        "You are the NEPSE Monthly Council Red Team analyst (independent — not part of the discussion). "
-        "Find the two sharpest conflicting viewpoints and assess highest risk to open positions. "
-        "Output ONLY valid JSON with keys: "
-        "conflict_1 (string), conflict_2 (string), "
-        "highest_risk (dict with recommended_action string), "
-        "red_team_verdict (string ≤200 chars)."
+        "You are the NEPSE Monthly Council Red Team analyst — independent, not part of the discussion. "
+        "You have read the full discussion transcript of 4 closed paper trades. "
+        "Your job: find the two sharpest conflicting viewpoints across all analysts. "
+        "Assess which conflict represents the highest risk to future trading. "
+        "Output ONLY valid JSON:\n"
+        "{\n"
+        '  "conflict_1": "<string — describe first conflict>",\n'
+        '  "conflict_2": "<string — describe second conflict>",\n'
+        '  "highest_risk": {"recommended_action": "<string>", "rationale": "<string>"},\n'
+        '  "red_team_verdict": "<string, max 250 chars>"\n'
+        "}"
+        + _J
     )
     rt_user = (
         f"RED TEAM REVIEW — {run_month}\n\n"
-        f"FULL COUNCIL DISCUSSION TRANSCRIPT:\n{transcript}\n\n"
-        f"CURRENT OPEN POSITIONS:\n"
-        f"{json.dumps(open_positions, ensure_ascii=False, default=str)}\n\n"
-        f"Identify conflicts. Assess risk. Output JSON."
+        f"{ts}\n\n"
+        f"PORTFOLIO:\n{json.dumps(positions, ensure_ascii=False, default=str)}\n\n"
+        f"Identify the two sharpest conflicts. Output JSON."
     )
 
-    if print_prompts:
-        print(f"\n{'='*65}\nSTAGE 5 RED TEAM PROMPT:\n{rt_user}\n")
+    log.info("[STAGE 5] System prompt:\n%s", rt_sys)
+    log.info("[STAGE 5] User prompt:\n%s", rt_user)
 
     if dry_run:
-        log.info("[DRY RUN] Stage 5 skipped — would call ask_gemini_text()")
-        redteam_result = {"highest_risk": {"recommended_action": "MONITOR"},
-                          "red_team_verdict": "[DRY RUN]"}
+        log.info("[DRY RUN] Stage 5 skipped")
+        rt_result = {
+            "highest_risk": {"recommended_action": "MONITOR", "rationale": "[DRY RUN]"},
+            "red_team_verdict": "[DRY RUN]"
+        }
     else:
-        rt_raw         = _gemini(rt_user, rt_sys, "test_5_redteam")
-        log.info("Stage 5 full response:\n%s", rt_raw)  # full response
-        redteam_result = _parse_json_safe(rt_raw, "test_5_redteam") or {}
-        log.info("Stage 5 complete — verdict: %s | risk: %s",
-                 redteam_result.get("red_team_verdict", "?")[:80],
-                 redteam_result.get("highest_risk", {}).get("recommended_action", "?"))
-        _write_log({
+        rt_raw    = _gemini(rt_user, rt_sys, "5_redteam")
+        log.info("[STAGE 5] Full response:\n%s", rt_raw)
+        rt_result = _parse(rt_raw, "5_redteam") or {}
+        log.info("[STAGE 5] verdict: %s", rt_result.get("red_team_verdict", "?"))
+        log.info("[STAGE 5] action:  %s",
+                 rt_result.get("highest_risk", {}).get("recommended_action", "?"))
+        _wlog({
             "run_month":     run_month,
             "stage":         "stage_5_redteam",
             "agenda_item":   "ALL",
             "model":         "gemini_flash_native",
             "full_response": rt_raw or "",
             "inserted_at":   now_str,
-        }, write_db)
+        })
 
     # ═════════════════════════════════════════════════════════════════════════
-    # STAGE 6: Gemini Flash chairman synthesis
+    # STAGE 6: Claude Haiku chairman synthesis
     # ═════════════════════════════════════════════════════════════════════════
-    log.info("── STAGE 6: Gemini Flash chairman synthesis")
+    log.info("=" * 65)
+    log.info("STAGE 6: Claude Haiku chairman synthesis")
+    log.info("=" * 65)
+
     ch_sys = (
         "You are the Chairman of the NEPSE Monthly Council. "
-        "Synthesise all discussion into final actionable guidance. "
-        "Output ONLY valid JSON with keys: "
-        "nepse_confidence_score (integer 0-100), "
-        "market_assessment (string ≤300 chars), "
-        "go_trigger (string ≤150 chars), "
-        "stop_trigger (string ≤150 chars), "
-        "noise_items (list ≤3 strings), "
-        "lessons (list ≤5 strings — specific lessons for the trading system), "
-        "system_verdict (PROCEED / CAUTION / HALT)."
+        "You have reviewed 4 closed paper trades (AHL WIN, NHPC/PPCL/CHL LOSS) "
+        "through a full multi-analyst deliberation. "
+        "Synthesise into final actionable guidance for the trading system. "
+        "Be specific — reference actual trade outcomes and signal patterns. "
+        "Output ONLY valid JSON:\n"
+        "{\n"
+        '  "nepse_confidence_score": <integer 0-100>,\n'
+        '  "market_assessment": "<string, max 300 chars>",\n'
+        '  "go_trigger": "<string, max 150 chars — specific conditions to enter next trade>",\n'
+        '  "stop_trigger": "<string, max 150 chars — specific conditions to block entry>",\n'
+        '  "noise_items": ["<item1>", "<item2>", "<item3>"],\n'
+        '  "lessons": [\n'
+        '    "<lesson1 — specific, actionable>",\n'
+        '    "<lesson2>",\n'
+        '    "<lesson3>",\n'
+        '    "<lesson4>",\n'
+        '    "<lesson5>"\n'
+        '  ],\n'
+        '  "system_verdict": "PROCEED" | "CAUTION" | "HALT"\n'
+        "}"
+        + _J
     )
     ch_user = (
         f"CHAIRMAN SYNTHESIS — {run_month}\n\n"
-        f"AGENDA ITEMS:\n{json.dumps(approved_items, ensure_ascii=False)}\n\n"
-        f"DISAGREEMENT SCORES (stdev per item):\n{json.dumps(disagreement_scores)}\n\n"
-        f"FULL DISCUSSION TRANSCRIPT:\n{transcript}\n\n"
-        f"CURRENT OPEN POSITIONS:\n"
-        f"{json.dumps(open_positions, ensure_ascii=False, default=str)}\n\n"
-        f"Synthesise into final council output. Output JSON."
+        f"AGENDA ITEMS:\n{json.dumps(approved, ensure_ascii=False)}\n\n"
+        f"DISAGREEMENT SCORES (stdev of confidence per item):\n{json.dumps(ds_map)}\n\n"
+        f"RED TEAM VERDICT:\n{json.dumps(rt_result, ensure_ascii=False)}\n\n"
+        f"{ts}\n\n"
+        f"PORTFOLIO:\n{json.dumps(positions, ensure_ascii=False, default=str)}\n\n"
+        f"Synthesise final council output as JSON."
     )
 
-    if print_prompts:
-        print(f"\n{'='*65}\nSTAGE 6 CHAIRMAN PROMPT:\n{ch_user}\n")
+    log.info("[STAGE 6] System prompt:\n%s", ch_sys)
+    log.info("[STAGE 6] User prompt:\n%s", ch_user)
 
     if dry_run:
-        log.info("[DRY RUN] Stage 6 skipped — would call ask_gemini_text()")
-        chairman = {
+        log.info("[DRY RUN] Stage 6 skipped")
+        chairman   = {
             "nepse_confidence_score": 50,
             "market_assessment":      "[DRY RUN]",
             "go_trigger":             "[DRY RUN]",
@@ -783,69 +881,65 @@ def run(dry_run: bool = False, print_prompts: bool = False,
             "lessons":                [],
             "system_verdict":         "CAUTION",
         }
-        confidence_score = 50
+        conf_score = 50
     else:
-        ch_raw       = _gemini(ch_user, ch_sys, "test_6_chairman")
-        log.info("Stage 6 full response:\n%s", ch_raw)  # full response
-        chairman     = _parse_json_safe(ch_raw, "test_6_chairman") or {}
-        confidence_score = int(chairman.get("nepse_confidence_score", 50))
+        ch_raw   = _or(M_HAIKU, _msgs(ch_sys, ch_user), MAX_CHAIR_TOK, "6_chairman")
+        log.info("[STAGE 6] Full response:\n%s", ch_raw)
+        chairman   = _parse(ch_raw, "6_chairman") or {}
+        conf_score = int(chairman.get("nepse_confidence_score", 50))
 
-        log.info("Stage 6 complete:")
+        log.info("[STAGE 6] FINAL COUNCIL OUTPUT:")
         log.info("  Verdict:    %s", chairman.get("system_verdict", "?"))
-        log.info("  Confidence: %d/100", confidence_score)
+        log.info("  Confidence: %d/100", conf_score)
         log.info("  Assessment: %s", chairman.get("market_assessment", "?"))
         log.info("  Go trigger: %s", chairman.get("go_trigger", "?"))
         log.info("  Stop:       %s", chairman.get("stop_trigger", "?"))
         log.info("  Noise:      %s", chairman.get("noise_items", []))
         for i, lesson in enumerate(chairman.get("lessons", []), 1):
-            log.info("  Lesson %d: %s", i, lesson)
+            log.info("  Lesson %d:  %s", i, lesson)
 
-        _write_log({
+        _wlog({
             "run_month":     run_month,
             "stage":         "stage_6_chairman",
             "agenda_item":   "ALL",
-            "model":         "gemini_flash_native",
-            "confidence":    str(confidence_score),
+            "model":         M_HAIKU,
+            "confidence":    str(conf_score),
             "full_response": ch_raw or "",
             "inserted_at":   now_str,
-        }, write_db)
-        _write_checklist(run_month, chairman, write_db)
+        })
+        _wchecklist(run_month, chairman)
+        mstate = dc[0].get("market_state", "SIDEWAYS") if dc else "SIDEWAYS"
+        _woverride(run_month, conf_score, mstate, chairman)
 
-        market_state = (daily_context[0].get("market_state", "SIDEWAYS")
-                        if daily_context else "SIDEWAYS")
-        _write_override(run_month, confidence_score, market_state, chairman, write_db)
-
-    # Write lessons
-    lessons_written = _write_lessons(run_month, chairman, now_str, write_db)
+    lessons_written = 0
+    if not dry_run:
+        lessons_written = _wlessons(run_month, chairman, now_str)
 
     # ── Stage 7: Telegram ─────────────────────────────────────────────────────
-    log.info("── STAGE 7: Telegram notification")
+    log.info("=" * 65)
+    log.info("STAGE 7: Telegram notification")
     if not dry_run:
-        _send_telegram(run_month, confidence_score, approved_items,
-                       lessons_written, chairman)
+        _telegram(run_month, conf_score, approved, lessons_written, chairman)
     else:
         log.info("[DRY RUN] Telegram skipped")
 
     # ── Final summary ─────────────────────────────────────────────────────────
     log.info("=" * 65)
-    log.info("COUNCIL TEST COMPLETE")
-    log.info("  run_month:   %s", run_month)
-    log.info("  confidence:  %d/100", confidence_score)
-    log.info("  verdict:     %s", chairman.get("system_verdict", "?"))
-    log.info("  lessons:     %d written", lessons_written)
-    log.info("  write_db:    %s", write_db)
-    log.info("  DB tag:      %s (safe — never conflicts with production)", run_month)
+    log.info("COUNCIL TEST COMPLETE — %s", run_month)
+    log.info("  Verdict:    %s", chairman.get("system_verdict", "?"))
+    log.info("  Confidence: %d/100", conf_score)
+    log.info("  Lessons:    %d written to DB", lessons_written)
+    log.info("  DB tag:     %s", run_month)
     log.info("=" * 65)
 
     if dry_run:
         print(f"\n{'='*65}")
-        print(f"[DRY RUN SUMMARY] run_month={run_month}")
-        print(f"  Data:     {counts}")
-        print(f"  Agenda:   {len(proposed_items)} proposed items")
-        print(f"  Models:   DeepSeek(browser) + Hy3 + Minimax + GPT-OSS")
-        print(f"  Chairman: Gemini Flash (native SDK)")
-        print(f"  Cost:     $0.00 (all free)")
-        print(f"  Writes:   NONE")
+        print(f"[DRY RUN SUMMARY]")
+        print(f"  run_month: {run_month}")
+        print(f"  Data:      {cnts}")
+        print(f"  Trades:    {cnts.get('trade_journal',0)} (all 4 should appear)")
+        print(f"  Stack:     DeepSeek + Grok + Qwen + GPT-nano + Gemini(free) + Haiku")
+        print(f"  Writes:    NONE (dry run)")
         print(f"{'='*65}")
 
 
@@ -855,34 +949,27 @@ def run(dry_run: bool = False, print_prompts: bool = False,
 
 def main():
     parser = argparse.ArgumentParser(
-        description="NEPSE Monthly Council TEST (free models)",
+        description="NEPSE Monthly Council TEST — Full 4-trade review",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python -m analysis.monthly_council_test            # full API, read DB, NO writes
-  python -m analysis.monthly_council_test --write    # full API, read DB, WITH writes
-  python -m analysis.monthly_council_test --dry-run  # no API, no writes (structure test)
-  python -m analysis.monthly_council_test --prompt   # print prompts only
+  python -m analysis.monthly_council_test            # full run, writes to DB
+  python -m analysis.monthly_council_test --dry-run  # no API, no DB writes
+  python -m analysis.monthly_council_test --prompt   # print all prompts
         """,
     )
     parser.add_argument("--dry-run", action="store_true",
-                        help="Skip all API calls (structure/data test only)")
+                        help="Skip all API calls, no DB writes")
     parser.add_argument("--prompt",  action="store_true",
-                        help="Print all prompts before API calls")
-    parser.add_argument("--write",   action="store_true",
-                        help="Enable DB writes (off by default — safe to run anytime)")
+                        help="Print all prompts to stdout")
     parser.add_argument("--force",   action="store_true",
-                        help="No-op (test always runs regardless of day)")
+                        help="No-op (always runs)")
     args = parser.parse_args()
 
     from log_config import attach_file_handler
     attach_file_handler(__name__)
 
-    run(
-        dry_run      = args.dry_run,
-        print_prompts = args.prompt,
-        write_db     = args.write,
-    )
+    run(dry_run=args.dry_run, print_prompts=args.prompt)
 
 
 if __name__ == "__main__":
