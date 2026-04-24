@@ -54,7 +54,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # ── TEST model constants — all free ──────────────────────────────────────────
-TEST_GPT_MODEL      = "openai/gpt-oss-120b:free"
+TEST_GPT_MODEL      = "qwen/qwen3-coder:free"
 TEST_HY3_MODEL      = "tencent/hy3-preview:free"
 TEST_MINIMAX_MODEL  = "minimax/minimax-m2.5:free"
 # Stage 1   → ask_deepseek_text() Playwright browser (free)
