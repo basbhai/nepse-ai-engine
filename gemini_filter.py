@@ -61,7 +61,6 @@ MAX_FLAGS_FOR_CLAUDE     = 3    # → setting key: GEMINI_MAX_FLAGS
 # ══════════════════════════════════════════════════════════════════════════════
 # NEAR-MISS FLUSH  (Fix 1)
 # ══════════════════════════════════════════════════════════════════════════════
-
 def flush_near_misses_to_db() -> None:
     """
     Write NearMiss objects captured by the last run_filter() call to gate_misses.
@@ -69,11 +68,24 @@ def flush_near_misses_to_db() -> None:
     Called automatically after every run_filter() in this module.
     """
     from sheets import upsert_row
+
+    NON_TRACKABLE = {"MUTUAL_FUND", "NON_EQUITY", "HISTORY"}
+
     misses = get_last_near_misses()
     if not misses:
         return
-    written = 0
+
+    written  = 0
+    skipped  = 0
     for m in misses:
+        # Skip categories that can never be meaningfully evaluated
+        if m.gate_category in NON_TRACKABLE:
+            skipped += 1
+            continue
+        # Skip rows with no valid price — can never compute return
+        if not m.price_at_block or m.price_at_block == 0.0:
+            skipped += 1
+            continue
         try:
             upsert_row(
                 "gate_misses",
@@ -83,7 +95,7 @@ def flush_near_misses_to_db() -> None:
                     "date":                     m.date,
                     "gate_reason":              m.gate_reason,
                     "gate_category":            m.gate_category,
-                    "price_at_block":           str(m.price_at_block) if m.price_at_block else None,
+                    "price_at_block":           str(m.price_at_block),
                     "market_state":             m.market_state,
                     "tech_score":               str(m.tech_score),
                     "conf_score":               str(m.conf_score),
@@ -97,11 +109,11 @@ def flush_near_misses_to_db() -> None:
             written += 1
         except Exception as exc:
             logger.warning("flush_near_misses_to_db: failed for %s — %s", m.symbol, exc)
-    logger.info(
-        "flush_near_misses_to_db: wrote %d/%d near-misses to gate_misses",
-        written, len(misses),
-    )
 
+    logger.info(
+        "flush_near_misses_to_db: wrote %d/%d near-misses to gate_misses (skipped %d non-trackable/no-price)",
+        written, len(misses), skipped,
+    )
 
 # ══════════════════════════════════════════════════════════════════════════════
 # GEMINI FLAG DATACLASS

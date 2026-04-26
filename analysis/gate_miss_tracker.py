@@ -53,7 +53,7 @@ NST = ZoneInfo("Asia/Kathmandu")
 # CONSTANTS
 # ─────────────────────────────────────────────────────────────────────────────
 
-MAX_TRACKING_DAYS    = 30    # trading days before stamping outcome
+MAX_TRACKING_DAYS    = 17    # trading days before stamping outcome
 FALSE_BLOCK_THRESHOLD  = 5.0   # price up >5% = filter was wrong
 CORRECT_BLOCK_THRESHOLD = -3.0  # price down >3% = filter was right
 # Everything in between = NEUTRAL
@@ -102,8 +102,8 @@ def trading_days_between(start: str, end: str) -> int:
     count = 0
     current = s
     while current < e:
-        # NEPSE trades Sun(6) Mon(0) Tue(1) Wed(2) Thu(3)
-        if current.weekday() in (0, 1, 2, 3, 6):
+        # NEPSE trades Mon(0) Tue(1) Wed(2) Thu(3) Fri(4) — skip if Sat(5) or Sun(6)
+        if current.weekday() in (0, 1, 2, 3, 4):
             count += 1
         current += timedelta(days=1)
     return count
