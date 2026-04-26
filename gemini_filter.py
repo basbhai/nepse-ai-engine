@@ -52,11 +52,10 @@ from AI import ask_gemini_json, ask_gemini_text
 
 logger = logging.getLogger(__name__)
 
-# Max candidates to send to Gemini per run (token budget)
-MAX_CANDIDATES_TO_GEMINI = 10
-
-# Max stocks Gemini can flag for Claude (keep Claude calls rare and high quality)
-MAX_FLAGS_FOR_CLAUDE = 3
+# Fallback defaults — overridden at runtime by settings table via get_filter_context()
+# Update live via: update_setting("GEMINI_MAX_CANDIDATES", "12") etc.
+MAX_CANDIDATES_TO_GEMINI = 10   # → setting key: GEMINI_MAX_CANDIDATES
+MAX_FLAGS_FOR_CLAUDE     = 3    # → setting key: GEMINI_MAX_FLAGS
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -255,6 +254,8 @@ def _build_prompt(
     lessons:        list[str],
     open_positions: list[str],
     total_capital:  float,
+    max_candidates: int = MAX_CANDIDATES_TO_GEMINI,
+    max_flags:      int = MAX_FLAGS_FOR_CLAUDE,
 ) -> str:
     from filter_engine import format_candidate_for_gemini
 
@@ -266,7 +267,8 @@ def _build_prompt(
     crisis       = context.get("crisis_detected", "NO")
 
     positions_str   = ", ".join(open_positions) if open_positions else "None"
-    slots_remaining = 999  # max(0, 3 - len(open_positions)) for test
+    max_positions   = context.get("max_positions", 3)
+    slots_remaining = max(0, max_positions - len(open_positions))
 
     candidates_str = "\n".join(
         f"{i+1}. {format_candidate_for_gemini(c)} "
@@ -274,13 +276,13 @@ def _build_prompt(
         f"BAR={getattr(c, 'bid_ask_ratio', 0.0):.2f} "
         f"DPRP={getattr(c, 'dpr_proximity', 0.0):.2f} "
         f"VOS={getattr(c, 'volume_os_ratio', 0.0):.2f}%OS"
-        for i, c in enumerate(candidates[:MAX_CANDIDATES_TO_GEMINI])
+        for i, c in enumerate(candidates[:max_candidates])
     )
 
     lessons_str = "\n".join(f"  - {l}" for l in lessons) if lessons else "  No lessons yet"
 
     prompt = f"""You are a NEPSE stock screener AI. Today is {nst_now.strftime('%Y-%m-%d %H:%M')} NST.
-Your job: review these pre-filtered candidates and decide which {MAX_FLAGS_FOR_CLAUDE} (max) 
+Your job: review these pre-filtered candidates and decide which {max_flags} (max) 
 deserve deep Claude analysis today. Be selective — Claude analysis is expensive.
 
 ═══════════════════════════════════════
@@ -330,7 +332,7 @@ SCREENING RULES (apply in order)
 7. UPGRADE if Tier 1 candle pattern with volume confirmed
 8. UPGRADE if CSTAR=Y (excess return above C*=0.129)
 9. CHECK learning hub — if pattern has <40% win rate for this symbol, skip
-10. FLAG max {MAX_FLAGS_FOR_CLAUDE} stocks — quality over quantity
+10. FLAG max {max_flags} stocks — quality over quantity
 11. If no stock is genuinely worth Claude analysis today, return empty flags
 12. search internet for potiential favourable or unfavourable news/conditions (must be creditable and renouned sources)
 13. APPLY LAGGARD LOGIC:
@@ -384,6 +386,9 @@ def _keyword_fallback(
     candidates:      list,
     open_positions:  list[str],
     slots_remaining: int,
+    max_candidates:  int = MAX_CANDIDATES_TO_GEMINI,
+    max_flags:       int = MAX_FLAGS_FOR_CLAUDE,
+    max_positions:   int = 3,
 ) -> dict:
     """Rule-based fallback when Gemini is unavailable."""
     logger.info("Using keyword fallback for Gemini screening")
@@ -391,22 +396,22 @@ def _keyword_fallback(
     flags   = []
     skipped = []
 
-    for c in candidates[:MAX_CANDIDATES_TO_GEMINI]:
+    for c in candidates[:max_candidates]:
         sym = c.symbol
 
         if sym in open_positions:
             skipped.append({"symbol": sym, "reason": "already in open positions"})
             continue
 
-        if slots_remaining == 0 and len(open_positions) >= 99:
-            skipped.append({"symbol": sym, "reason": "portfolio full (3/3 positions)"})
+        if slots_remaining == 0 and len(open_positions) >= max_positions:
+            skipped.append({"symbol": sym, "reason": f"portfolio full ({max_positions}/{max_positions} positions)"})
             continue
 
         if c.primary_signal == "RSI":
             skipped.append({"symbol": sym, "reason": "RSI as primary signal — lost money standalone in NEPSE"})
             continue
 
-        if len(flags) >= MAX_FLAGS_FOR_CLAUDE:
+        if len(flags) >= max_flags:
             skipped.append({"symbol": sym, "reason": "max flags reached for this run"})
             continue
 
@@ -476,8 +481,8 @@ def _assemble_flags(
             ltp              = c.ltp,
             action           = action,
             urgency          = str(f.get("urgency", "NORMAL")).upper(),
-            gemini_reason    = str(f.get("reason", ""))[:200],
-            gemini_risk      = str(f.get("risk", ""))[:200],
+            gemini_reason    = str(f.get("reason", ""))[:500],
+            gemini_risk      = str(f.get("risk",   ""))[:500],
             primary_signal   = str(f.get("primary_signal", c.primary_signal)),
             composite_score  = c.composite_score,
             tech_score       = c.tech_score,
@@ -632,12 +637,22 @@ def run_gemini_filter(
     logger.info("=" * 60)
     logger.info("gemini_filter.run_gemini_filter() — %s", date)
 
+    # ── Context (load first so max_candidates is available for run_filter) ────
+    try:
+        context = get_filter_context()
+    except Exception:
+        context = {}
+
+    max_positions  = context.get("max_positions",         3)
+    max_candidates = context.get("gemini_max_candidates", MAX_CANDIDATES_TO_GEMINI)
+    max_flags      = context.get("gemini_max_flags",      MAX_FLAGS_FOR_CLAUDE)
+
     # ── Get candidates from filter_engine if not provided ────────────────────
     if candidates is None:
         try:
             candidates = run_filter(
                 market_data=market_data,
-                top_n=MAX_CANDIDATES_TO_GEMINI,
+                top_n=max_candidates,
                 date=date,
             )
             flush_near_misses_to_db()   # Fix 1 — always flush after run_filter()
@@ -655,15 +670,9 @@ def run_gemini_filter(
 
     logger.info("Screening %d candidates with Gemini Flash", len(candidates))
 
-    # ── Context ───────────────────────────────────────────────────────────────
-    try:
-        context = get_filter_context()
-    except Exception:
-        context = {}
-
     # ── Portfolio ─────────────────────────────────────────────────────────────
     open_positions  = _load_open_positions()
-    slots_remaining = 999  # max(0, 3 - len(open_positions)) for test
+    slots_remaining = max(0, max_positions - len(open_positions))
     total_capital   = _load_total_capital()
     symbols         = [c.symbol for c in candidates]
     lessons         = _load_relevant_lessons(symbols)
@@ -673,8 +682,8 @@ def run_gemini_filter(
         len(open_positions), slots_remaining, total_capital, len(lessons),
     )
 
-    if slots_remaining == 0 and len(open_positions) >= 99:
-        logger.info("Portfolio full (3/3 positions) — no new signals needed")
+    if slots_remaining == 0 and len(open_positions) >= max_positions:
+        logger.info("Portfolio full (%d/%d positions) — no new signals needed", max_positions, max_positions)
         return []
 
     # ── Build prompt and call Gemini ──────────────────────────────────────────
@@ -684,6 +693,8 @@ def run_gemini_filter(
         lessons        = lessons,
         open_positions = open_positions,
         total_capital  = total_capital,
+        max_candidates = max_candidates,
+        max_flags      = max_flags,
     )
 
     gemini_result = ask_gemini_json(
@@ -764,6 +775,10 @@ if __name__ == "__main__":
 
     print("\n[1/3] Running filter_engine...")
     try:
+        # Load context first so max_candidates is available for run_filter
+        _cli_ctx           = get_filter_context()
+        _cli_max_cands     = _cli_ctx.get("gemini_max_candidates", MAX_CANDIDATES_TO_GEMINI)
+
         if dry_run:
             from modules.indicators import HistoryCache, DEFAULT_LOAD_PERIODS
             from modules.scraper import PriceRow as PR
@@ -782,11 +797,11 @@ if __name__ == "__main__":
                 )
                 for s, c in cache.closes.items() if c
             }
-            candidates = run_filter(market_data=md, top_n=MAX_CANDIDATES_TO_GEMINI)
+            candidates = run_filter(market_data=md, top_n=_cli_max_cands)
         else:
             from modules.scraper import get_all_market_data
             md = get_all_market_data(write_breadth=False)
-            candidates = run_filter(market_data=md, top_n=MAX_CANDIDATES_TO_GEMINI)
+            candidates = run_filter(market_data=md, top_n=_cli_max_cands)
 
         flush_near_misses_to_db()  # Fix 1
         print(f"  ✅ {len(candidates)} candidates from filter_engine")
@@ -802,14 +817,20 @@ if __name__ == "__main__":
         sys.exit(0)
 
     print("\n[2/3] Loading context...")
-    context         = get_filter_context()
-    open_positions  = _load_open_positions()
-    slots_remaining = 999
-    total_capital   = _load_total_capital()
-    lessons         = _load_relevant_lessons([c.symbol for c in candidates])
+    context        = get_filter_context()
+    open_positions = _load_open_positions()
+    max_positions  = context.get("max_positions",         3)
+    max_candidates = context.get("gemini_max_candidates", MAX_CANDIDATES_TO_GEMINI)
+    max_flags      = context.get("gemini_max_flags",      MAX_FLAGS_FOR_CLAUDE)
+    slots_remaining = max(0, max_positions - len(open_positions))
+    total_capital  = _load_total_capital()
+    lessons        = _load_relevant_lessons([c.symbol for c in candidates])
 
     print(f"  Open positions:  {open_positions or 'None'}")
     print(f"  Slots remaining: {slots_remaining}")
+    print(f"  Max positions:   {max_positions}")
+    print(f"  Max candidates:  {max_candidates}")
+    print(f"  Max flags:       {max_flags}")
     print(f"  Capital:         NPR {total_capital:,.0f}")
     print(f"  Lessons loaded:  {len(lessons)}")
 
@@ -820,9 +841,12 @@ if __name__ == "__main__":
     print(f"\n[3/3] {'Keyword fallback (--no-gemini)' if no_gemini else 'Gemini Flash screening'}...")
 
     if no_gemini:
-        gemini_result = _keyword_fallback(candidates, open_positions, slots_remaining)
+        gemini_result = _keyword_fallback(candidates, open_positions, slots_remaining,
+                                          max_candidates=max_candidates, max_flags=max_flags,
+                                          max_positions=max_positions)
     else:
-        prompt        = _build_prompt(candidates, context, lessons, open_positions, total_capital)
+        prompt        = _build_prompt(candidates, context, lessons, open_positions, total_capital,
+                                      max_candidates=max_candidates, max_flags=max_flags)
         gemini_result = ask_gemini_json(
             prompt,
             system  = (

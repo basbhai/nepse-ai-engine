@@ -337,6 +337,40 @@ def _load_context() -> dict:
         except Exception:
             pass
 
+        # ── Dynamic gate thresholds — updated by approved gate_proposals ──────
+        # Reads from settings table each run so /approve_N takes effect immediately.
+        # Falls back silently to module-level defaults if key is absent.
+        try:
+            ctx["tech_thresholds"] = {
+                "FULL_BULL":     int(get_setting("TECH_SCORE_THRESHOLDS.FULL_BULL",     str(TECH_SCORE_THRESHOLDS["FULL_BULL"]))),
+                "CAUTIOUS_BULL": int(get_setting("TECH_SCORE_THRESHOLDS.CAUTIOUS_BULL", str(TECH_SCORE_THRESHOLDS["CAUTIOUS_BULL"]))),
+                "SIDEWAYS":      int(get_setting("TECH_SCORE_THRESHOLDS.SIDEWAYS",      str(TECH_SCORE_THRESHOLDS["SIDEWAYS"]))),
+                "BEAR":          int(get_setting("TECH_SCORE_THRESHOLDS.BEAR",          str(TECH_SCORE_THRESHOLDS["BEAR"]))),
+                "CRISIS":        int(get_setting("TECH_SCORE_THRESHOLDS.CRISIS",        str(TECH_SCORE_THRESHOLDS["CRISIS"]))),
+            }
+        except Exception:
+            ctx["tech_thresholds"] = TECH_SCORE_THRESHOLDS.copy()
+
+        try:
+            ctx["min_conf_score"] = float(get_setting("MIN_CONF_SCORE", str(MIN_CONF_SCORE)))
+        except Exception:
+            ctx["min_conf_score"] = MIN_CONF_SCORE
+
+        try:
+            ctx["max_positions"] = int(get_setting("MAX_POSITIONS", "3"))
+        except Exception:
+            ctx["max_positions"] = 3
+
+        try:
+            ctx["gemini_max_candidates"] = int(get_setting("GEMINI_MAX_CANDIDATES", "10"))
+        except Exception:
+            ctx["gemini_max_candidates"] = 10
+
+        try:
+            ctx["gemini_max_flags"] = int(get_setting("GEMINI_MAX_FLAGS", "3"))
+        except Exception:
+            ctx["gemini_max_flags"] = 3
+
         logger.info(
             "Context: geo=%+d nepal=%+d combined=%+d market=%s bandh=%s "
             "crisis=%s ipo=%s loss_streak=%d",
@@ -389,13 +423,14 @@ def _check_symbol_gates(
         return False, f"HISTORY={history_days}<{MIN_HISTORY_DAYS}"
 
     tech_score = int(ind.get("tech_score", 0) or 0)
-    threshold  = TECH_SCORE_THRESHOLDS.get(ctx["market_state"], DEFAULT_TECH_THRESHOLD)
+    threshold  = ctx.get("tech_thresholds", TECH_SCORE_THRESHOLDS).get(ctx["market_state"], DEFAULT_TECH_THRESHOLD)
     if tech_score < threshold:
         return False, f"TECH={tech_score}<{threshold}"
 
     conf_score = float(getattr(price_row, "conf_score", 0) or 0)
-    if conf_score < MIN_CONF_SCORE:
-        return False, f"CONF={conf_score:.0f}<{MIN_CONF_SCORE}"
+    min_conf   = ctx.get("min_conf_score", MIN_CONF_SCORE)
+    if conf_score < min_conf:
+        return False, f"CONF={conf_score:.0f}<{min_conf:.0f}"
 
     rsi = float(ind.get("rsi_14", 50) or 50)
     if rsi > 75:
@@ -1023,6 +1058,7 @@ def _compute_composite_score(
     ipo_drain:       str,
     fundamental_adj: float = 0.0,
     vos_adj:         float = 0.0,   # volume/OS ratio adjustment
+    min_conf_score:  float = MIN_CONF_SCORE,  # dynamic — read from settings via ctx
 ) -> float:
     """
     Final composite score for candidate ranking.
@@ -1036,7 +1072,7 @@ def _compute_composite_score(
     + fund_adj= -3 to +3 (fundamental quality, sector-aware)  ← NEW
     """
     base       = indicator_score * sector_mult
-    conf_bonus = min((conf_score - MIN_CONF_SCORE) / 10, 5.0) if conf_score > MIN_CONF_SCORE else 0.0
+    conf_bonus = min((conf_score - min_conf_score) / 10, 5.0) if conf_score > min_conf_score else 0.0
     cstar_b    = 5.0 if cstar_signal else 0.0
     ipo_pen    = -3.0 if ipo_drain == "YES" else 0.0
  
@@ -1261,6 +1297,7 @@ def run_filter(
             ipo_drain       = ctx["ipo_drain"],
             fundamental_adj = fund_adj,
             vos_adj         = vos_adj,
+            min_conf_score  = ctx.get("min_conf_score", MIN_CONF_SCORE),
         )
         logger.debug("VOS_ADJ: %s composite=%.1f", sym, composite)
 

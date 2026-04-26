@@ -96,6 +96,7 @@ def _load_portfolio() -> dict:
     try:
         from sheets import get_setting, read_tab
         total_capital = float(get_setting("CAPITAL_TOTAL_NPR", "100000"))
+        max_positions = int(get_setting("MAX_POSITIONS", "3"))
         rows          = read_tab("portfolio")
         open_rows     = [r for r in rows if r.get("status", "").upper() == "OPEN"]
         invested      = sum(float(r.get("total_cost", 0) or 0) for r in open_rows)
@@ -115,7 +116,8 @@ def _load_portfolio() -> dict:
             "liquid_npr":        liquid,
             "invested_npr":      invested,
             "open_positions":    len(open_rows),
-            "slots_remaining":   max(0, 99 - len(open_rows)),
+            "slots_remaining":   max(0, max_positions - len(open_rows)),
+            "max_positions":     max_positions,
             "holdings":          holdings,
         }
     except Exception as exc:
@@ -125,7 +127,8 @@ def _load_portfolio() -> dict:
             "liquid_npr":        100000,
             "invested_npr":      0,
             "open_positions":    0,
-            "slots_remaining":   99,
+            "slots_remaining":   3,
+            "max_positions":     3,
             "holdings":          [],
         }
 
@@ -712,6 +715,11 @@ IPO Drain:       {geo.get('ipo_drain', 'NO')}
 Key Geo Event:   {geo.get('key_geo_event', 'None')}
 Key Nepal Event: {geo.get('key_nepal_event', 'None')}
 
+TODAY'S NEPAL HEADLINES (from nepal_pulse — untruncated):
+  Politics: {geo.get('headlines_politics', 'None') or 'None'}
+  Economy:  {geo.get('headlines_economy',  'None') or 'None'}
+  Market:   {geo.get('headlines_stock',    'None') or 'None'}
+
 MACRO (NRB {macro.get('period', '?')} -- updated monthly):
   Policy Rate:     {macro.get('policy_rate', '?')}%
   NRB Decision:    {macro.get('nrb_rate_decision', '?')}
@@ -726,7 +734,7 @@ YOUR PORTFOLIO
 ==============================================
 Total Capital:   NPR {portfolio.get('total_capital_npr', 0):,.0f}
 Liquid Cash:     NPR {portfolio.get('liquid_npr', 0):,.0f}
-Open Positions:  {portfolio.get('open_positions', 0)}/99  
+Open Positions:  {portfolio.get('open_positions', 0)}/{portfolio.get('max_positions', 3)}
 Slots Left:      {portfolio.get('slots_remaining', 0)}
 
 Holdings:
@@ -751,7 +759,7 @@ NEPAL FEE MATH (use for all price calculations)
   Breakeven:   entry x (1 + 0.0083) + NPR 50/shares
   CGT:         5% on net profit only (individuals)
   Max position: 10% of total capital = NPR {portfolio.get('total_capital_npr', 0) * 0.10:,.0f}
-  Max positions: 3 simultaneous
+  Max positions: {portfolio.get('max_positions', 3)} simultaneous
 
 ==============================================
 TASK
@@ -762,7 +770,7 @@ Produce a precise BUY / WAIT / AVOID recommendation.
 - Target: use resistance level as reference, must exceed breakeven by >1%
 - Hold: use suggested hold from research ({hold_days} days for {flag.primary_signal})
 - Use max 10% of total capital per position
-- For WAIT/AVOID: give specific conditions that would change your answer
+- Max {portfolio.get('max_positions', 3)} simultaneous positions — slots remaining: {portfolio.get('slots_remaining', 0)}
 - Include only ordinary shares, exclude mutual funds, debentures, promoter shares
 - Consider fundamental signals as supporting context, not primary trigger
 
@@ -1021,7 +1029,8 @@ def run_analysis(flags: list) -> list[AnalystResult]:
     )
 
     if portfolio.get("slots_remaining", 0) <= 0:
-        logger.info("Portfolio full (3/3 positions open) -- no analysis needed")
+        logger.info("Portfolio full (%d/%d positions open) -- no analysis needed",
+                    portfolio.get("open_positions", 0), portfolio.get("max_positions", 3))
         return []
 
     if loss_streak >= 8:
@@ -1046,8 +1055,7 @@ def run_analysis(flags: list) -> list[AnalystResult]:
             continue
 
         buy_count = sum(1 for r in results if r.action == "BUY")
-        if portfolio.get("open_positions", 0) + buy_count >= 99: #hard coded to match genimi for now
-            
+        if portfolio.get("open_positions", 0) + buy_count >= portfolio.get("max_positions", 3):
             logger.info("%s: portfolio full after earlier BUYs -- skipping", sym)
             continue
 
