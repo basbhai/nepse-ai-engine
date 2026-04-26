@@ -462,3 +462,35 @@ def ask_gemini_lite(
         temperature = temperature,
         context     = context,
     )
+
+
+def ask_deepseek_review(
+    system: str,
+    prompt: str,
+    max_tokens: int = 8000,
+    temperature: float = 0.2,
+    context: str = "deepseek_review",
+) -> Optional[str]:
+    """
+    Call DeepSeek V4 Pro via OpenRouter for weekly learning hub review.
+    Returns raw text string or None on failure.
+
+    Dedicated function — does not touch GPT_MODEL env var.
+    Drop-in replacement for ask_gpt() in learning_hub.py only.
+
+    Usage:
+        from AI.openrouter import ask_deepseek_review
+        text = ask_deepseek_review(system_prompt, user_prompt, context="learning_hub")
+    """
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user",   "content": prompt},
+    ]
+
+    return _call(
+        model       = "deepseek/deepseek-v4-pro",
+        messages    = messages,
+        max_tokens  = max_tokens,
+        temperature = temperature,
+        context     = context,
+    )

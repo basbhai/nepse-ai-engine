@@ -16,7 +16,7 @@ Provider routing:
 """
  
 from AI.gemini import ask_gemini_json, ask_gemini_text
-from AI.openrouter import ask_claude, ask_gpt, ask_deepseek, ask_free
+from AI.openrouter import ask_claude, ask_gpt, ask_deepseek, ask_free, ask_deepseek_review
 from AI.deepseek import ask_deepseek_text
 
 __all__ = [
@@ -27,4 +27,5 @@ __all__ = [
     "ask_deepseek",
     "ask_free",
     "ask_deepseek_text",
+    "ask_deepseek_review"
 ]

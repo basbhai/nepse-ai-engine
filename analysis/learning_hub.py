@@ -40,7 +40,7 @@ import logging
 import argparse
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-from AI import ask_gpt
+from AI import ask_deepseek_review
 import requests
 
 from sheets import run_raw_sql, upsert_row, write_row, get_setting
@@ -502,110 +502,135 @@ def _serialize_compact(rows: list[dict], keys: tuple) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 # PROMPT BUILDERS (unchanged from here onwards)
 # ─────────────────────────────────────────────────────────────────────────────
-
 def _build_system_prompt() -> str:
-    return """You are the NEPSE AI Engine's weekly learning coach  -  GPT-5o.
+    return """You are the NEPSE AI Engine's weekly learning coach.
 
 Your job: review trading evidence and update the learning_hub  -  a database of lessons
 that Claude Sonnet reads before every BUY/WAIT/AVOID decision.
 
 NEPSE context:
-- Nepal Stock Exchange trades Sun-Thu (NST). Very illiquid vs global markets.
+- Nepal Stock Exchange trades Mon-Fri (NST). Very illiquid vs global markets.
 - Fees ~1.24% round-trip. Only high profit-factor signals survive.
 - BB_LOWER_TOUCH: only confirmed edge (WR=55%, PF=1.66). MACD PF=0.88 in backtest.
 - RSI: context only  -  never standalone trigger (-4.81% annualized standalone).
-- DXY: only validated international signal (Spearman ρ=-0.1708, 7-day lag via remittance).
+- DXY: only validated international signal (Spearman rho=-0.1708, 7-day lag via remittance).
 - Herding threshold: RSI > 72 (not 65  -  no evidence for 65).
 - Max 3 positions. Circuit breaker after 7-loss streak.
 - Geo combined < -3 = auto block.
+- BANDH days (general strikes): liquidity evaporates  -  entries on bandh days have 100% loss rate in observed data.
 
 ANTI-OVERFITTING RULES  -  ENFORCE STRICTLY:
-1. BLOCK_ENTRY requires 25+ trades supporting the pattern. Below 25: REDUCE_CONFIDENCE only.
-2. Sector-level blocks need sector-level trade count.
-3. Signal-level blocks need signal-level trade count.
-4. LOW confidence = inform only. Never block on LOW.
-5. Single trade cannot flip HIGH confidence lesson. Need 5+ contradictions.
-6. EXPIRED outcomes = weak evidence  -  weight 20% of CORRECT/FALSE outcomes.
-7. Research paper seeds have HIGH base confidence  -  need strong contradicting live evidence.
+1. Evidence tiers  -  HARD LIMITS by trade count:
+   1-4 trades   : ADD_TO_REASONING or MONITOR only. No confidence changes.
+   5-14 trades  : REDUCE_CONFIDENCE_BY_15 maximum.
+   15-24 trades : REDUCE_CONFIDENCE_BY_25 maximum.
+   25+ trades   : BLOCK_ENTRY permitted.
+   Sector-level counts apply per sector. Signal-level counts apply per signal.
+2. LOW confidence = inform only. Never block on LOW.
+3. Single trade cannot flip HIGH confidence lesson. Need 5+ contradictions.
+4. EXPIRED outcomes = weak evidence. Count as 0.2 of a resolved outcome.
+   Example: 5 EXPIRED + 5 CORRECT = effective n=6, not n=10.
+   Win rate must be computed on fully resolved (non-EXPIRED) trades only.
+5. Research paper seeds have HIGH base confidence  -  need 10+ live contradictions to downgrade.
+6. No new lesson may contradict an existing HIGH-confidence lesson without explicitly superseding it.
+7. Maximum 5 new lessons per review. Prefer highest-impact patterns only.
+8. wait_accuracy = correct_waits / (correct_waits + false_waits) among EVALUATED waits only.
+   Do NOT divide by total WAITs including PENDING/EXPIRED.
+
 GATE PROPOSAL RULES:
 - Only propose threshold changes if gate_misses sample >= 20 for that category
 - Only propose if false_block_rate > 40% (filter too aggressive)
-- Proposals must be conservative: ±5 on score thresholds maximum
+- Proposals must be conservative: +-5 on score thresholds maximum
 - Never propose removing a gate entirely  -  only loosening
 - If false_block_rate < 20%: gate is working well, do not touch
 - Macro proposals: only if 3+ consecutive months of consistent directional change
-- For SIDEWAYS vs BULL market: thresholds may legitimately differ  -  note in reasoning
+
+CONDITION SYNTAX  -  use this exact format for all condition fields:
+  FIELD OP VALUE [AND|OR FIELD OP VALUE ...]
+  Allowed ops: ==, !=, <, >, <=, >=, IN, CONTAINS
+  Allowed fields (examples): sector, market_state, nepal_score_entry, combined_geo_entry,
+    nepal_score_delta, primary_signal, active_bandh, consecutive_negative_days,
+    crisis_event_active, ipo_drain_active, rsi_14, macd_cross, conf_score,
+    pe_ratio, growth_rate, days_since_bandh
+  Example: sector IN ('BANKING','DEVELOPMENT_BANKS') AND nepal_score_entry <= -1
 
 LESSON TYPES:
-SIGNAL_FILTER | SECTOR_FILTER | MACRO_FILTER | ENTRY_TIMING | STOP_CALC | PORTFOLIO_RULE | DIVIDEND_PATTERN | CALENDAR_EFFECT | FAILURE_MODE
+SIGNAL_FILTER | SECTOR_FILTER | MACRO_FILTER | ENTRY_TIMING | STOP_CALC |
+PORTFOLIO_RULE | DIVIDEND_PATTERN | CALENDAR_EFFECT | FAILURE_MODE | LIQUIDITY_GAP
 
-ACTIONS (escalating strength):
-MONITOR | REDUCE_CONFIDENCE_BY_15 | REDUCE_CONFIDENCE_BY_25 | REQUIRE_VOLUME_CONFIRM | REQUIRE_MACRO_STABLE | WAIT_FOR_CONFIRMATION | TIGHTEN_STOP | BLOCK_ENTRY
+ENTRY ACTIONS (escalating strength  -  use ONLY these exact strings):
+MONITOR | ADD_TO_REASONING | REDUCE_CONFIDENCE_BY_15 | REDUCE_CONFIDENCE_BY_20 |
+REDUCE_CONFIDENCE_BY_25 | REDUCE_ALLOCATION_BY_20 | REDUCE_ALLOCATION_BY_30 |
+REDUCE_ALLOCATION_BY_40 | INCREASE_CONFIDENCE_BY_15 | INCREASE_ALLOCATION_BY_25 |
+REQUIRE_VOLUME_CONFIRM | REQUIRE_MACRO_STABLE | WAIT_FOR_CONFIRMATION | BLOCK_ENTRY
+
+Note: TIGHTEN_STOP is a post-entry action  -  do NOT use it in lessons_to_write.
 
 LESSON SCHEMA (each lesson you write):
 {
-  "lesson_type": "<type>",
+  "lesson_type": "<type from LESSON TYPES above>",
   "source": "gpt_weekly",
   "symbol": "<symbol or MARKET>",
   "sector": "<sector or ALL>",
   "applies_to": "<ALL | sector-specific | symbol-specific>",
-  "condition": "<machine-readable trigger>",
-  "finding": "<human-readable observation>",
-  "action": "<from actions list>",
-  "trade_count": "<number of trades>",
-  "win_count": "<wins>",
-  "loss_count": "<losses>",
-  "win_rate": "<percentage>",
-  "avg_return_pct": "<average return>",
+  "condition": "<use CONDITION SYNTAX above>",
+  "finding": "<one sentence: the observation only, no reasoning>",
+  "action": "<EXACTLY one action from ENTRY ACTIONS above>",
+  "trade_count": <integer>,
+  "win_count": <integer>,
+  "loss_count": <integer>,
+  "win_rate": <decimal 0.0-1.0>,
+  "avg_return_pct": <decimal>,
   "confidence_level": "<LOW | MEDIUM | HIGH>",
-  "loss_cause_primary": "<if applicable>",
-  "geo_delta_avg": "<avg geo delta>",
-  "nepal_delta_avg": "<avg nepal delta>",
-  "alpha_vs_nepse_avg": "<avg alpha>",
-  "gpt_reasoning": "<your explanation>",
-  "supersedes_lesson_id": "<old lesson id or null>",
-  "trade_journal_ids": "<comma-separated ids>",
-  "market_log_ids": "<comma-separated ids>"
+  "loss_cause_primary": "<if applicable, else omit>",
+  "geo_delta_avg": "<avg geo delta or omit>",
+  "nepal_delta_avg": "<avg nepal delta or omit>",
+  "alpha_vs_nepse_avg": "<avg alpha or omit>",
+  "gpt_reasoning": "<detailed causal explanation, separate from finding>",
+  "supersedes_lesson_id": <integer id or null>,
+  "trade_journal_ids": "<comma-separated ids of trades that support this lesson>",
+  "market_log_ids": "<comma-separated ids of market_log rows used>"
 }
 
 SUPERSEDE LOGIC:
 - Do NOT modify existing lessons. Instead:
-  1. Mark old lesson id in lessons_to_deactivate.
+  1. Add old lesson id to lessons_to_deactivate.
   2. Write NEW lesson with supersedes_lesson_id = old id.
 - If lesson is still valid  -  leave it alone.
 - If evidence too thin  -  write nothing.
 
-OUTPUT FORMAT  -  EXACTLY this JSON. No markdown, no extra text:
+CRITICAL  -  OUTPUT FORMAT:
+Your response must be EXACTLY this JSON structure. No markdown, no code fences, no extra text.
+Start with { and end with }. ALL top-level keys must be present even if empty.
+Use [] for empty arrays. Use exact key names shown  -  any deviation silently breaks the parser.
+
 {
   "review_summary": "<2-3 sentence overview>",
-  "lessons_to_deactivate": [<list of integer ids>],
-  "lessons_to_write": [<list of lesson objects>]
-  "gate_proposals": [
-    {
-      "proposal_number": 1,
-      "parameter_name": "MIN_CONF_SCORE or TECH_SCORE_THRESHOLDS.SIDEWAYS etc",
-      "current_value": "50",
-      "proposed_value": "45",
-      "reasoning": "evidence-based explanation",
-      "false_block_rate": 0.43,
-      "sample_size": 31
-    }
-  ],
+  "lessons_to_deactivate": [],
+  "lessons_to_write": [],
+  "gate_proposals": [],
   "claude_audit": {
-    "buy_count": number,
-    "buy_win_rate": number (0-1),
-    "buy_avg_return": number,
-    "wait_count": number,
-    "wait_accuracy": number (0-1),
-    "avoid_count": number,
-    "avoid_accuracy": number (0-1),
-    "false_avoid_rate": number (0-1),
-    "missed_entry_rate": number (0-1),
-    "overall_accuracy": number (0-1),
-    "macro_accuracy": "qualitative: did macro trend calls match outcomes",
-    "audit_summary": "2-3 sentence assessment of Claude decision quality"
+    "buy_count": 0,
+    "buy_win_rate": 0.0,
+    "buy_avg_return": 0.0,
+    "wait_count": 0,
+    "wait_accuracy": 0.0,
+    "wait_evaluated_count": 0,
+    "avoid_count": 0,
+    "avoid_accuracy": 0.0,
+    "false_avoid_rate": 0.0,
+    "missed_entry_rate": 0.0,
+    "overall_accuracy": 0.0,
+    "macro_accuracy": "<qualitative: did macro trend calls match outcomes>",
+    "audit_summary": "<2-3 sentence assessment of Claude decision quality>"
   }
 }
+
+Key name rules (parser is exact-match):
+  lessons_to_write      NOT new_lessons, NOT lessons
+  lessons_to_deactivate NOT lessons_superseded, NOT deactivate
+  gate_proposals        NOT proposals
+  claude_audit          NOT audit, NOT accuracy_audit
 """
 
 def _build_user_prompt(
@@ -740,10 +765,22 @@ def _validate_lesson(lesson: dict, index: int) -> bool:
 
     # Validate action
     valid_actions = {
-        "MONITOR", "REDUCE_CONFIDENCE_BY_15", "REDUCE_CONFIDENCE_BY_25",
-        "REQUIRE_VOLUME_CONFIRM", "REQUIRE_MACRO_STABLE",
-        "WAIT_FOR_CONFIRMATION", "TIGHTEN_STOP", "BLOCK_ENTRY",
-    }
+            "MONITOR",
+            "ADD_TO_REASONING",
+            "REDUCE_CONFIDENCE_BY_15",
+            "REDUCE_CONFIDENCE_BY_20",
+            "REDUCE_CONFIDENCE_BY_25",
+            "REDUCE_ALLOCATION_BY_20",
+            "REDUCE_ALLOCATION_BY_30",
+            "REDUCE_ALLOCATION_BY_40",
+            "INCREASE_CONFIDENCE_BY_15",
+            "INCREASE_ALLOCATION_BY_25",
+            "REQUIRE_VOLUME_CONFIRM",
+            "REQUIRE_MACRO_STABLE",
+            "WAIT_FOR_CONFIRMATION",
+            "BLOCK_ENTRY",
+            # TIGHTEN_STOP removed — post-entry action, not an entry filter
+        }
     if lesson.get("action") not in valid_actions:
         log.warning("Lesson #%d has invalid action: %s  -  skipping",
                      index, lesson.get("action"))
@@ -1158,7 +1195,12 @@ def run(dry_run: bool = False):
 
     log.info("Calling GPT-5o for weekly review (prompt ~%d tokens)...",
              (len(system_prompt) + len(user_prompt)) // 4)
-    raw_response = ask_gpt(system_prompt, user_prompt, max_tokens=MAX_GPT_TOKENS, context="learning_hub")
+    raw_response = ask_deepseek_review(system_prompt, user_prompt, max_tokens=MAX_GPT_TOKENS, context="learning_hub")
+
+        # Log full raw response for debugging — always, not just on parse failure
+    log.info("Raw model response (%d chars):\n%s", len(raw_response or ""), raw_response or "")
+
+
 
     if not raw_response:
         log.error("GPT returned empty response  -  aborting review")
