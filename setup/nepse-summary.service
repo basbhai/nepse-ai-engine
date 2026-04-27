@@ -1,0 +1,16 @@
+[Unit]
+Description=NEPSE AI — Nightly Summary (9 PM NST: nepal_pulse + summarizer + backup)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/shanvi/nepse-engine
+ExecStart=/home/shanvi/nepse-engine/venv/bin/python -m workflows.summary_workflow
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nepse-summary
+EnvironmentFile=/home/shanvi/nepse-engine/.env
+
+[Install]
+WantedBy=default.target

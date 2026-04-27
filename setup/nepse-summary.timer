@@ -1,0 +1,11 @@
+[Unit]
+Description=NEPSE AI — Nightly Summary Timer (9:00 PM NST = 15:15 UTC, Mon–Fri)
+
+[Timer]
+# 9:00 PM NST = 15:15 UTC
+OnCalendar=Mon,Tue,Wed,Thu,Fri 15:15:00 UTC
+Persistent=true
+AccuracySec=60s
+
+[Install]
+WantedBy=timers.target

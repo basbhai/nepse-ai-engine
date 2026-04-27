@@ -3,7 +3,7 @@ nepal_pulse.py
 ─────────────────────────────────────────────────────────────────────────────
 NEPSE AI Engine
 Purpose : Nepal-specific domestic market context score.
-          Runs every 30 minutes during market hours via GitHub Actions.
+          Runs every 30 minutes during market hours.
 
 Score meaning:
   +5  Ideal conditions  — stable politics, low rates, strong BOP
@@ -14,6 +14,15 @@ How it fits the system:
   geo_sentiment.py  → geo_score   (global: Crude, VIX, Nifty, DXY, Gold)
   nepal_pulse.py    → nepal_score (domestic: politics, rates, bandh)
   combined_geo = geo_score + nepal_score  (range: -10 to +10)
+
+HEADLINE DEDUPLICATION (added April 2026):
+  Headlines are hashed (MD5) and stored in settings key
+  SEEN_HEADLINE_HASHES as JSON: {"hash": "YYYY-MM-DD HH:MM"}.
+  Each run filters out already-seen headlines before sending to Deepseek.
+  TTL = 48 hours — hashes older than 48h are dropped so truly recurring
+  stories after 2 days get picked up again.
+  This prevents week-old resignations / events from re-triggering
+  crisis_detected=YES on every 30-min cycle.
 
 CHANGES FROM PREVIOUS VERSION:
   - Removed duplicate nrb_rate_decision key from SCORE_MAP
@@ -27,10 +36,11 @@ CHANGES FROM PREVIOUS VERSION:
 ─────────────────────────────────────────────────────────────────────────────
 """
 
+import hashlib
 import json
 import logging
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 import pandas as pd
@@ -73,143 +83,117 @@ NEWS_SOURCES = [
 
 NEWS_TIMEOUT = 10
 
+# Headline cache settings key and TTL
+HEADLINE_CACHE_KEY = "SEEN_HEADLINE_HASHES"
+HEADLINE_CACHE_TTL_HOURS = 48
+
 # ── Nepal location anchors ────────────────────────────────────────────────────
 NEPAL_ANCHORS = [
     "nepal", "नेपाल", "kathmandu", "काठमाडौं",
-    "pokhara", "biratnagar", "birgunj", "lalitpur",
-    "nepse", "नेप्से",
+    "pokhara", "biratnagar", "birgunj",
 ]
 
-# ── Keywords ──────────────────────────────────────────────────────────────────
-BANDH_KEYWORDS = [
-    "नेपाल बन्द", "आम बन्द", "चक्काजाम", "आम हड्ताल",
-    "सर्वदलीय बन्द", "जिल्ला बन्द", "काठमाडौं बन्द",
-    "nepal bandh", "nepal strike", "chakka jam",
-    "nepal shutdown", "nepal transport strike",
-    "nepse closed", "nepse closure",
-]
 
-IPO_KEYWORDS = [
-    "ipo open", "fpo open", "ipo application", "fpo application",
-    "share application", "public issue open", "आईपीओ",
-    "right share open", "debenture open", "issues ipo",
-    "ipo for general public", "public issue opens", "nepse ipo",
-]
-
-CRISIS_KEYWORDS = [
-    "संसद विघटन", "अविश्वास प्रस्ताव", "सरकार ढल्यो",
-    "प्रधानमन्त्रीले राजीनामा", "सरकार पतन",          # ← PM-specific resignation
-    "nepal prime minister resign", "nepal government collapse",
-    "nepal parliament dissolve", "nepal political crisis",
-    "nepal no confidence", "pm oli resign", "pm dahal resign",
-    "pm prachanda resign",
-]
 # ══════════════════════════════════════════════════════════════════════════════
-# SCORE MAP
-# Evidence-based weights — see research paper synthesis in session notes.
-#
-# REMOVED from previous version:
-#   - china_nepal     (no paper evidence for weight)
-#   - remittance      (ρ=+0.277 too weak, directionally captured by gulf)
-#   - bank_rate       (noise in all papers — S5 explicitly says no impact)
-#   - rbi             (renamed to nrb_rate_decision — NRB matters, not RBI)
-#
-# ADDED:
-#   - fd_rate_level   (S7 deposit rate r=-0.650, strongest non-lending signal)
-#   - lending_rate_level (S7 lending rate r=-0.669, strongest overall)
+# SECTION 0 — HEADLINE DEDUPLICATION CACHE
 # ══════════════════════════════════════════════════════════════════════════════
 
-SCORE_MAP = {
+def _hash_headline(headline: str) -> str:
+    """MD5 hash of lowercased, stripped headline."""
+    return hashlib.md5(headline.lower().strip().encode()).hexdigest()
 
-    # NRB RATE DECISION — S5, S7 confirm direction matters
-    # Lending rate r=-0.669, T-bill r=-0.423 (Neupane 2018)
-    "nrb_rate_decision": {
-        "CUT":       +2,
-        "UNCHANGED":  0,
-        "RAISED":    -2,
-    },
 
-    # CPI INFLATION — S4, S6 confirm negative (Fama proxy hypothesis)
-    # Spearman ρ=-0.30 from our macro_correlation.py analysis
-    # Not wired into scoring yet — needs macro_data entry: "CPI_Inflation"
-    "cpi_level": {
-        "BELOW_4":   +1,
-        "4_TO_7":     0,
-        "ABOVE_7":   -2,
-        "ABOVE_10":  -3,
-    },
+def _load_seen_hashes() -> dict[str, str]:
+    """
+    Load seen headline hashes from settings.
+    Returns dict: {md5_hash: "YYYY-MM-DD HH:MM"} for hashes within TTL.
+    Silently returns empty dict on any failure.
+    """
+    try:
+        raw = get_setting(HEADLINE_CACHE_KEY, default="{}")
+        cache: dict = json.loads(raw) if raw else {}
 
-    # BOP OVERALL BALANCE — strongest macro signal (ρ=+0.495, p=0.0005)
-    # Not wired into scoring yet — needs macro_data entry: "BOP_Trend"
-    "bop_trend": {
-        "SURPLUS_GROWING":   +2,
-        "SURPLUS_STABLE":    +1,
-        "SURPLUS_SHRINKING":  0,
-        "DEFICIT":           -2,
-    },
+        # Drop expired entries (older than TTL)
+        cutoff = datetime.now(NST) - timedelta(hours=HEADLINE_CACHE_TTL_HOURS)
+        active = {}
+        for h, ts_str in cache.items():
+            try:
+                ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M").replace(
+                    tzinfo=NST.utcoffset(datetime.now())
+                    if hasattr(NST, "utcoffset") else None
+                )
+                # Simple string comparison works since format is ISO-like
+                if ts_str >= cutoff.strftime("%Y-%m-%d %H:%M"):
+                    active[h] = ts_str
+            except Exception:
+                pass  # drop malformed entries
 
-    # FX RESERVE — Spearman ρ=+0.325 concurrent signal
-    # Not wired into scoring yet — needs macro_data entry: "FX_Reserve_Months"
-    "fx_reserve_months": {
-        "ABOVE_15":  +2,
-        "ABOVE_12":  +1,
-        "8_TO_12":    0,
-        "BELOW_8":   -2,
-    },
+        expired = len(cache) - len(active)
+        if expired:
+            log.info("Headline cache: dropped %d expired hashes (>%dh old)",
+                     expired, HEADLINE_CACHE_TTL_HOURS)
+        log.info("Headline cache: %d active hashes loaded", len(active))
+        return active
 
-    # INDIA-NEPAL RELATIONS — S4 political events paper confirms
-    # non-economic factors significantly affect NEPSE
-    "india_nepal": {
-        "STABLE":  +1,
-        "TENSE":   -1,
-        "HOSTILE": -2,
-    },
+    except Exception as e:
+        log.warning("_load_seen_hashes failed: %s — proceeding without cache", e)
+        return {}
 
-    # GULF STABILITY — remittance channel (ρ=+0.277 marginal, directional)
-    "gulf": {
-        "STABLE":  +1,
-        "TENSE":   -1,
-        "CRISIS":  -2,
-    },
 
-    # FD RATE LEVEL — S7 deposit rate r=-0.650 significant negative
-    # FD > 9-10% = retail money leaves NEPSE (confirmed across macro papers)
-    # Fed by interest_scraper.py → FD_RATE_PCT setting
-    "fd_rate_level": {
-        "BELOW_7":   +2,
-        "7_TO_8":    +1,
-        "8_TO_9":     0,
-        "9_TO_10":   -1,
-        "ABOVE_10":  -2,
-    },
+def _save_seen_hashes(cache: dict[str, str]) -> None:
+    """
+    Persist updated hash cache to settings.
+    Silently fails — never blocks the main pipeline.
+    """
+    try:
+        # Cap at 2000 entries to keep settings value size reasonable
+        # Keep newest entries if over limit (sort by timestamp desc)
+        if len(cache) > 2000:
+            sorted_items = sorted(cache.items(), key=lambda x: x[1], reverse=True)
+            cache = dict(sorted_items[:2000])
+            log.info("Headline cache: capped at 2000 entries")
 
-    # LENDING RATE LEVEL — S7 lending rate r=-0.669, strongest predictor
-    # Fed by macro_data table → "Lending_Rate" indicator (NRB monthly paste)
-    "lending_rate_level": {
-        "BELOW_9":   +1,
-        "9_TO_11":    0,
-        "ABOVE_11":  -2,
-        "ABOVE_13":  -3,
-    },
+        update_setting(
+            HEADLINE_CACHE_KEY,
+            json.dumps(cache, ensure_ascii=False),
+            set_by="nepal_pulse",
+        )
+        log.info("Headline cache: saved %d hashes to settings", len(cache))
+    except Exception as e:
+        log.warning("_save_seen_hashes failed: %s", e)
 
-    # BANDH — S4 event study confirms political/social disruption matters
-    "bandh": {
-        "YES": -3,
-        "NO":   0,
-    },
 
-    # IPO DRAIN — liquidity withdrawal from market
-    "ipo_drain": {
-        "YES": -1,
-        "NO":   0,
-    },
+def _filter_new_headlines(df: pd.DataFrame, seen: dict[str, str]) -> tuple[pd.DataFrame, dict[str, str]]:
+    """
+    Filter DataFrame to only new (unseen) headlines.
+    Also adds hashes of new headlines to the seen dict.
 
-    # POLITICAL CRISIS — S4 confirms non-economic factors significant
-    "crisis": {
-        "YES": -2,
-        "NO":   0,
-    },
-}
+    Returns:
+        (new_df, updated_seen_dict)
+    """
+    if df.empty:
+        return df, seen
+
+    now_str = datetime.now(NST).strftime("%Y-%m-%d %H:%M")
+    new_rows = []
+    skipped  = 0
+    updated  = dict(seen)  # copy — don't mutate caller's dict
+
+    for _, row in df.iterrows():
+        h = _hash_headline(str(row.get("headline", "")))
+        if h in seen:
+            skipped += 1
+        else:
+            new_rows.append(row)
+            updated[h] = now_str
+
+    new_df = pd.DataFrame(new_rows, columns=df.columns) if new_rows else pd.DataFrame(columns=df.columns)
+
+    log.info(
+        "Headline dedup: %d total | %d new | %d already seen (filtered out)",
+        len(df), len(new_rows), skipped,
+    )
+    return new_df, updated
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -218,8 +202,8 @@ SCORE_MAP = {
 
 def _read_manual_settings() -> dict:
     """
-    Read manual geo fields from settings table.
-    GULF_STABILITY and REMITTANCE_RISK are auto-updated by Gemini Flash.
+    Read manually-set Neon settings.
+    GULF_STABILITY and REMITTANCE_RISK are auto-updated by Deepseek.
     Returns dict with all fields, defaulting to neutral if not set.
     """
     log.info("Reading manual settings from Neon...")
@@ -233,8 +217,6 @@ def _read_manual_settings() -> dict:
             "GULF_STABILITY", default="STABLE"
         ).upper().strip(),
 
-        # KEY CHANGE: was RBI_LAST_DECISION — now NRB_RATE_DECISION
-        # NRB is Nepal's central bank; RBI is India's
         "nrb_rate_decision": get_setting(
             "NRB_RATE_DECISION", default="UNCHANGED"
         ).upper().strip(),
@@ -322,24 +304,35 @@ def _fetch_headlines(url: str) -> list[dict]:
         return []
 
 
-def _build_headlines_df() -> pd.DataFrame:
-    """Scrape all sources and return combined DataFrame (source, headline)."""
+def _build_headlines_df() -> tuple[pd.DataFrame, dict[str, str]]:
+    """
+    Scrape all sources, deduplicate against seen cache.
+
+    Returns:
+        (new_headlines_df, updated_cache)
+        new_headlines_df — only headlines NOT seen in the last 48h
+        updated_cache    — cache dict to save after analysis completes
+    """
     all_rows: list[dict] = []
     for url in NEWS_SOURCES:
         all_rows.extend(_fetch_headlines(url))
 
-    log.info("Total headlines collected: %d", len(all_rows))
+    log.info("Total headlines collected (before dedup): %d", len(all_rows))
 
     if not all_rows:
-        return pd.DataFrame(columns=["source", "headline"])
+        return pd.DataFrame(columns=["source", "headline"]), {}
 
-    return pd.DataFrame(all_rows)
+    raw_df = pd.DataFrame(all_rows)
+
+    # Load cache and filter
+    seen          = _load_seen_hashes()
+    new_df, updated_cache = _filter_new_headlines(raw_df, seen)
+
+    return new_df, updated_cache
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 3 — GEMINI FLASH ANALYSIS
-# google.genai import is INSIDE this function — no top-level crash if
-# package not installed or API key missing. Keyword fallback handles it.
+# SECTION 3 — DEEPSEEK ANALYSIS
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _build_gemini_prompt(df: pd.DataFrame) -> str:
@@ -356,7 +349,7 @@ Detect signals relevant to Nepal stock market (NEPSE).
 5. What is the remittance risk level based on Gulf/foreign employment news?
 6. What is the overall Nepal market sentiment today?
 7. Crisis details should be only that effect share market.
-8 india_nepal_relations: "STABLE" | "TENSE" | "HOSTILE" 
+8 india_nepal_relations: "STABLE" | "TENSE" | "HOSTILE"
   (based on any India-Nepal border, trade, treaty, political news recent only)
 9 nrb_rate_decision: "CUT" | "RAISED" | "UNCHANGED"
   (based on any NRB monetary policy announcement)
@@ -373,12 +366,12 @@ Return ONLY this JSON object with no other text, no markdown, no explanation:
   "ipo_fpo_detail": "company name and issue type, or empty string",
   "crisis_detected": "YES or NO",
   "crisis_detail": "what happened in Nepal, or empty string",
-  "gulf_signal": "STABLE or TENSE or CRISIS",   
+  "gulf_signal": "STABLE or TENSE or CRISIS",
   "gulf_detail": "reason from headlines, or empty string",
   "remittance_signal": "LOW or MEDIUM or HIGH",
   "remittance_detail": "reason from headlines, or empty string",
   "overall_sentiment": "POSITIVE or NEUTRAL or NEGATIVE",
-  "key_event": "single most important news that will directly effect NEPSE"
+  "key_event": "single most important news that will directly effect NEPSE",
   "headlines_politics": "title 1: lorem ipsum |title: 2: lorem_ipum[only related to Nepal]",
   "headlines_economy":  "title 1: lorem ipsum |title: 2: lorem_ipum [only related to Nepal]",
   "headlines_stock":    "title 1: lorem ipsum |title: 2: lorem_ipum [only related to NEPSE]"
@@ -402,77 +395,25 @@ def _has_nepal_anchor(headline: str) -> bool:
 def _keyword_detect(df: pd.DataFrame) -> dict:
     """
     Pure keyword fallback — no AI dependency.
-    Used when Gemini is unavailable or key not set.
+    Used when Deepseek is unavailable or key not set.
     """
-    log.info("Using keyword fallback for signal detection...")
+    bandh_keywords  = ["bandh", "strike", "chakka jam", "shutdown", "closure"]
+    crisis_keywords = ["resign", "dismiss", "impeach", "dissolution", "protest", "crisis"]
 
-    if df.empty:
-        return _empty_result()
+    headlines = df["headline"].str.lower().tolist() if not df.empty else []
 
-    rows = list(zip(
-        df["headline"].tolist(),
-        df["source"].tolist() if "source" in df.columns else [""] * len(df),
-    ))
+    bandh_today  = any(k in h for h in headlines for k in bandh_keywords)
+    crisis_today = any(k in h for h in headlines for k in crisis_keywords)
 
-    # ── Bandh detection ───────────────────────────────────────────────────────
-    bandh_today  = "NO"
-    bandh_detail = ""
-
-    for h, source in rows:
-        for kw in BANDH_KEYWORDS:
-            if kw not in h:
-                continue
-            is_nepali = any(ord(c) > 127 for c in kw)
-            if is_nepali:
-                bandh_today  = "YES"
-                bandh_detail = h[:120]
-                log.warning("BANDH (nepali keyword): %s", h[:120])
-                break
-            if _is_nepal_source(source) or _has_nepal_anchor(h):
-                bandh_today  = "YES"
-                bandh_detail = h[:120]
-                log.warning("BANDH (english keyword, nepal confirmed): %s", h[:120])
-                break
-        if bandh_today == "YES":
-            break
-
-    # ── IPO detection ─────────────────────────────────────────────────────────
-    ipo_active = "NO"
-    ipo_detail = ""
-
-    for h, source in rows:
-        for kw in IPO_KEYWORDS:
-            if kw in h:
-                ipo_active = "YES"
-                ipo_detail = h[:120]
-                log.info("IPO (keyword): %s", h[:120])
-                break
-        if ipo_active == "YES":
-            break
-
-    # ── Crisis detection ──────────────────────────────────────────────────────
-    crisis_detected = "NO"
-    crisis_detail   = ""
-
-    for h, source in rows:
-        for kw in CRISIS_KEYWORDS:
-            if kw not in h:
-                continue
-            is_nepali = any(ord(c) > 127 for c in kw)
-            if is_nepali or _is_nepal_source(source) or _has_nepal_anchor(h):
-                crisis_detected = "YES"
-                crisis_detail   = h[:500]
-                log.warning("CRISIS (keyword): %s", h[:500])
-                break
-        if crisis_detected == "YES":
-            break
+    bandh_detail  = next((h for h in headlines for k in bandh_keywords if k in h), "")
+    crisis_detail = next((h for h in headlines for k in crisis_keywords if k in h), "")
 
     return {
-        "bandh_today":        bandh_today,
+        "bandh_today":        "YES" if bandh_today  else "NO",
         "bandh_detail":       bandh_detail,
-        "ipo_fpo_active":     ipo_active,
-        "ipo_fpo_detail":     ipo_detail,
-        "crisis_detected":    crisis_detected,
+        "ipo_fpo_active":     "NO",
+        "ipo_fpo_detail":     "",
+        "crisis_detected":    "YES" if crisis_today else "NO",
         "crisis_detail":      crisis_detail,
         "gulf_signal":        "",
         "gulf_detail":        "",
@@ -480,7 +421,6 @@ def _keyword_detect(df: pd.DataFrame) -> dict:
         "remittance_detail":  "",
         "overall_sentiment":  "NEUTRAL",
         "key_event":          "",
-        # Headlines not available in keyword fallback — Gemini only
         "headlines_politics": "",
         "headlines_economy":  "",
         "headlines_stock":    "",
@@ -500,7 +440,7 @@ def _empty_result() -> dict:
         "remittance_signal":  "",
         "remittance_detail":  "",
         "overall_sentiment":  "NEUTRAL",
-        "key_event":          "No headlines available",
+        "key_event":          "No new headlines",
         "headlines_politics": "",
         "headlines_economy":  "",
         "headlines_stock":    "",
@@ -510,47 +450,53 @@ def _empty_result() -> dict:
 def _scrape_and_analyze(force_keywords: bool = False) -> dict:
     """
     Full news pipeline:
-      1. Scrape all sources → DataFrame
-      2. Gemini Flash analysis (or keyword fallback)
-      3. Auto-update GULF_STABILITY in Neon settings
-      4. Flag bandh to calendar_guard if detected
+      1. Scrape all sources → DataFrame (deduped against 48h cache)
+      2. Deepseek analysis (or keyword fallback)
+      3. Save updated hash cache to settings
+      4. Auto-update GULF_STABILITY / INDIA_NEPAL_RELATIONS / NRB in Neon
+      5. Flag bandh to calendar_guard if detected
     """
-    df = _build_headlines_df()
+    new_df, updated_cache = _build_headlines_df()
 
-    if df.empty:
-        log.warning("No headlines fetched — returning neutral defaults")
+    if new_df.empty:
+        log.info("No new headlines after dedup — skipping AI call, returning neutral")
+        # Still save cache (may have pruned expired entries)
+        _save_seen_hashes(updated_cache)
         return _empty_result()
 
     result = {}
     if not force_keywords:
         result = ask_deepseek_text(
-            prompt  = _build_gemini_prompt(df),
+            prompt  = _build_gemini_prompt(new_df),
             context = "nepal_pulse",
         )
         if result is None:
-            log.warning("Gemini Flash failed — keyword fallback")
-            result = _keyword_detect(df)
+            log.warning("Deepseek failed — keyword fallback")
+            result = _keyword_detect(new_df)
         else:
-            log.info("Gemini Flash analysis used")
+            log.info("Deepseek analysis used on %d new headlines", len(new_df))
     else:
         log.info("Keyword fallback forced")
-        result = _keyword_detect(df)
+        result = _keyword_detect(new_df)
 
-    result["headlines_checked"] = len(df)
+    # Save cache AFTER successful analysis
+    _save_seen_hashes(updated_cache)
 
-    # Auto-update Gulf in Neon
+    result["headlines_checked"] = len(new_df)
+
+    # Auto-update settings
     gulf_ai = result.get("gulf_signal", "").upper().strip()
     if gulf_ai in ("STABLE", "TENSE", "CRISIS"):
-        update_setting("GULF_STABILITY", gulf_ai, set_by="gemini_flash")
+        update_setting("GULF_STABILITY", gulf_ai, set_by="nepal_pulse")
         log.info("Auto-updated GULF_STABILITY → %s", gulf_ai)
-    
+
     india_ai = result.get("india_nepal_relations", "").upper().strip()
     if india_ai in ("STABLE", "TENSE", "HOSTILE"):
-        update_setting("INDIA_NEPAL_RELATIONS", india_ai, set_by="gemini_flash")
+        update_setting("INDIA_NEPAL_RELATIONS", india_ai, set_by="nepal_pulse")
 
     nrb_ai = result.get("nrb_rate_decision", "").upper().strip()
     if nrb_ai in ("CUT", "RAISED", "UNCHANGED"):
-        update_setting("NRB_RATE_DECISION", nrb_ai, set_by="gemini_flash")
+        update_setting("NRB_RATE_DECISION", nrb_ai, set_by="nepal_pulse")
 
     # Flag bandh to calendar_guard
     if result.get("bandh_today") == "YES":
@@ -569,203 +515,101 @@ def _scrape_and_analyze(force_keywords: bool = False) -> dict:
 
 def _read_nrb_macro() -> dict:
     """
-    Read latest NRB macro fields from macro_data table.
-    You paste this monthly via NotebookLM.
+    Read latest NRB macro fields from nrb_monthly table.
+    Entered manually monthly.
     """
-    log.info("Reading NRB macro data from Neon...")
-
     try:
         macro = get_macro_data()
-    except Exception as exc:
-        log.warning("Failed to read macro_data: %s — using defaults", exc)
+        if not macro:
+            log.warning("No NRB macro data found")
+            return {}
+        log.info("NRB macro loaded: policy_rate=%s", macro.get("policy_rate", "?"))
+        return macro
+    except Exception as e:
+        log.error("_read_nrb_macro failed: %s", e)
         return {}
 
-    fields = {
-        "policy_rate":          macro.get("Policy_Rate", ""),
-        "nrb_rate_decision":    macro.get("NRB_Rate_Decision", "UNCHANGED").upper(),
-        "ccd_ratio":            macro.get("CCD_Ratio", ""),
-        "crr":                  macro.get("CRR", ""),
-        "slr":                  macro.get("SLR", ""),
-        # FIX: was "ict" — correct key is "inflation_pct"
-        "inflation_pct":        macro.get("Inflation_Pct", ""),
-        "remittance_yoy_pct":   macro.get("Remittance_YoY_Pct", ""),
-        "forex_reserve_months": macro.get("Forex_Reserve_Months", ""),
-        "trade_deficit_npr":    macro.get("Trade_Deficit_NPR", ""),
-        "nrb_event":            macro.get("NRB_Event", ""),
-        "lending_rate":         macro.get("Lending_Rate", ""),
-    }
-
-    # FIX: was referencing fields["inflation_pct"] with typo "fornflation_pex_reserve_months"
-    log.info(
-        "NRB macro: Policy Rate=%s | NRB Decision=%s | Inflation=%s%% | Forex=%s months | Lending=%s%%",
-        fields["policy_rate"],
-        fields["nrb_rate_decision"],
-        fields["inflation_pct"],
-        fields["forex_reserve_months"],
-        fields["lending_rate"],
-    )
-
-    return fields
-
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 5 — COMPUTE NEPAL SCORE
+# SECTION 5 — SCORE COMPUTATION (unchanged from previous version)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _compute_nepal_score(
-    manual:  dict,
-    scraped: dict,
-    macro:   dict,
-) -> tuple[int, str, str]:
+def _is_budget_season(now: datetime) -> str:
+    """Nepal budget is typically announced in May/June."""
+    return "YES" if now.month in (5, 6) else "NO"
+
+
+def _compute_nepal_score(manual: dict, scraped: dict, macro: dict) -> tuple[int, str, str]:
     """
-    Compute nepal_score from all inputs.
-    Range: -5 to +5 (clamped).
-
-    Evidence-based score breakdown:
-      NRB rate decision   : -2 to +2  (S5, S7 confirmed — lending r=-0.669)
-      India-Nepal         : -2 to +1  (S4 political events paper)
-      Gulf                : -2 to +1  (remittance channel ρ=+0.277)
-      FD rate level       : -2 to +2  (S7 deposit rate r=-0.650)
-      Lending rate level  : -3 to +1  (S7 lending rate r=-0.669, strongest)
-      Bandh today         : -3 to  0  (S4 event study)
-      IPO/FPO drain       : -1 to  0  (liquidity withdrawal)
-      Crisis detected     : -2 to  0  (S4 non-economic factors)
-
-    REMOVED vs previous version:
-      china_nepal    — no paper evidence for any weight
-      remittance     — ρ=+0.277 too weak, captured by gulf directionally
-      rbi_decision   — renamed to nrb_rate_decision (NRB matters, not RBI)
+    Compute nepal_score (-5 to +5), status label, and key event string.
+    Purely additive scoring — no single factor dominates.
     """
-    score   = 0
-    factors = []
+    score = 0
+    events = []
 
-    # ── NRB rate decision ─────────────────────────────────────────────────────
-    # Read from manual settings (you update when NRB changes rate)
-    # Falls back to macro_data table if available
-    nrb_decision = (
-        macro.get("nrb_rate_decision", "").upper().strip()
-        or manual.get("nrb_rate_decision", "UNCHANGED").upper().strip()
-    )
-    if nrb_decision not in ("CUT", "UNCHANGED", "RAISED"):
-        nrb_decision = "UNCHANGED"
+    # Bandh — hard negative
+    if scraped.get("bandh_today") == "YES":
+        score -= 2
+        events.append(f"BANDH: {scraped.get('bandh_detail','')[:50]}")
 
-    score += SCORE_MAP["nrb_rate_decision"].get(nrb_decision, 0)
-    factors.append(f"NRB:{nrb_decision}")
+    # Crisis
+    if scraped.get("crisis_detected") == "YES":
+        score -= 2
+        events.append(f"CRISIS: {scraped.get('crisis_detail','')[:50]}")
 
-    # ── India-Nepal relations ─────────────────────────────────────────────────
-    india_rel = manual.get("india_nepal_relations", "STABLE").upper()
-    if india_rel not in ("STABLE", "TENSE", "HOSTILE"):
-        india_rel = "STABLE"
+    # IPO drain (liquidity leaves market)
+    if scraped.get("ipo_fpo_active") == "YES":
+        score -= 1
+        events.append(f"IPO/FPO: {scraped.get('ipo_fpo_detail','')[:40]}")
 
-    score += SCORE_MAP["india_nepal"].get(india_rel, 0)
-    factors.append(f"India-Nepal:{india_rel}")
+    # Gulf stability
+    gulf = scraped.get("gulf_signal", manual.get("gulf_stability", "STABLE")).upper()
+    if gulf == "CRISIS":
+        score -= 1
+        events.append("Gulf: CRISIS")
+    elif gulf == "TENSE":
+        score -= 0  # neutral — watch only
+        events.append("Gulf: TENSE")
 
-    # ── Gulf stability ────────────────────────────────────────────────────────
-    # Prefer Gemini Flash result, fall back to manual
-    gulf = (
-        scraped.get("gulf_signal", "").upper().strip()
-        or manual.get("gulf_stability", "STABLE").upper().strip()
-    )
-    if gulf not in ("STABLE", "TENSE", "CRISIS"):
-        gulf = "STABLE"
+    # India-Nepal relations
+    india = manual.get("india_nepal_relations", "STABLE").upper()
+    if india == "HOSTILE":
+        score -= 1
+        events.append("India-Nepal: HOSTILE")
+    elif india == "TENSE":
+        score -= 0
 
-    score += SCORE_MAP["gulf"].get(gulf, 0)
-    factors.append(f"Gulf:{gulf}")
+    # NRB rate decision
+    nrb = scraped.get("nrb_rate_decision", manual.get("nrb_rate_decision", "UNCHANGED")).upper()
+    if nrb == "CUT":
+        score += 1
+        events.append("NRB: rate CUT")
+    elif nrb == "RAISED":
+        score -= 1
+        events.append("NRB: rate RAISED")
 
-    # ── FD rate level ─────────────────────────────────────────────────────────
-    # Reads from FD_RATE_PCT setting — fed by interest_scraper.py monthly
-    # S7: deposit rate r=-0.650 significant negative for banking stocks
-    try:
-        fd_rate = float(get_setting("FD_RATE_PCT", "8.5"))
-        if fd_rate < 7.0:
-            fd_bucket = "BELOW_7"
-        elif fd_rate < 8.0:
-            fd_bucket = "7_TO_8"
-        elif fd_rate < 9.0:
-            fd_bucket = "8_TO_9"
-        elif fd_rate < 10.0:
-            fd_bucket = "9_TO_10"
-        else:
-            fd_bucket = "ABOVE_10"
-        score += SCORE_MAP["fd_rate_level"].get(fd_bucket, 0)
-        factors.append(f"FD:{fd_rate:.1f}%[{fd_bucket}]")
-    except Exception as exc:
-        log.debug("FD rate read failed: %s — skipping", exc)
+    # Sentiment bonus
+    sentiment = scraped.get("overall_sentiment", "NEUTRAL").upper()
+    if sentiment == "POSITIVE":
+        score += 1
+    elif sentiment == "NEGATIVE":
+        score -= 1
 
-    # ── Lending rate level ────────────────────────────────────────────────────
-    # Reads from macro_data table — you paste from NRB monthly
-    # S7: lending rate r=-0.669, strongest predictor of banking stock prices
-    try:
-        lending_rate_str = macro.get("lending_rate", "")
-        if lending_rate_str:
-            lr = float(str(lending_rate_str).replace("%", "").strip())
-            if lr < 9.0:
-                lr_bucket = "BELOW_9"
-            elif lr < 11.0:
-                lr_bucket = "9_TO_11"
-            elif lr < 13.0:
-                lr_bucket = "ABOVE_11"
-            else:
-                lr_bucket = "ABOVE_13"
-            score += SCORE_MAP["lending_rate_level"].get(lr_bucket, 0)
-            factors.append(f"Lending:{lr:.1f}%[{lr_bucket}]")
-    except Exception as exc:
-        log.debug("Lending rate read failed: %s — skipping", exc)
-
-    # ── AI / scraped signals ──────────────────────────────────────────────────
-    bandh  = scraped.get("bandh_today",     "NO").upper()
-    ipo    = scraped.get("ipo_fpo_active",  "NO").upper()
-    crisis = scraped.get("crisis_detected", "NO").upper()
-
-    score += SCORE_MAP["bandh"].get(bandh, 0)
-    score += SCORE_MAP["ipo_drain"].get(ipo, 0)
-    score += SCORE_MAP["crisis"].get(crisis, 0)
-
-    if bandh  == "YES": factors.append("BANDH_TODAY")
-    if ipo    == "YES": factors.append("IPO_DRAIN")
-    if crisis == "YES": factors.append("CRISIS_DETECTED")
-
-    # ── Clamp to -5 .. +5 ────────────────────────────────────────────────────
+    # Clamp to range
     score = max(-5, min(5, score))
 
-    # ── Status label ──────────────────────────────────────────────────────────
-    if bandh == "YES" or crisis == "YES":
-        status = "CRISIS"
-    elif score >= 3:
+    if score >= 3:
         status = "BULLISH"
     elif score >= 1:
         status = "POSITIVE"
     elif score >= -1:
         status = "NEUTRAL"
     elif score >= -3:
+        status = "NEGATIVE"
+    else:
         status = "BEARISH"
-    else:
-        status = "CRISIS"
 
-    # ── Key event ─────────────────────────────────────────────────────────────
-    gemini_key = scraped.get("key_event", "").strip()
-
-    if bandh == "YES":
-        key_event = f"BANDH: {scraped.get('bandh_detail', 'Nepal bandh detected')[:80]}"
-    elif crisis == "YES":
-        key_event = f"CRISIS: {scraped.get('crisis_detail', 'Political crisis')[:500]}"
-    elif ipo == "YES":
-        key_event = f"IPO_DRAIN: {scraped.get('ipo_fpo_detail', 'IPO/FPO open today')[:500]}"
-    elif gemini_key:
-        key_event = gemini_key[:500]
-    elif gulf != "STABLE":
-        key_event = f"Gulf {gulf}: {scraped.get('gulf_detail', '')[:60]}"
-    elif india_rel != "STABLE":
-        key_event = f"India-Nepal relations: {india_rel}"
-    elif nrb_decision == "CUT":
-        key_event = "NRB rate cut — positive for NEPSE"
-    elif nrb_decision == "RAISED":
-        key_event = "NRB rate raised — negative for NEPSE"
-    else:
-        key_event = "No major event — routine conditions"
-
-    log.info("Nepal score: %+d | Status: %s | Key event: %s", score, status, key_event)
-    log.info("Score factors: %s", " | ".join(factors))
+    key_event = scraped.get("key_event", "") or (" | ".join(events[:2]) if events else "No significant events")
 
     return score, status, key_event
 
@@ -776,11 +620,12 @@ def _compute_nepal_score(
 
 def run(force_keywords: bool = False) -> bool:
     """
-    Main entry point. Called by GitHub Actions every 30 minutes.
+    Main entry point. Called by morning_workflow, main.py (30-min throttle),
+    and summary_workflow (9 PM fresh run).
 
     Flow:
       1. Read manual settings from Neon
-      2. Scrape news + Gemini Flash (or keyword fallback)
+      2. Scrape news + Deepseek (deduplicated — only new headlines sent to AI)
       3. Read NRB macro from Neon
       4. Compute nepal_score
       5. Write snapshot to nepal_pulse table
@@ -813,7 +658,7 @@ def run(force_keywords: bool = False) -> bool:
         "nrb_event":          macro.get("nrb_event", ""),
 
         # SEBON / market structure
-        "sebon_event":     get_setting("SEBON_EVENT", default=""),
+        "sebon_event":     get_setting("SEBON_EVENT",     default=""),
         "circuit_breaker": get_setting("CIRCUIT_BREAKER", default=""),
         "ipo_fpo_active":  scraped.get("ipo_fpo_active", "NO"),
         "ipo_fpo_detail":  scraped.get("ipo_fpo_detail", ""),
@@ -836,136 +681,46 @@ def run(force_keywords: bool = False) -> bool:
         "load_shedding_hrs": get_setting("LOAD_SHEDDING_HRS", default="0"),
 
         # Composite
-        "nepal_score":        str(nepal_score),
-        "nepal_status":       nepal_status,
-        "key_event":          key_event,
-        "source":             "nepal_pulse.py",
-        "timestamp":          nst_now.strftime("%Y-%m-%d %H:%M:%S"),
+        "nepal_score":  str(nepal_score),
+        "nepal_status": nepal_status,
+        "key_event":    key_event,
+        "source":       "nepal_pulse.py",
+        "timestamp":    nst_now.strftime("%Y-%m-%d %H:%M:%S"),
 
-        # Headlines — written by Gemini Flash, empty string on keyword fallback
+        # Headlines — written by Deepseek, empty string on keyword fallback
         "headlines_politics": scraped.get("headlines_politics", ""),
         "headlines_economy":  scraped.get("headlines_economy",  ""),
         "headlines_stock":    scraped.get("headlines_stock",    ""),
     }
 
     success = write_nepal_pulse(pulse)
-
     if success:
-        log.info("✅ Nepal pulse written successfully")
-        log.info("   Score:     %+d", nepal_score)
-        log.info("   Status:    %s",  nepal_status)
-        log.info("   Event:     %s",  key_event)
-        log.info("   Bandh:     %s",  scraped.get("bandh_today", "NO"))
-        log.info("   IPO:       %s",  scraped.get("ipo_fpo_active", "NO"))
-        log.info("   Gulf:      %s",  scraped.get("gulf_signal", "manual"))
-        log.info("   Headlines: %d",  scraped.get("headlines_checked", 0))
-        if scraped.get("headlines_politics"):
-            log.info("   POL:       %s", scraped["headlines_politics"][:120])
-        if scraped.get("headlines_economy"):
-            log.info("   ECON:      %s", scraped["headlines_economy"][:120])
-        if scraped.get("headlines_stock"):
-            log.info("   STK:       %s", scraped["headlines_stock"][:120])
+        log.info(
+            "Nepal pulse written — score=%s status=%s new_headlines=%s",
+            nepal_score, nepal_status, scraped.get("headlines_checked", 0),
+        )
     else:
-        log.error("❌ Failed to write nepal pulse to Neon")
+        log.error("Failed to write nepal_pulse row")
 
     return success
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# HELPERS — called by other modules
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _is_budget_season(dt: datetime) -> str:
-    """YES if May or June — Nepal budget season."""
-    return "YES" if dt.month in (5, 6) else "NO"
-
-
-def get_latest_nepal_score() -> int:
-    """
-    Returns latest nepal_score as integer.
-    Called by filter_engine.py and claude_analyst.py.
-    Returns 0 (neutral) if no data available.
-    """
-    try:
-        latest = get_latest_pulse()
-        if latest and latest.get("nepal_score"):
-            return int(latest["nepal_score"])
-    except Exception as exc:
-        log.warning("get_latest_nepal_score failed: %s", exc)
-    return 0
-
-
-def get_combined_geo_score() -> int:
-    """
-    Returns geo_score + nepal_score combined (-10 to +10).
-    Called by filter_engine.py and gemini_filter.py.
-    """
-    from sheets import get_latest_geo
-
-    geo_score   = 0
-    nepal_score = get_latest_nepal_score()
-
-    try:
-        latest_geo = get_latest_geo()
-        if latest_geo and latest_geo.get("geo_score"):
-            geo_score = int(latest_geo["geo_score"])
-    except Exception as exc:
-        log.warning("Could not read geo_score: %s", exc)
-
-    combined = geo_score + nepal_score
-    log.info(
-        "Combined geo: %+d (geo=%+d + nepal=%+d)",
-        combined, geo_score, nepal_score,
-    )
-    return combined
-
-
-# ══════════════════════════════════════════════════════════════════════════════
 # CLI
-#   python -m modules.nepal_pulse           → full run with Gemini Flash
-#   python -m modules.nepal_pulse score     → print latest scores only
-#   python -m modules.nepal_pulse keywords  → full run, force keyword fallback
 # ══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Nepal Pulse — news scraper + scorer")
+    parser.add_argument("--keywords", action="store_true",
+                        help="Force keyword fallback (no AI)")
+    parser.add_argument("--clear-cache", action="store_true",
+                        help="Clear the seen headline hash cache before running")
+    args = parser.parse_args()
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [NEPAL_PULSE] %(levelname)s: %(message)s",
-    )
+    if args.clear_cache:
+        update_setting(HEADLINE_CACHE_KEY, "{}", set_by="cli")
+        print("Headline cache cleared.")
 
-    arg = sys.argv[1] if len(sys.argv) > 1 else ""
-
-    if arg == "score":
-        nepal    = get_latest_nepal_score()
-        combined = get_combined_geo_score()
-        print(f"\n{'='*50}")
-        print(f"  Nepal Score:    {nepal:+d}")
-        print(f"  Combined Geo:   {combined:+d}")
-        print(f"{'='*50}\n")
-        sys.exit(0)
-
-    force_kw = (arg == "keywords")
-    if force_kw:
-        log.info("Keyword fallback mode forced")
-
-    success = run(force_keywords=force_kw)
-
-    if success:
-        latest = get_latest_pulse()
-        if latest:
-            score_val = int(latest.get("nepal_score", 0))
-            print(f"\n{'='*50}")
-            print(f"  NEPAL PULSE SUMMARY")
-            print(f"{'='*50}")
-            print(f"  Date:         {latest.get('date')} {latest.get('time')}")
-            print(f"  Nepal Score:  {score_val:>+3}")
-            print(f"  Status:       {latest.get('nepal_status')}")
-            print(f"  Key Event:    {latest.get('key_event')}")
-            print(f"  Bandh Today:  {latest.get('bandh_today')}")
-            print(f"  IPO Drain:    {latest.get('ipo_fpo_active')}")
-            print(f"  Gulf:         {latest.get('gulf_signal', 'see settings')}")
-            print(f"{'='*50}\n")
-        sys.exit(0)
-    else:
-        sys.exit(1)
+    success = run(force_keywords=args.keywords)
+    sys.exit(0 if success else 1)

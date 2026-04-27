@@ -6,9 +6,14 @@ Called by systemd timer: nepse-eod.timer
 
 Sequence:
     1. calendar_guard          → exit if today was not a trading day
-    2. recommendation_tracker  → stamp WAIT/AVOID outcomes (if built)
-    3. auditor.py              → close trades, causal attribution, KPI refresh
-    4. daily_context_summarizer→ collapse intraday data to one row (if built)
+    2. nepse_indices           → scrape latest index values
+    3. recommendation_tracker  → stamp WAIT/AVOID outcomes
+    4. auditor.py              → close trades, causal attribution, KPI refresh
+    5. gate_miss_tracker       → stamp FALSE_BLOCK/CORRECT_BLOCK
+
+NOTE: daily_context_summarizer is NOT run here.
+      It runs at 9:00 PM NST via nepse-summary.timer after a fresh
+      nepal_pulse run — so it gets EOD headlines, not 3 PM stale ones.
 
 --paper flag routes auditor to paper_portfolio instead of portfolio.
 ─────────────────────────────────────────────────────────────────────────────
@@ -61,7 +66,7 @@ def run(dry_run: bool = False, skip_guard: bool = False) -> int:
             from calendar_guard import is_trading_day, today_nst
             if not is_trading_day(today_nst()):
                 log.info("Not a trading day — EOD workflow skipped")
-                return 1
+                return 0
         except Exception as e:
             log.error("calendar_guard failed: %s — aborting", e)
             return 2
@@ -76,12 +81,14 @@ def run(dry_run: bool = False, skip_guard: bool = False) -> int:
 
     results = {}
 
+    # ── Step 0: NEPSE indices scrape ─────────────────────────────────────────
     def _nepse_indices():
         from modules.sharehub_scraper import run as run_indices
         from datetime import datetime, timedelta
         from_date = (datetime.now() - timedelta(days=5)).date()
         run_indices(from_date=from_date, dry_run=False)
     results["nepse_indices"] = _step("nepse_indices", _nepse_indices, dry_run)
+
     # ── Step 1: Recommendation tracker ───────────────────────────────────────
     def _rec_tracker():
         from analysis.recommendation_tracker import run as run_tracker
@@ -101,18 +108,12 @@ def run(dry_run: bool = False, skip_guard: bool = False) -> int:
         f"auditor ({'paper' if paper_mode else 'live'})", _auditor, dry_run
     )
 
-    # Add gate miss tracker AFTER auditor
+    # ── Step 3: Gate miss tracker ─────────────────────────────────────────────
     def _gate_tracker():
         from analysis.gate_miss_tracker import run_eod
         run_eod(dry_run=False)
     results["gate_tracker"] = _step("gate_miss_tracker", _gate_tracker, dry_run)
 
-    # ── Step 3: Daily context summarizer (if built) ───────────────────────────
-    def _summarizer():
-        from analysis.daily_context_summarizer import run as run_summarizer
-        run_summarizer()
-
-    results["summarizer"] = _step("daily_context_summarizer", _summarizer, dry_run)
     # ── Summary ───────────────────────────────────────────────────────────────
     passed = sum(1 for v in results.values() if v)
     failed = sum(1 for v in results.values() if not v)
@@ -120,6 +121,7 @@ def run(dry_run: bool = False, skip_guard: bool = False) -> int:
     log.info("EOD workflow complete — %d/%d steps OK", passed, passed + failed)
     if failed:
         log.warning("Failed steps: %s", ", ".join(k for k, v in results.items() if not v))
+    log.info("Next: machine sleeps at 3:45 PM, wakes at 9:00 PM for summary.")
     log.info("=" * 65)
     return 0 if failed == 0 else 1
 

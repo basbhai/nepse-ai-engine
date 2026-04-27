@@ -50,6 +50,8 @@ TABS: dict[str, str] = {
     "monthly_council_log": "monthly_council_log",
     "monthly_council_checklist": "monthly_council_checklist",
     "monthly_override": "monthly_override",
+    "accuracy_review_log": "accuracy_review_log",
+    "system_proposals": "system_proposals",
 }
 
 TABLE_DDL: dict[str, str] = {
@@ -1362,6 +1364,50 @@ TABLE_DDL: dict[str, str] = {
         CONSTRAINT ux_monthly_override_run_month UNIQUE (run_month)
     );
     """,
+
+    "accuracy_review_log": """
+    CREATE TABLE IF NOT EXISTS "accuracy_review_log" (
+        id SERIAL PRIMARY KEY,
+        run_month TEXT NOT NULL,
+        trade_count TEXT,
+        signal_accuracy TEXT,
+        sector_accuracy TEXT,
+        market_state_accuracy TEXT,
+        confidence_calibration TEXT,
+        false_block_analysis TEXT,
+        deepseek_proposals TEXT,
+        status TEXT DEFAULT 'PENDING_REVIEW',
+        inserted_at TEXT,
+        CONSTRAINT ux_accuracy_review_log_run_month UNIQUE (run_month)
+    );
+    """,
+
+    "system_proposals": """
+    CREATE TABLE IF NOT EXISTS "system_proposals" (
+        id SERIAL PRIMARY KEY,
+        run_month TEXT NOT NULL,
+        source TEXT,
+        component TEXT,
+        proposal_type TEXT,
+        current_behavior TEXT,
+        proposed_change TEXT,
+        data_evidence TEXT,
+        requires_new_data TEXT DEFAULT 'false',
+        new_data_source TEXT,
+        confidence TEXT,
+        status TEXT DEFAULT 'PENDING',
+        approved_at TEXT,
+        rejected_at TEXT,
+        rejection_reason TEXT,
+        inserted_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS ix_system_proposals_run_month
+        ON "system_proposals" (run_month);
+    CREATE INDEX IF NOT EXISTS ix_system_proposals_status
+        ON "system_proposals" (status);
+    CREATE INDEX IF NOT EXISTS ix_system_proposals_component
+        ON "system_proposals" (component);
+    """,
 }
 
 TABLE_COLUMNS: dict[str, list[str]] = {
@@ -1410,4 +1456,6 @@ TABLE_COLUMNS: dict[str, list[str]] = {
     "monthly_council_log": ["run_month", "stage", "agenda_item", "model", "direction", "confidence", "key_driver", "risk_factor", "full_response"],
     "monthly_council_checklist": ["run_month", "stop_trigger", "go_trigger", "noise_items", "confidence_score"],
     "monthly_override": ["run_month", "confidence_score", "buy_blocked", "market_state", "stop_trigger", "go_trigger", "inserted_at", "last_read_at"],
+    "accuracy_review_log": ["run_month", "trade_count", "signal_accuracy", "sector_accuracy", "market_state_accuracy", "confidence_calibration", "false_block_analysis", "deepseek_proposals", "status", "inserted_at"],
+    "system_proposals": ["run_month", "source", "component", "proposal_type", "current_behavior", "proposed_change", "data_evidence", "requires_new_data", "new_data_source", "confidence", "status", "approved_at", "rejected_at", "rejection_reason", "inserted_at"],
 }

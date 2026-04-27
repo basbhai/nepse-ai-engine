@@ -3,7 +3,7 @@ analysis/backup_sync.py
 =======================
 NEPSE AI Engine — Neon PostgreSQL Backup Sync
 
-Syncs 11 critical irreplaceable tables from local PostgreSQL → Neon cloud.
+Syncs 20 critical irreplaceable tables from local PostgreSQL → Neon cloud.
 
 Strategy:
   1. First run: CREATE TABLE IF NOT EXISTS on Neon (schema from local)
@@ -16,22 +16,36 @@ Trigger:
   Also called manually: python -m analysis.backup_sync
 
 Tables backed up (irreplaceable knowledge):
-  market_log        — every BUY/WAIT/AVOID signal + eval fields
-  daily_context_log — nightly Gemini summaries (GPT reads these)
-  trade_journal     — closed trade outcomes with causal attribution
-  learning_hub      — all lessons Claude reads before every decision
-  financials        — win_rate, profit_factor, loss_streak (stateful)
-  gate_misses       — FALSE_BLOCK/CORRECT_BLOCK stamps
-  gate_proposals    — threshold proposals from GPT
-  claude_audit      — weekly accuracy tracking
-  nrb_monthly       — manually entered NRB macro data
-  fd_rate_summary   — monthly FD rate trend history
-  settings          — MARKET_STATE, PAPER_MODE, all dynamic config
+  settings              — MARKET_STATE, PAPER_MODE, all dynamic config
+  financials            — win_rate, profit_factor, loss_streak (stateful)
+  nrb_monthly           — manually entered NRB macro data
+  fd_rate_summary       — monthly FD rate trend history
+  learning_hub          — all lessons Claude reads before every decision
+  market_log            — every BUY/WAIT/AVOID signal + eval fields
+  trade_journal         — closed trade outcomes with causal attribution
+  daily_context_log     — nightly Gemini summaries (GPT reads these)
+  gate_misses           — FALSE_BLOCK/CORRECT_BLOCK stamps
+  gate_proposals        — threshold proposals from GPT
+  claude_audit          — weekly accuracy tracking
+  paper_capital         — current capital NPR (single stateful row)
+  paper_portfolio       — open/closed positions with WACC and cost basis
+  paper_trade_log       — full transaction history for capital reconciliation
+  monthly_council_agenda    — agenda items per council run
+  monthly_council_log       — full model deliberation transcripts
+  monthly_council_checklist — go/stop triggers per month (Claude reads these)
+  monthly_override          — confidence score + buy_blocked flag (Claude reads at startup)
+  accuracy_review_log   — DeepSeek monthly stats — not reconstructible
+  system_proposals      — all architectural proposals + approval audit trail
 
 NOT backed up (re-scrapable):
-  price_history, indicators, candle_signals, atrad_market_watch,
-  floorsheet, floorsheet_signals, geopolitical_data, nepal_pulse,
-  market_breadth, nepse_indices, share_sectors
+  price_history, indicators, candle_signals, candle_patterns,
+  atrad_market_watch, floorsheet, floorsheet_signals,
+  geopolitical_data, nepal_pulse, market_breadth, nepse_indices,
+  share_sectors, fd_rates, fundamentals, fundamental_beta,
+  sector_momentum, corporate_events, dividend_announcements,
+  dividend_pattern_study, backtest_results, capital_allocation,
+  financial_advisor, macro_stat_results, international_prices,
+  portfolio, paper_users
 
 ENV:
   DATABASE_URL      — local PostgreSQL (source)
@@ -73,32 +87,65 @@ NEON_URL  = os.getenv("DATABASE_URL_NEON", "")
 
 # Tables to sync — order matters for foreign key safety
 BACKUP_TABLES = [
-    "settings",          # dynamic config — sync first
-    "financials",        # KPIs — stateful, loss_streak not reconstructible
-    "nrb_monthly",       # manually entered macro — cannot be scraped
-    "fd_rate_summary",   # monthly FD trend — seasonal patterns over months
-    "learning_hub",      # lessons Claude reads — most irreplaceable
-    "market_log",        # all BUY/WAIT/AVOID signals + eval fields
-    "trade_journal",     # closed trade outcomes — core GPT learning
-    "daily_context_log", # nightly Gemini summaries — GPT weekly review
-    "gate_misses",       # FALSE_BLOCK/CORRECT_BLOCK stamps
-    "gate_proposals",    # threshold proposals — config evolution audit
-    "claude_audit",      # weekly accuracy tracking — trend needs full history
+    # ── System config (sync first — everything else reads these) ──────────────
+    "settings",               # dynamic config — MARKET_STATE, PAPER_MODE, thresholds
+    "financials",             # KPIs — win_rate, loss_streak: stateful, not reconstructible
+
+    # ── Macro inputs (manually entered) ───────────────────────────────────────
+    "nrb_monthly",            # NRB macro data — cannot be auto-scraped
+    "fd_rate_summary",        # monthly FD trend — seasonal patterns over months
+
+    # ── AI knowledge base ─────────────────────────────────────────────────────
+    "learning_hub",           # lessons Claude reads — most irreplaceable
+    "daily_context_log",      # nightly Gemini summaries — GPT weekly review
+
+    # ── Trading signals & outcomes ────────────────────────────────────────────
+    "market_log",             # all BUY/WAIT/AVOID signals + eval fields
+    "trade_journal",          # closed trade outcomes — core GPT learning
+
+    # ── Self-improvement loop ─────────────────────────────────────────────────
+    "gate_misses",            # FALSE_BLOCK/CORRECT_BLOCK stamps
+    "gate_proposals",         # threshold proposals — config evolution trail
+    "claude_audit",           # weekly accuracy tracking — needs full history
+
+    # ── Paper trading capital (single stateful row — not reconstructible) ─────
+    "paper_capital",          # current capital NPR — reconciled from all trades
+    "paper_portfolio",        # open/closed positions with WACC and cost basis
+    "paper_trade_log",        # full transaction ledger — needed for reconciliation
+
+    # ── Monthly council (deliberation history + runtime config) ──────────────
+    "monthly_council_agenda",    # agenda items per run — what was deliberated
+    "monthly_council_log",       # full model transcripts — irreplaceable record
+    "monthly_council_checklist", # go/stop triggers per month — Claude reads
+    "monthly_override",          # confidence score + buy_blocked — Claude reads at startup
+
+    # ── Accuracy & proposals ──────────────────────────────────────────────────
+    "accuracy_review_log",    # DeepSeek monthly stats — not reconstructible
+    "system_proposals",       # architectural proposals + approval audit trail
 ]
 
 # Primary keys per table — used for ON CONFLICT
 PRIMARY_KEYS = {
-    "settings":          ["key"],
-    "financials":        ["id"],
-    "nrb_monthly":       ["id"],
-    "fd_rate_summary":   ["id"],
-    "learning_hub":      ["id"],
-    "market_log":        ["id"],
-    "trade_journal":     ["id"],
-    "daily_context_log": ["date"],
-    "gate_misses":       ["id"],
-    "gate_proposals":    ["id"],
-    "claude_audit":      ["id"],
+    "settings":                  ["key"],
+    "financials":                ["id"],
+    "nrb_monthly":               ["id"],
+    "fd_rate_summary":           ["id"],
+    "learning_hub":              ["id"],
+    "daily_context_log":         ["date"],
+    "market_log":                ["id"],
+    "trade_journal":             ["id"],
+    "gate_misses":               ["id"],
+    "gate_proposals":            ["id"],
+    "claude_audit":              ["id"],
+    "paper_capital":             ["telegram_id"],
+    "paper_portfolio":           ["id"],
+    "paper_trade_log":           ["id"],
+    "monthly_council_agenda":    ["id"],
+    "monthly_council_log":       ["id"],
+    "monthly_council_checklist": ["id"],
+    "monthly_override":          ["id"],
+    "accuracy_review_log":       ["id"],
+    "system_proposals":          ["id"],
 }
 
 
@@ -159,23 +206,23 @@ def _get_neon_columns(neon_conn, table: str) -> set[str]:
 def _map_type(pg_type: str) -> str:
     """Map PostgreSQL data type to safe DDL type."""
     mapping = {
-        "integer":                    "INTEGER",
-        "bigint":                     "BIGINT",
-        "smallint":                   "SMALLINT",
-        "numeric":                    "NUMERIC",
-        "double precision":           "DOUBLE PRECISION",
-        "real":                       "REAL",
-        "boolean":                    "BOOLEAN",
-        "text":                       "TEXT",
-        "character varying":          "TEXT",
-        "character":                  "TEXT",
-        "timestamp without time zone":"TIMESTAMP",
-        "timestamp with time zone":   "TIMESTAMPTZ",
-        "date":                       "DATE",
-        "time without time zone":     "TIME",
-        "json":                       "JSON",
-        "jsonb":                      "JSONB",
-        "uuid":                       "UUID",
+        "integer":                     "INTEGER",
+        "bigint":                      "BIGINT",
+        "smallint":                    "SMALLINT",
+        "numeric":                     "NUMERIC",
+        "double precision":            "DOUBLE PRECISION",
+        "real":                        "REAL",
+        "boolean":                     "BOOLEAN",
+        "text":                        "TEXT",
+        "character varying":           "TEXT",
+        "character":                   "TEXT",
+        "timestamp without time zone": "TIMESTAMP",
+        "timestamp with time zone":    "TIMESTAMPTZ",
+        "date":                        "DATE",
+        "time without time zone":      "TIME",
+        "json":                        "JSON",
+        "jsonb":                       "JSONB",
+        "uuid":                        "UUID",
     }
     return mapping.get(pg_type.lower(), "TEXT")
 
@@ -254,9 +301,9 @@ def _ensure_table(local_conn, neon_conn, table: str) -> bool:
 def _sync_table(local_conn, neon_conn, table: str) -> dict:
     """
     Upsert all rows from local → Neon for one table.
-    Returns stats: {upserted, skipped, errors}
+    Returns stats: {upserted, errors}
     """
-    pks  = PRIMARY_KEYS.get(table, ["id"])
+    pks   = PRIMARY_KEYS.get(table, ["id"])
     stats = {"upserted": 0, "errors": 0}
 
     # Fetch all rows from local
@@ -276,9 +323,8 @@ def _sync_table(local_conn, neon_conn, table: str) -> dict:
     # Get Neon columns to filter out any columns that don't exist yet
     neon_cols = _get_neon_columns(neon_conn, table)
 
-    # Build upsert SQL
-    # Use first row to get column names — filter to Neon-existing cols only
-    all_cols  = [c for c in rows[0].keys() if c in neon_cols]
+    # Build upsert SQL — filter to Neon-existing cols only
+    all_cols = [c for c in rows[0].keys() if c in neon_cols]
     if not all_cols:
         log.warning("No matching columns for %s — skipping", table)
         return stats
@@ -289,9 +335,7 @@ def _sync_table(local_conn, neon_conn, table: str) -> dict:
     # ON CONFLICT DO UPDATE — update all non-PK columns
     update_cols = [c for c in all_cols if c not in pks]
     if update_cols:
-        update_str = ", ".join(
-            f'"{c}" = EXCLUDED."{c}"' for c in update_cols
-        )
+        update_str      = ", ".join(f'"{c}" = EXCLUDED."{c}"' for c in update_cols)
         conflict_action = f"DO UPDATE SET {update_str}"
     else:
         conflict_action = "DO NOTHING"
@@ -307,8 +351,7 @@ def _sync_table(local_conn, neon_conn, table: str) -> dict:
     # Upsert in batches of 500
     BATCH = 500
     for i in range(0, len(rows), BATCH):
-        batch = rows[i:i + BATCH]
-        # Filter each row to Neon-existing columns only
+        batch    = rows[i:i + BATCH]
         filtered = [{c: row.get(c) for c in all_cols} for row in batch]
         try:
             with neon_conn.cursor() as cur:
@@ -317,7 +360,10 @@ def _sync_table(local_conn, neon_conn, table: str) -> dict:
             stats["upserted"] += len(batch)
         except Exception as e:
             neon_conn.rollback()
-            log.error("Batch upsert failed for %s (rows %d-%d): %s", table, i, i+BATCH, e)
+            log.error(
+                "Batch upsert failed for %s (rows %d-%d): %s",
+                table, i, i + BATCH, e,
+            )
             stats["errors"] += len(batch)
 
     return stats
@@ -475,7 +521,7 @@ if __name__ == "__main__":
         print("\nTables scheduled for backup:")
         for t in BACKUP_TABLES:
             pks = PRIMARY_KEYS.get(t, ["id"])
-            print(f"  {t:<25} PK: {pks}")
+            print(f"  {t:<30} PK: {pks}")
         sys.exit(0)
 
     success = run(tables=args.tables, dry_run=args.dry_run)
