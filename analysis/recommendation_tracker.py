@@ -15,10 +15,11 @@ Changes from original:
   - All outcomes flow to learning_hub for GPT review
 
 FIX 4: All upsert_row calls replaced with update_row.
-  upsert_row with conflict_columns=["id"] silently strips the SERIAL id
-  field before building the INSERT, so ON CONFLICT never fires and a new
-  ghost row gets inserted instead of updating the existing one.
-  update_row uses a direct UPDATE WHERE id = %s -- no conflict stripping.
+FIX 5: Expired WAIT branch now writes all eval fields (was missing
+  eval_nepse_change_pct, eval_alpha, eval_geo_delta, eval_nepal_delta,
+  eval_nepse_index). Indentation corrected.
+FIX 6: trading_days_between() updated to Mon-Fri (2026 NEPSE schedule).
+  Previously counted Sun-Thu which under-counted days elapsed.
 
 Run modes:
     python -m analysis.recommendation_tracker            # normal daily run
@@ -26,8 +27,7 @@ Run modes:
     python -m analysis.recommendation_tracker --dry-run  # compute outcomes, write nothing
 
 Called by:
-    trading.yml  (every 6 min -- checks for new pending)
-    eod.yml      (3:15 PM NST -- final daily evaluation)
+    eod_workflow.py  (3:15 PM NST -- final daily evaluation)
 """
 
 import os
@@ -69,7 +69,7 @@ HOLD_DAYS = {
     "DEFAULT":        17,
 }
 
-# WAIT auto-expiry: if still PENDING after N calendar days, force EXPIRED_WAIT
+# WAIT auto-expiry: if still PENDING after N calendar days, force stamp
 WAIT_EXPIRY_DAYS = 5
 
 # Outcome thresholds
@@ -103,13 +103,17 @@ def calendar_days_between(start: str, end: str) -> int:
         return 0
 
 def trading_days_between(start: str, end: str) -> int:
-    """Count NEPSE trading days (Sun-Thu) between two date strings."""
+    """
+    Count NEPSE trading days between two date strings.
+    FIX 6: Updated to Mon-Fri (0-4) for 2026 schedule.
+    Previously used Sun-Thu (0,1,2,3,6) which was wrong.
+    """
     s = parse_date(start)
     e = parse_date(end)
     count = 0
     current = s
     while current < e:
-        if current.weekday() in (0, 1, 2, 3, 6):
+        if current.weekday() in (0, 1, 2, 3, 4):  # Mon-Fri
             count += 1
         current += timedelta(days=1)
     return count
@@ -153,7 +157,7 @@ def get_nepse_index_on_or_before(target_date: str) -> float | None:
     rows = run_raw_sql(
         """
         SELECT current_value FROM nepse_indices
-        WHERE index_id='58' AND date <= %s AND current_value IS NOT NULL
+        WHERE index_id = '58' AND date <= %s AND current_value IS NOT NULL
         ORDER BY date DESC LIMIT 3
         """,
         (target_date,)
@@ -183,7 +187,9 @@ def get_macro_snapshot(eval_date: str) -> dict:
     }
     try:
         geo_rows = run_raw_sql(
-            "SELECT geo_score FROM geopolitical_data WHERE date <= %s AND geo_score IS NOT NULL ORDER BY date DESC, id DESC LIMIT 1",
+            "SELECT geo_score FROM geopolitical_data "
+            "WHERE date <= %s AND geo_score IS NOT NULL "
+            "ORDER BY date DESC, id DESC LIMIT 1",
             (eval_date,)
         )
         if geo_rows:
@@ -193,12 +199,14 @@ def get_macro_snapshot(eval_date: str) -> dict:
 
     try:
         pulse_rows = run_raw_sql(
-            "SELECT nepal_score, key_event FROM nepal_pulse WHERE date <= %s AND nepal_score IS NOT NULL ORDER BY date DESC, id DESC LIMIT 1",
+            "SELECT nepal_score, key_event FROM nepal_pulse "
+            "WHERE date <= %s AND nepal_score IS NOT NULL "
+            "ORDER BY date DESC, id DESC LIMIT 1",
             (eval_date,)
         )
         if pulse_rows:
             snapshot["eval_nepal_score"] = pulse_rows[0]["nepal_score"]
-            raw = pulse_rows[0].get("key_event") or ""
+            raw   = pulse_rows[0].get("key_event") or ""
             lines = [ln.strip() for ln in raw.split("\n") if ln.strip()]
             snapshot["eval_key_news"] = " | ".join(lines[:3]) if lines else raw[:300]
     except Exception as e:
@@ -218,7 +226,9 @@ def get_macro_snapshot(eval_date: str) -> dict:
 
     try:
         nrb_rows = run_raw_sql(
-            "SELECT policy_rate FROM nrb_monthly WHERE policy_rate IS NOT NULL ORDER BY fiscal_year DESC, month_number DESC LIMIT 1"
+            "SELECT policy_rate FROM nrb_monthly "
+            "WHERE policy_rate IS NOT NULL "
+            "ORDER BY fiscal_year DESC, month_number DESC LIMIT 1"
         )
         if nrb_rows:
             snapshot["eval_policy_rate"] = nrb_rows[0]["policy_rate"]
@@ -262,8 +272,7 @@ def classify_wait_avoid(action: str, price_change_pct: float) -> str:
 def classify_buy_alpha(price_change_pct: float, nepse_change_pct: float | None) -> str:
     """
     BUY signal quality -- based on alpha vs NEPSE over hold period.
-    This is NOT WIN/LOSS (that is auditor.py's job from portfolio table).
-    Stamps signal quality for GPT learning.
+    NOT WIN/LOSS (that is auditor.py's job from portfolio table).
     """
     if nepse_change_pct is None:
         return "UNVERIFIED_BUY"
@@ -284,10 +293,6 @@ def stamp_avoid_closed(row_id: int, symbol: str, dry_run: bool = False) -> None:
     """
     Call immediately after writing an AVOID row to market_log.
     AVOID = 'we decided not to act'. Nothing to track. Close it now.
-    The reasoning field carries the decision quality for GPT.
-
-    FIX 4: uses update_row (direct UPDATE WHERE id=) instead of
-    upsert_row which would create a ghost row.
     """
     if dry_run:
         log.info("[DRY-RUN] Would close AVOID immediately: %s id=%s", symbol, row_id)
@@ -307,19 +312,69 @@ def stamp_avoid_closed(row_id: int, symbol: str, dry_run: bool = False) -> None:
 
 
 # ---------------------------------------------------------------------------
+# SHARED EVAL BUILDER — avoids duplicating alpha/delta logic across branches
+# ---------------------------------------------------------------------------
+
+def _build_eval_update(
+    outcome:          str,
+    today:            str,
+    price_change_pct: float | None,
+    nepse_change_pct: float | None,
+    eval_alpha:       float | None,
+    geo_at_signal:    float | None,
+    nepal_at_signal:  float | None,
+    macro:            dict,
+    price_now:        float | None = None,
+) -> dict:
+    """
+    Build the full update dict for any evaluated signal.
+    Centralises all eval field writes — no branch can miss a field.
+    """
+    eval_geo_score   = _safe_float(macro.get("eval_geo_score"))
+    eval_nepal_score = _safe_float(macro.get("eval_nepal_score"))
+    eval_geo_delta   = (
+        eval_geo_score - geo_at_signal
+        if geo_at_signal is not None and eval_geo_score is not None else None
+    )
+    eval_nepal_delta = (
+        eval_nepal_score - nepal_at_signal
+        if nepal_at_signal is not None and eval_nepal_score is not None else None
+    )
+
+    update = {
+        "outcome":               outcome,
+        "eval_date":             today,
+        "eval_geo_score":        _str(eval_geo_score),
+        "eval_nepal_score":      _str(eval_nepal_score),
+        "eval_nepse_index":      macro.get("eval_nepse_index"),
+        "eval_market_state":     macro.get("eval_market_state"),
+        "eval_policy_rate":      macro.get("eval_policy_rate"),
+        "eval_fd_rate_pct":      macro.get("eval_fd_rate_pct"),
+        "eval_key_news":         macro.get("eval_key_news"),
+        "eval_geo_delta":        _str(eval_geo_delta),
+        "eval_nepal_delta":      _str(eval_nepal_delta),
+        "eval_price_change_pct": _str(round(price_change_pct, 4)) if price_change_pct is not None else None,
+        "eval_nepse_change_pct": _str(round(nepse_change_pct, 4)) if nepse_change_pct is not None else None,
+        "eval_alpha":            _str(round(eval_alpha, 4))        if eval_alpha        is not None else None,
+    }
+    if price_now is not None:
+        update["exit_price"] = str(round(price_now, 2))
+        update["exit_date"]  = today
+
+    return update
+
+
+# ---------------------------------------------------------------------------
 # EVALUATOR: WAIT / AVOID
 # ---------------------------------------------------------------------------
 
 def evaluate_wait_avoid(dry_run: bool = False) -> list[dict]:
     """
     1. AVOIDs still PENDING -> force CLOSED (safety net)
-    2. WAITs >= WAIT_EXPIRY_DAYS calendar days -> stamp outcome (even if ambiguous)
+    2. WAITs >= WAIT_EXPIRY_DAYS calendar days -> stamp outcome
     3. WAITs at full hold period -> classify outcome
-
-    FIX 4: all writes use update_row (direct UPDATE WHERE id=)
-    instead of upsert_row which silently inserts ghost rows.
     """
-    today = today_str()
+    today     = today_str()
     evaluated = []
 
     try:
@@ -353,8 +408,7 @@ def evaluate_wait_avoid(dry_run: bool = False) -> list[dict]:
 
         cal_days = calendar_days_between(sig_date, today)
 
-        # -- AVOID safety net: should have been closed by stamp_avoid_closed
-        #    but catch any that slipped through
+        # ── AVOID safety net ─────────────────────────────────────────────────
         if action == "AVOID":
             log.info("AVOID %s still PENDING after %d days -- force CLOSED", symbol, cal_days)
             if not dry_run:
@@ -367,56 +421,73 @@ def evaluate_wait_avoid(dry_run: bool = False) -> list[dict]:
                 except Exception as e:
                     log.error("Force-close AVOID failed: %s", e)
             evaluated.append({"symbol": symbol, "action": action,
-                               "outcome": "CLOSED", "signal_date": sig_date})
+                               "outcome": "CLOSED", "signal_date": sig_date,
+                               "price_change_pct": None, "eval_alpha": None})
             continue
 
-        # -- WAIT: force expiry after WAIT_EXPIRY_DAYS calendar days
+        # ── WAIT: force expiry after WAIT_EXPIRY_DAYS ────────────────────────
         if action == "WAIT" and cal_days >= WAIT_EXPIRY_DAYS:
             log.info("WAIT %s expired after %d calendar days -- stamping", symbol, cal_days)
 
-            price_at_signal = _safe_float(row.get("entry_price")) or get_price_on_or_before(symbol, sig_date)
-            price_now       = get_price_on_or_before(symbol, today)
+            price_at_signal  = _safe_float(row.get("entry_price")) or get_price_on_or_before(symbol, sig_date)
+            price_now        = get_price_on_or_before(symbol, today)
             price_change_pct = None
-            outcome = "EXPIRED_WAIT"
+            outcome          = "EXPIRED_WAIT"
 
             if price_at_signal and price_now:
                 price_change_pct = ((price_now - price_at_signal) / price_at_signal) * 100
                 outcome = classify_wait_avoid("WAIT", price_change_pct)
 
-            macro = get_macro_snapshot(today)
-            update = {
-                "outcome":               outcome,
-                "eval_date":             today,
-                "eval_market_state":     macro.get("eval_market_state"),
-                "eval_geo_score":        _str(macro.get("eval_geo_score")),
-                "eval_nepal_score":      _str(macro.get("eval_nepal_score")),
-                "eval_policy_rate":      macro.get("eval_policy_rate"),
-                "eval_fd_rate_pct":      macro.get("eval_fd_rate_pct"),
-                "eval_key_news":         macro.get("eval_key_news"),
-                "eval_price_change_pct": _str(round(price_change_pct, 4)) if price_change_pct is not None else None,
-            }
+            nepse_at_signal  = get_nepse_index_on_or_before(sig_date)
+            nepse_now        = get_nepse_index_on_or_before(today)
+            nepse_change_pct = (
+                (nepse_now - nepse_at_signal) / nepse_at_signal * 100
+                if nepse_at_signal and nepse_now else None
+            )
+            eval_alpha = (
+                price_change_pct - nepse_change_pct
+                if price_change_pct is not None and nepse_change_pct is not None else None
+            )
+
+            macro  = get_macro_snapshot(today)
+            update = _build_eval_update(
+                outcome          = outcome,
+                today            = today,
+                price_change_pct = price_change_pct,
+                nepse_change_pct = nepse_change_pct,
+                eval_alpha       = eval_alpha,
+                geo_at_signal    = _safe_float(row.get("geo_score")),
+                nepal_at_signal  = _safe_float(row.get("macro_score")),
+                macro            = macro,
+                price_now        = price_now,
+            )
+
             if not dry_run:
                 try:
-                    updated = update_row(
-                        "market_log",
-                        updates=update,
-                        where={"id": str(row_id)},
-                    )
+                    updated = update_row("market_log", updates=update, where={"id": str(row_id)})
                     if updated:
-                        log.info("WAIT %s stamped %s (expired)", symbol, outcome)
+                        log.info("WAIT %s stamped %s (expired) alpha=%s",
+                                 symbol, outcome,
+                                 f"{eval_alpha:+.2f}" if eval_alpha is not None else "N/A")
                     else:
                         log.warning("WAIT expiry stamp: no row updated for %s id=%s", symbol, row_id)
                 except Exception as e:
                     log.error("WAIT expiry stamp failed for %s: %s", symbol, e)
             else:
-                log.info("[DRY-RUN] Would stamp WAIT %s -> %s (expired)", symbol, outcome)
+                log.info("[DRY-RUN] Would stamp WAIT %s -> %s", symbol, outcome)
 
-            evaluated.append({"symbol": symbol, "action": action,
-                               "outcome": outcome, "signal_date": sig_date,
-                               "price_change_pct": price_change_pct})
+            evaluated.append({
+                "symbol":           symbol,
+                "action":           action,
+                "outcome":          outcome,
+                "signal_date":      sig_date,
+                "price_change_pct": round(price_change_pct, 2) if price_change_pct is not None else None,
+                "nepse_change_pct": round(nepse_change_pct, 2) if nepse_change_pct is not None else None,
+                "eval_alpha":       round(eval_alpha, 2)        if eval_alpha        is not None else None,
+            })
             continue
 
-        # -- WAIT within expiry window: check hold period
+        # ── WAIT within expiry window: check hold period ─────────────────────
         hold_period  = resolve_hold_days(row)
         days_elapsed = trading_days_between(sig_date, today)
         if days_elapsed < hold_period:
@@ -431,60 +502,51 @@ def evaluate_wait_avoid(dry_run: bool = False) -> list[dict]:
             continue
 
         price_change_pct = ((price_now - price_at_signal) / price_at_signal) * 100
-
         nepse_at_signal  = get_nepse_index_on_or_before(sig_date)
         nepse_now        = get_nepse_index_on_or_before(today)
-        nepse_change_pct = ((nepse_now - nepse_at_signal) / nepse_at_signal * 100) if nepse_at_signal and nepse_now else None
-        eval_alpha       = price_change_pct - nepse_change_pct if nepse_change_pct is not None else None
-
-        geo_at_signal    = _safe_float(row.get("geo_score"))
-        nepal_at_signal  = _safe_float(row.get("macro_score"))
-        macro            = get_macro_snapshot(today)
-        eval_geo_score   = _safe_float(macro.get("eval_geo_score"))
-        eval_nepal_score = _safe_float(macro.get("eval_nepal_score"))
-        eval_geo_delta   = (eval_geo_score - geo_at_signal)     if geo_at_signal   is not None and eval_geo_score   is not None else None
-        eval_nepal_delta = (eval_nepal_score - nepal_at_signal)  if nepal_at_signal is not None and eval_nepal_score is not None else None
-
+        nepse_change_pct = (
+            (nepse_now - nepse_at_signal) / nepse_at_signal * 100
+            if nepse_at_signal and nepse_now else None
+        )
+        eval_alpha = (
+            price_change_pct - nepse_change_pct
+            if nepse_change_pct is not None else None
+        )
         outcome = classify_wait_avoid(action, price_change_pct)
 
-        log.info("%s %s -> price_chg=%.2f%% alpha=%s%% outcome=%s",
+        log.info("%s %s -> price_chg=%.2f%% alpha=%s outcome=%s",
                  symbol, action, price_change_pct,
-                 f"{eval_alpha:.2f}" if eval_alpha is not None else "N/A", outcome)
+                 f"{eval_alpha:+.2f}" if eval_alpha is not None else "N/A", outcome)
 
-        update = {
-            "outcome":               outcome,
-            "exit_date":             today,
-            "exit_price":            str(round(price_now, 2)),
-            "eval_date":             today,
-            "eval_geo_score":        _str(eval_geo_score),
-            "eval_nepal_score":      _str(eval_nepal_score),
-            "eval_nepse_index":      macro.get("eval_nepse_index"),
-            "eval_market_state":     macro.get("eval_market_state"),
-            "eval_policy_rate":      macro.get("eval_policy_rate"),
-            "eval_fd_rate_pct":      macro.get("eval_fd_rate_pct"),
-            "eval_key_news":         macro.get("eval_key_news"),
-            "eval_geo_delta":        _str(eval_geo_delta),
-            "eval_nepal_delta":      _str(eval_nepal_delta),
-            "eval_price_change_pct": _str(round(price_change_pct, 4)),
-            "eval_nepse_change_pct": _str(round(nepse_change_pct, 4)) if nepse_change_pct is not None else None,
-            "eval_alpha":            _str(round(eval_alpha, 4)) if eval_alpha is not None else None,
-        }
+        macro  = get_macro_snapshot(today)
+        update = _build_eval_update(
+            outcome          = outcome,
+            today            = today,
+            price_change_pct = price_change_pct,
+            nepse_change_pct = nepse_change_pct,
+            eval_alpha       = eval_alpha,
+            geo_at_signal    = _safe_float(row.get("geo_score")),
+            nepal_at_signal  = _safe_float(row.get("macro_score")),
+            macro            = macro,
+            price_now        = price_now,
+        )
+
         evaluated.append({
-            "symbol": symbol, "action": action, "signal_date": sig_date,
-            "eval_date": today, "hold_days": hold_period, "days_elapsed": days_elapsed,
+            "symbol":           symbol,
+            "action":           action,
+            "outcome":          outcome,
+            "signal_date":      sig_date,
+            "eval_date":        today,
+            "hold_days":        hold_period,
+            "days_elapsed":     days_elapsed,
             "price_change_pct": round(price_change_pct, 2),
-            "nepse_change_pct": round(nepse_change_pct, 2) if nepse_change_pct else None,
-            "eval_alpha": round(eval_alpha, 2) if eval_alpha else None,
-            "outcome": outcome,
+            "nepse_change_pct": round(nepse_change_pct, 2) if nepse_change_pct is not None else None,
+            "eval_alpha":       round(eval_alpha, 2)        if eval_alpha        is not None else None,
         })
 
         if not dry_run:
             try:
-                updated = update_row(
-                    "market_log",
-                    updates=update,
-                    where={"id": str(row_id)},
-                )
+                updated = update_row("market_log", updates=update, where={"id": str(row_id)})
                 if updated:
                     log.info("Stamped %s -> %s", symbol, outcome)
                 else:
@@ -499,7 +561,6 @@ def evaluate_wait_avoid(dry_run: bool = False) -> list[dict]:
 
 # ---------------------------------------------------------------------------
 # EVALUATOR: BUY (signal quality / alpha tracking)
-# Unchanged per instructions -- evaluate_buy_signals is not touched.
 # ---------------------------------------------------------------------------
 
 def evaluate_buy_signals(dry_run: bool = False) -> list[dict]:
@@ -508,11 +569,8 @@ def evaluate_buy_signals(dry_run: bool = False) -> list[dict]:
     Compute price change + alpha vs NEPSE.
     Stamps STRONG/NEUTRAL/WEAK_BUY_SIGNAL for GPT learning.
     Does NOT stamp WIN/LOSS -- that is auditor.py from portfolio table.
-
-    FIX 4: writes use update_row (direct UPDATE WHERE id=)
-    instead of upsert_row which silently inserts ghost rows.
     """
-    today = today_str()
+    today     = today_str()
     evaluated = []
 
     try:
@@ -558,58 +616,50 @@ def evaluate_buy_signals(dry_run: bool = False) -> list[dict]:
             continue
 
         price_change_pct = ((price_now - price_at_signal) / price_at_signal) * 100
-
         nepse_at_signal  = get_nepse_index_on_or_before(sig_date)
         nepse_now        = get_nepse_index_on_or_before(today)
-        nepse_change_pct = ((nepse_now - nepse_at_signal) / nepse_at_signal * 100) if nepse_at_signal and nepse_now else None
-        eval_alpha       = price_change_pct - nepse_change_pct if nepse_change_pct is not None else None
-
+        nepse_change_pct = (
+            (nepse_now - nepse_at_signal) / nepse_at_signal * 100
+            if nepse_at_signal and nepse_now else None
+        )
+        eval_alpha = (
+            price_change_pct - nepse_change_pct
+            if nepse_change_pct is not None else None
+        )
         outcome = classify_buy_alpha(price_change_pct, nepse_change_pct)
 
-        macro            = get_macro_snapshot(today)
-        geo_at_signal    = _safe_float(row.get("geo_score"))
-        nepal_at_signal  = _safe_float(row.get("macro_score"))
-        eval_geo_score   = _safe_float(macro.get("eval_geo_score"))
-        eval_nepal_score = _safe_float(macro.get("eval_nepal_score"))
-        eval_geo_delta   = (eval_geo_score - geo_at_signal)     if geo_at_signal   is not None and eval_geo_score   is not None else None
-        eval_nepal_delta = (eval_nepal_score - nepal_at_signal)  if nepal_at_signal is not None and eval_nepal_score is not None else None
-
-        log.info("BUY %s -> price_chg=%.2f%% alpha=%s%% outcome=%s",
+        log.info("BUY %s -> price_chg=%.2f%% alpha=%s outcome=%s",
                  symbol, price_change_pct,
-                 f"{eval_alpha:.2f}" if eval_alpha is not None else "N/A", outcome)
+                 f"{eval_alpha:+.2f}" if eval_alpha is not None else "N/A", outcome)
 
-        update = {
-            "outcome":               outcome,
-            "eval_date":             today,
-            "eval_geo_score":        _str(eval_geo_score),
-            "eval_nepal_score":      _str(eval_nepal_score),
-            "eval_nepse_index":      macro.get("eval_nepse_index"),
-            "eval_market_state":     macro.get("eval_market_state"),
-            "eval_policy_rate":      macro.get("eval_policy_rate"),
-            "eval_fd_rate_pct":      macro.get("eval_fd_rate_pct"),
-            "eval_key_news":         macro.get("eval_key_news"),
-            "eval_geo_delta":        _str(eval_geo_delta),
-            "eval_nepal_delta":      _str(eval_nepal_delta),
-            "eval_price_change_pct": _str(round(price_change_pct, 4)),
-            "eval_nepse_change_pct": _str(round(nepse_change_pct, 4)) if nepse_change_pct is not None else None,
-            "eval_alpha":            _str(round(eval_alpha, 4)) if eval_alpha is not None else None,
-        }
+        macro  = get_macro_snapshot(today)
+        update = _build_eval_update(
+            outcome          = outcome,
+            today            = today,
+            price_change_pct = price_change_pct,
+            nepse_change_pct = nepse_change_pct,
+            eval_alpha       = eval_alpha,
+            geo_at_signal    = _safe_float(row.get("geo_score")),
+            nepal_at_signal  = _safe_float(row.get("macro_score")),
+            macro            = macro,
+        )
+
         evaluated.append({
-            "symbol": symbol, "action": "BUY", "signal_date": sig_date,
-            "eval_date": today, "hold_days": hold_period, "days_elapsed": days_elapsed,
+            "symbol":           symbol,
+            "action":           "BUY",
+            "outcome":          outcome,
+            "signal_date":      sig_date,
+            "eval_date":        today,
+            "hold_days":        hold_period,
+            "days_elapsed":     days_elapsed,
             "price_change_pct": round(price_change_pct, 2),
-            "nepse_change_pct": round(nepse_change_pct, 2) if nepse_change_pct else None,
-            "eval_alpha": round(eval_alpha, 2) if eval_alpha else None,
-            "outcome": outcome,
+            "nepse_change_pct": round(nepse_change_pct, 2) if nepse_change_pct is not None else None,
+            "eval_alpha":       round(eval_alpha, 2)        if eval_alpha        is not None else None,
         })
 
         if not dry_run:
             try:
-                updated = update_row(
-                    "market_log",
-                    updates=update,
-                    where={"id": str(row_id)},
-                )
+                updated = update_row("market_log", updates=update, where={"id": str(row_id)})
                 if updated:
                     log.info("Stamped BUY %s -> %s", symbol, outcome)
                 else:
@@ -709,7 +759,7 @@ def _fmt(val) -> str:
 # ---------------------------------------------------------------------------
 
 def run(dry_run: bool = False) -> None:
-    """Entry point called by eod.yml and trading.yml."""
+    """Entry point called by eod_workflow.py."""
     log.info("Starting recommendation_tracker -- %s", today_str())
     wa_evaluated  = evaluate_wait_avoid(dry_run=dry_run)
     buy_evaluated = evaluate_buy_signals(dry_run=dry_run)
@@ -719,10 +769,10 @@ def run(dry_run: bool = False) -> None:
                  total, len(wa_evaluated), len(buy_evaluated))
         for r in wa_evaluated + buy_evaluated:
             log.info(
-                "  %s %s -> %s (price: %+.2f%%, alpha: %s%%)",
-                r["action"], r["symbol"], r["outcome"],
-                r.get("price_change_pct", 0),
-                f"{r['eval_alpha']:+.2f}" if r.get("eval_alpha") is not None else "N/A",
+                "  %s %s -> %s (price: %s%%, alpha: %s%%)",
+                r.get("action","?"), r.get("symbol","?"), r.get("outcome","?"),
+                f"{r['price_change_pct']:+.2f}" if r.get("price_change_pct") is not None else "N/A",
+                f"{r['eval_alpha']:+.2f}"        if r.get("eval_alpha")       is not None else "N/A",
             )
     else:
         log.info("No signals ready for evaluation today.")
@@ -749,3 +799,4 @@ if __name__ == "__main__":
     from log_config import attach_file_handler
     attach_file_handler(__name__)
     main()
+    
