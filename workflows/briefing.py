@@ -31,7 +31,7 @@ from typing import Optional
 import requests
 from dotenv import load_dotenv
 
-from sheets import get_setting, read_tab, get_latest_geo, get_latest_pulse
+from sheets import get_setting, read_tab, get_latest_geo, get_latest_pulse,run_raw_sql
 from db.connection import _db
 
 load_dotenv()
@@ -92,18 +92,18 @@ def _get_latest_signals() -> list:
 
 
 def _get_market_snapshot() -> dict:
-    """NEPSE index + breadth from latest market_breadth row."""
+    """NEPSE index from nepse_indices table."""
     snap = {"nepse_index": "", "nepse_chg": "", "breadth_sig": ""}
     try:
-        rows = read_tab("market_breadth", limit=1)
+        rows = run_raw_sql(
+            "SELECT current_value FROM nepse_indices "
+            "WHERE index_id='58' ORDER BY date DESC LIMIT 1"
+        )
         if rows:
-            snap["nepse_index"] = rows[0].get("nepse_index", "")
-            snap["nepse_chg"]   = rows[0].get("nepse_change_pct", "")
-            snap["breadth_sig"] = rows[0].get("market_signal", "")
+            snap["nepse_index"] = rows[0].get("current_value", "")
     except Exception:
         pass
     return snap
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SECTION 2 — PAPER TRADING DATA HELPERS
@@ -221,11 +221,6 @@ def _build_market_header(nst_now: datetime) -> list:
         f"Geo:    {geo_emoji} {combined:+d}/10  |  "
         f"DXY: {geo.get('dxy','?')} [{geo.get('status','NEUTRAL')}]"
     )
-    lines.append(
-        f"Nifty:  {float(geo.get('nifty_change_pct', 0) or 0):+.1f}%  |  "
-        f"Crude: ${geo.get('crude_price','?')}"
-    )
-
     return lines
 
 
