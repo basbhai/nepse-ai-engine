@@ -160,6 +160,9 @@ model market_log {
   gemini_reason    Text   // Gemini rationale for recommendation
   gemini_risk      Text   // Gemini identified risk factors
   reasoning        Text
+  wait_condition   Text   // if WAIT/AVOID: specific condition that would make this a BUY
+  herding_note     Text   // one sentence on herding/bubble risk or NONE
+  lesson_applied   Text   // which lesson from Learning Hub was most relevant, or NONE
   outcome          Text  @default("PENDING")
   actual_pnl       Text
   exit_price       Text

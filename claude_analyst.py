@@ -54,6 +54,8 @@ class AnalystResult:
     suggested_hold:     int   = 17
     reasoning:          str   = ""
     lesson_applied:     str   = ""
+    wait_condition:     str   = ""
+    herding_note:       str   = ""
     primary_signal:     str   = ""
     sector:             str   = ""
     geo_score:          int   = 0
@@ -814,6 +816,8 @@ def _assemble_result(claude_json: dict, flag, geo: dict) -> AnalystResult:
         suggested_hold     = int(claude_json.get("suggested_hold_days", 17)),
         reasoning          = claude_json.get("reasoning",        ""),
         lesson_applied     = claude_json.get("lesson_applied",   "NONE"),
+        wait_condition     = claude_json.get("wait_condition",   ""),
+        herding_note       = claude_json.get("herding_note",     "NONE"),
         primary_signal     = claude_json.get("primary_signal",   ""),
         sector             = flag.sector,
         geo_score          = geo.get("combined", 0),
@@ -919,6 +923,9 @@ def _write_to_db(result: AnalystResult, flag=None) -> None:
             "breakeven":         _s(result.breakeven),
             "risk_reward":       _s(result.risk_reward),
             "reasoning":         _s(result.reasoning),
+            "wait_condition":    _s(result.wait_condition),
+            "herding_note":      _s(result.herding_note),
+            "lesson_applied":    _s(result.lesson_applied),
             "outcome":           "PENDING",
             "timestamp":         _s(result.timestamp),
 
@@ -1144,7 +1151,7 @@ def format_buy_signal(result: AnalystResult) -> str:
         f"Reasoning: {result.reasoning[:200]}",
     ]
     if result.lesson_applied and result.lesson_applied != "NONE":
-        lines.append(f"Lesson Applied: {result.lesson_applied[:100]}")
+        lines.append(f"Lesson Applied: {result.lesson_applied}")
     return "\n".join(lines)
 
 
