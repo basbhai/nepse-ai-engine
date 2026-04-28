@@ -247,7 +247,7 @@ def _build_paper_brief_for_user(
     total_losses     = int(  cap.get("total_losses",        0) or 0)
     fees_paid        = float(cap.get("total_fees_paid",     0) or 0)
 
-    # Unrealised P&L — sum across open positions
+    # Unrealised PnL — sum across open positions
     # (paper_portfolio doesn't store current_price; use wacc as cost basis,
     #  no live price available in briefing — show cost basis only)
     total_invested = sum(float(p.get("total_cost", 0) or 0) for p in positions)
@@ -276,7 +276,7 @@ def _build_paper_brief_for_user(
     ]
 
     pnl_emoji = "📈" if realised_pnl >= 0 else "📉"
-    lines.append(f"Realised P&L: {pnl_emoji} NPR {realised_pnl:+,.0f}")
+    lines.append(f"Realised PnL: {pnl_emoji} NPR {realised_pnl:+,.0f}")
 
     if fees_paid > 0:
         lines.append(f"Total fees paid: NPR {fees_paid:,.0f}")
@@ -429,7 +429,7 @@ def _send_telegram(chat_id: str, message: str) -> bool:
         payload = {
             "chat_id":    chat_id,
             "text":       message,
-            "parse_mode": "Markdown",
+            
         }
         r = requests.post(TELEGRAM_URL, json=payload, timeout=15)
         if r.status_code == 200:
