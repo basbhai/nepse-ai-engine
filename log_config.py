@@ -1,8 +1,8 @@
 """
 log_config.py — NEPSE AI Engine
 ================================
-Attaches a timestamped FileHandler to the root logger so every module's
-log output (which propagates to root) is captured in a per-run text file.
+Attaches a FileHandler to the root logger so every module's log output
+(which propagates to root) is captured in a daily append-mode text file.
 
 Usage — call once at the top of every `if __name__ == "__main__":` block,
 AFTER any `logging.basicConfig(...)` call:
@@ -11,7 +11,8 @@ AFTER any `logging.basicConfig(...)` call:
     attach_file_handler(__name__)
 
 The console output is unchanged.  File is created under logs/ at the repo root.
-Filename format:  logs/<YYYY>/<MonthName>/<DD>/<module>_<YYYYMMDD_HHMMSS>.txt
+Filename format:  logs/<YYYY>/<MonthName>/<DD>/<module>.txt
+All runs of the same module on the same day append to the same file.
 """
 
 import inspect
@@ -22,9 +23,6 @@ from zoneinfo import ZoneInfo
 
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 _NST  = ZoneInfo("Asia/Kathmandu")
-
-# Track installed names so repeated imports / calls are safe
-_installed: set[str] = set()
 
 
 def _entry_point_name(fallback: str) -> str:
@@ -62,17 +60,13 @@ def attach_file_handler(module_name: str) -> str | None:
     ----------
     module_name : str
         Pass ``__name__`` from the calling module.
-        e.g. "analysis.learning_hub" → log file ``learning_hub_20260412_174500.txt``
+        e.g. "analysis.learning_hub" → log file ``learning_hub.txt``
 
     Returns
     -------
     str | None
-        Absolute path to the log file, or None if already installed or logs disabled.
+        Absolute path to the log file, or None if already attached or logs disabled.
     """
-    if module_name in _installed:
-        return None
-    _installed.add(module_name)
-
     # Settings gate — skip file creation if LOGS_ENABLED is not true/1
     try:
         import sys
@@ -97,21 +91,25 @@ def attach_file_handler(module_name: str) -> str | None:
     year       = now.strftime("%Y")
     month_name = now.strftime("%B")   # full English month name, e.g. "April"
     day        = now.strftime("%d")
-    timestamp  = now.strftime("%Y%m%d_%H%M%S")
 
     log_dir  = os.path.join(_ROOT, "logs", year, month_name, day)
     os.makedirs(log_dir, exist_ok=True)
 
-    log_path = os.path.join(log_dir, f"{short}_{timestamp}.txt")
+    log_path = os.path.join(log_dir, f"{short}.txt")
 
-    fh = logging.FileHandler(log_path, encoding="utf-8")
+    # Within a long-running process, skip if this exact file is already handled
+    root = logging.getLogger()
+    for h in root.handlers:
+        if isinstance(h, logging.FileHandler) and os.path.abspath(h.baseFilename) == os.path.abspath(log_path):
+            return log_path
+
+    fh = logging.FileHandler(log_path, mode="a", encoding="utf-8")
     fh.setLevel(logging.DEBUG)
     fh.setFormatter(logging.Formatter(
         "%(asctime)s [%(name)s] %(levelname)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     ))
 
-    root = logging.getLogger()
     root.addHandler(fh)
     root.info("File logging → %s", log_path)
     return log_path

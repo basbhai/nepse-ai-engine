@@ -219,7 +219,7 @@ def _build_market_header(nst_now: datetime) -> list:
     geo_emoji   = "🟢" if combined >= 2 else ("🟡" if combined >= -1 else "🔴")
     lines.append(
         f"Geo:    {geo_emoji} {combined:+d}/10  |  "
-        f"VIX: {geo.get('vix','?')}  [{geo.get('vix_level','?')}]"
+        f"DXY: {geo.get('dxy','?')} [{geo.get('status','NEUTRAL')}]"
     )
     lines.append(
         f"Nifty:  {float(geo.get('nifty_change_pct', 0) or 0):+.1f}%  |  "

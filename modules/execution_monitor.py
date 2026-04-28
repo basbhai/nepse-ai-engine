@@ -961,12 +961,11 @@ def run_monitor(paper_mode: bool = True, once: bool = False) -> None:
             else:
                 pending_states.pop(symbol, None)   # reset pending if back to current
 
-            # Log every cycle at DEBUG level (not noisy in production)
-            log.debug("%s | S=%+.3f | OBI=%+.2f TIR=%+.2f VWAP=%+.2f Micro=%+.2f | "
-                      "State=%s | Phase=%s | Fragile=%s",
-                      symbol, S, gis["obi"], gis["tir"], gis["vwap_score"],
-                      gis["micro_score"], intel_states.get(symbol, "HOLD"),
-                      phase, fragility_flags.get(symbol, False))
+            log.info("%s | S=%+.3f | OBI=%+.2f TIR=%+.2f VWAP=%+.2f Micro=%+.2f | "
+                     "State=%s | Phase=%s | Fragile=%s",
+                     symbol, S, gis["obi"], gis["tir"], gis["vwap_score"],
+                     gis["micro_score"], intel_states.get(symbol, "HOLD"),
+                     phase, fragility_flags.get(symbol, False))
 
         if run_intelligence:
             last_intel_time = now_ts
