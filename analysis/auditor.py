@@ -47,9 +47,11 @@ except ImportError:
     from modules.geo_sentiment import get_latest_geo_score
 
 try:
-    from helper.notifier import send_telegram
+    from helper.notifier import send_telegram, _send_admin_only
 except ImportError:
     def send_telegram(msg: str):
+        log.warning("Telegram notifier not available. Message: %s", msg)
+    def _send_admin_only(msg: str):
         log.warning("Telegram notifier not available. Message: %s", msg)
 
 logging.basicConfig(
@@ -851,7 +853,7 @@ def run_eod_audit(dry_run: bool = False) -> dict:
 
     msg = _build_eod_summary(closed_trades, still_open, paper=False)
     if not dry_run:
-        send_telegram(msg)
+        _send_admin_only(msg)
     else:
         log.info("DRY RUN — would send:\n%s", msg)
 
