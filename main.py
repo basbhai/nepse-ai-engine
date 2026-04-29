@@ -5,11 +5,11 @@ Single trading loop orchestrator. Called every 6 minutes by systemd timer
 during market hours (10:45 AM – 3:00 PM NST, Sun–Thu).
 
 Usage:
-    python -main.py            → paper trading (default, safe)
-    python -main.py -paper     → paper trading (explicit)
-    python -main.py -live      → live trading (CAUTION: sets PAPER_MODE=false)
-    python -main.py --dry-run  → full pipeline, zero DB writes, zero API calls
-    python -main.py --skip-guard → bypass calendar_guard (for manual testing)
+    python main.py            → paper trading (default, safe)
+    python main.py -paper     → paper trading (explicit)
+    python main.py -live      → live trading (CAUTION: sets PAPER_MODE=false)
+    python main.py --dry-run  → full pipeline, zero DB writes, zero API calls
+    python main.py --skip-guard → bypass calendar_guard (for manual testing)
 
 Paper mode differences vs live:
     - No circuit breaker check
@@ -287,6 +287,25 @@ def _write_near_misses_to_db(near_misses: list, date_str: str, dry_run: bool) ->
     except Exception as e:
         log.warning("_write_near_misses_to_db failed (non-fatal): %s", e)
 
+
+def _run_agent(label: str) -> None:
+    """
+    Run the agentic WAIT monitor. Non-fatal — never blocks the trading loop.
+    Called at every exit point so it always runs regardless of whether the
+    linear pipeline found candidates this cycle.
+    """
+    try:
+        from agent import run_wait_monitor
+        summary = run_wait_monitor()
+        log.info(
+            "%s Agent WAIT monitor: ran=%s reason=%s escalations=%d elapsed=%dms",
+            label, summary.get("ran"), summary.get("reason"),
+            summary.get("escalations", 0), summary.get("elapsed_ms", 0),
+        )
+    except Exception as e:
+        log.warning("%s Agent WAIT monitor failed (non-fatal): %s", label, e)
+
+
 def run_trading_loop(paper_mode: bool, dry_run: bool, skip_guard: bool) -> int:
     """
     Full trading pipeline. Returns exit code (0=ok, 1=blocked, 2=error).
@@ -412,6 +431,7 @@ def run_trading_loop(paper_mode: bool, dry_run: bool, skip_guard: bool) -> int:
 
     if not candidates:
         log.info("%s No candidates passed filter gates — done for this cycle", label)
+        _run_agent(label)
         return 0
 
     # ── Step 8: Gemini filter ─────────────────────────────────────────────────
@@ -435,6 +455,7 @@ def run_trading_loop(paper_mode: bool, dry_run: bool, skip_guard: bool) -> int:
 
     if not flags:
         log.info("%s No flags from Gemini — nothing for Claude this cycle", label)
+        _run_agent(label)
         return 0
 
     # ── Step 9: Claude analyst ────────────────────────────────────────────────
@@ -488,11 +509,7 @@ def run_trading_loop(paper_mode: bool, dry_run: bool, skip_guard: bool) -> int:
             log.info("%s ❓ %s: %s", label, action, sym)
 
     # ── Step 11: Agentic WAIT monitor ────────────────────────────────────────
-    try:
-        from agent import run_wait_monitor
-        run_wait_monitor()
-    except Exception as e:
-        log.warning("%s Agent WAIT monitor failed (non-fatal): %s", label, e)
+    _run_agent(label)
 
     # ── Step 12: Summary ──────────────────────────────────────────────────────
     log.info("─" * 65)
