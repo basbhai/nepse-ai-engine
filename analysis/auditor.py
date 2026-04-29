@@ -39,16 +39,12 @@ from datetime import datetime, date
 from typing import Optional
 
 from sheets import get_setting, write_row, read_tab, upsert_row, update_setting, update_row
+from db.connection import _db as _conn
 
 try:
     from modules.geo_sentiment import get_latest_geo_score
 except ImportError:
     from modules.geo_sentiment import get_latest_geo_score
-
-try:
-    from modules.nepal_pulse import get_latest_nepal_score
-except ImportError:
-    from modules.nepal_pulse import get_latest_nepal_score
 
 try:
     from helper.notifier import send_telegram
@@ -78,7 +74,26 @@ CGT_RATE    = 0.075     # 7.5% on gross profit only (FIX 3: was 0.05)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 0. FEE HELPERS  (tiered brokerage — matches telegram_bot._brokerage exactly)
+# 0. NEPAL SCORE HELPER — reads latest row from nepal_pulse table
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _get_nepal_score() -> float:
+    """Read the most recent nepal_score from the nepal_pulse table."""
+    try:
+        with _conn() as cur:
+            cur.execute(
+                "SELECT nepal_score FROM nepal_pulse "
+                "ORDER BY date DESC, time DESC LIMIT 1"
+            )
+            row = cur.fetchone()
+        return float(row["nepal_score"] or 0) if row else 0.0
+    except Exception as e:
+        log.error("_get_nepal_score failed: %s", e)
+        return 0.0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 0b. FEE HELPERS  (tiered brokerage — matches telegram_bot._brokerage exactly)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _brokerage(trade_value: float) -> float:
@@ -338,8 +353,8 @@ def _check_stop_conditions(position: dict, current_price: float,
         return None
 
     # 1. Geo block — hard rule, no exceptions
-    # FIX 2: CURRENT_NEPAL_SCORE is now always written by run_eod_audit() /
-    #         run_paper_audit() before the position loop, so this reads a real value.
+    # CURRENT_NEPAL_SCORE is written at the top of run_eod_audit() / run_paper_audit()
+    # before the position loop so this always reads a real value.
     nepal_score  = float(get_setting("CURRENT_NEPAL_SCORE", "0") or 0)
     combined_geo = geo_score + nepal_score
     if combined_geo < -3:
@@ -695,16 +710,11 @@ def run_eod_audit(dry_run: bool = False) -> dict:
         geo_score = 0.0
 
     try:
-        np_data     = get_latest_nepal_score()
-        nepal_score = float(np_data.get("nepal_score", 0)
-                            if isinstance(np_data, dict) else np_data or 0)
+        nepal_score = _get_nepal_score()
         log.info("Nepal score: %.2f", nepal_score)
-
-        # FIX 2: write CURRENT_NEPAL_SCORE so _check_stop_conditions reads real value
         if not dry_run:
             update_setting("CURRENT_NEPAL_SCORE", str(nepal_score), set_by="auditor.py")
             log.info("CURRENT_NEPAL_SCORE written: %s", nepal_score)
-
     except Exception as e:
         log.error("nepal_score fetch failed: %s", e)
         nepal_score = 0.0
@@ -851,7 +861,7 @@ def run_eod_audit(dry_run: bool = False) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 11. PAPER TRADING AUDIT  (FIX 1 — new function)
+# 11. PAPER TRADING AUDIT
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run_paper_audit(dry_run: bool = False) -> dict:
@@ -884,24 +894,18 @@ def run_paper_audit(dry_run: bool = False) -> dict:
         geo_score = 0.0
 
     try:
-        np_data     = get_latest_nepal_score()
-        nepal_score = float(np_data.get("nepal_score", 0)
-                            if isinstance(np_data, dict) else np_data or 0)
+        nepal_score = _get_nepal_score()
         log.info("Nepal score: %.2f", nepal_score)
-
-        # FIX 2: write CURRENT_NEPAL_SCORE (paper audit path also needs this)
         if not dry_run:
             update_setting("CURRENT_NEPAL_SCORE", str(nepal_score), set_by="auditor.py --paper")
             log.info("CURRENT_NEPAL_SCORE written: %s", nepal_score)
-
     except Exception as e:
         log.error("nepal_score fetch failed: %s", e)
         nepal_score = 0.0
 
     # ── Load closed, unaudited paper trades ───────────────────────────────────
     try:
-        from db.connection import _db
-        with _db() as cur:
+        with _conn() as cur:
             cur.execute("""
                 SELECT * FROM paper_portfolio
                 WHERE status = 'CLOSED'
@@ -925,12 +929,6 @@ def run_paper_audit(dry_run: bool = False) -> dict:
     for row in closed_rows:
         symbol = row.get("symbol", "?")
         try:
-            # ── Map paper_portfolio fields to what _write_trade_journal expects ──
-            # paper_portfolio has: total_shares, wacc (effective entry price),
-            # total_cost, first_buy_date, exit_date, exit_price, net_pnl, result
-            # Indicator context (rsi_entry etc.) will be empty — enriched from
-            # market_log if available; gets richer once recommendation_tracker built.
-
             entry_price = float(row.get("wacc") or 0)
             exit_price  = float(row.get("exit_price") or 0)
             shares      = float(row.get("total_shares") or 0)
@@ -944,7 +942,6 @@ def run_paper_audit(dry_run: bool = False) -> dict:
 
             hold_days = _compute_hold_days(entry_date, exit_date)
 
-            # Build a position dict in the same shape _write_trade_journal expects
             position = {
                 "symbol":           symbol,
                 "sector":           row.get("sector", ""),
@@ -976,18 +973,15 @@ def run_paper_audit(dry_run: bool = False) -> dict:
                 "telegram_id":      str(row.get("telegram_id", "")),
             }
 
-            # Try to enrich with market_log context (signal info at entry time)
             position = _enrich_position_with_entry_context(position)
 
             exit_context = {
                 "exit_price":       exit_price,
                 "exit_date":        exit_date,
-                "exit_reason":      row.get("result", "MANUAL"),  # bot closes are always manual
+                "exit_reason":      row.get("result", "MANUAL"),
                 "market_state_exit": get_setting("MARKET_STATE", "SIDEWAYS"),
             }
 
-            # Compute deltas — use current macro for exit context
-            # (paper trades closed by bot during day; best approximation available)
             deltas = _compute_deltas(position, exit_price, geo_score, nepal_score)
 
             return_pct = deltas["return_pct"]
@@ -1004,7 +998,7 @@ def run_paper_audit(dry_run: bool = False) -> dict:
                 # Write immutable trade_journal record
                 trade_id = _write_trade_journal(position, deltas, exit_context, paper=True)
 
-                # Link to market_log — match by symbol + date range
+                # Link to market_log
                 try:
                     market_rows = [
                         r for r in read_tab("market_log")
@@ -1031,10 +1025,9 @@ def run_paper_audit(dry_run: bool = False) -> dict:
                 except Exception as e:
                     log.warning("market_log link failed for %s: %s", symbol, e)
 
-                # Stamp audited='true' on paper_portfolio row
+                # Stamp audited='true'
                 try:
-                    from db.connection import _db
-                    with _db() as cur:
+                    with _conn() as cur:
                         cur.execute(
                             "UPDATE paper_portfolio SET audited = 'true' WHERE id = %s",
                             (row["id"],)
@@ -1065,11 +1058,9 @@ def run_paper_audit(dry_run: bool = False) -> dict:
             log.error("Error processing paper trade %s: %s", symbol, e)
             summary["errors"] += 1
 
-    # ── KPI update ────────────────────────────────────────────────────────────
     if not dry_run and processed_trades:
         _update_financials_kpis()
 
-    # ── Summary log ──────────────────────────────────────────────────────────
     if processed_trades:
         log.info("Paper audit complete — processed=%d skipped=%d errors=%d",
                  summary["processed"], summary["skipped"], summary["errors"])
@@ -1132,8 +1123,7 @@ if __name__ == "__main__":
         try:
             paper_mode = get_setting("PAPER_MODE", "true").lower() == "true"
             if paper_mode:
-                from db.connection import _db
-                with _db() as cur:
+                with _conn() as cur:
                     cur.execute("""
                         SELECT pp.*, pu.username
                         FROM paper_portfolio pp
