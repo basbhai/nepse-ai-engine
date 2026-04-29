@@ -52,6 +52,7 @@ TABS: dict[str, str] = {
     "monthly_override": "monthly_override",
     "accuracy_review_log": "accuracy_review_log",
     "system_proposals": "system_proposals",
+    "agent_trace": "agent_trace",
 }
 
 TABLE_DDL: dict[str, str] = {
@@ -1411,6 +1412,28 @@ TABLE_DDL: dict[str, str] = {
     CREATE INDEX IF NOT EXISTS ix_system_proposals_component
         ON "system_proposals" (component);
     """,
+
+    "agent_trace": """
+    CREATE TABLE IF NOT EXISTS "agent_trace" (
+        id SERIAL PRIMARY KEY,
+        cycle_ts TEXT NOT NULL,
+        step TEXT NOT NULL,
+        tool TEXT NOT NULL,
+        request_args TEXT,
+        response TEXT,
+        escalated TEXT DEFAULT 'false',
+        decision TEXT,
+        elapsed_ms TEXT,
+        created_at TEXT,
+        inserted_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS ix_agent_trace_cycle_ts
+        ON "agent_trace" (cycle_ts);
+    CREATE INDEX IF NOT EXISTS ix_agent_trace_tool
+        ON "agent_trace" (tool);
+    CREATE INDEX IF NOT EXISTS ix_agent_trace_decision
+        ON "agent_trace" (decision);
+    """,
 }
 
 TABLE_COLUMNS: dict[str, list[str]] = {
@@ -1461,4 +1484,5 @@ TABLE_COLUMNS: dict[str, list[str]] = {
     "monthly_override": ["run_month", "confidence_score", "buy_blocked", "market_state", "stop_trigger", "go_trigger", "inserted_at", "last_read_at"],
     "accuracy_review_log": ["run_month", "trade_count", "signal_accuracy", "sector_accuracy", "market_state_accuracy", "confidence_calibration", "false_block_analysis", "deepseek_proposals", "status", "inserted_at"],
     "system_proposals": ["run_month", "source", "component", "proposal_type", "current_behavior", "proposed_change", "data_evidence", "requires_new_data", "new_data_source", "confidence", "status", "approved_at", "rejected_at", "rejection_reason", "inserted_at"],
+    "agent_trace": ["cycle_ts", "step", "tool", "request_args", "response", "escalated", "decision", "elapsed_ms", "created_at"],
 }

@@ -1383,3 +1383,26 @@ model system_proposals {
   @@index([status])
   @@index([component])
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AGENT TRACE — audit log for every step the agentic WAIT monitor takes
+// ─────────────────────────────────────────────────────────────────────────────
+
+model agent_trace {
+  id           Serial
+  cycle_ts     Text!          // NST timestamp — start of 10-min cycle
+  step         Text!          // iteration number within cycle
+  tool         Text!          // function name called
+  request_args Text           // JSON — arguments passed to tool
+  response     Text           // JSON — what the tool returned
+  escalated    Text  @default("false")   // true if this step escalated to Claude
+  decision     Text           // MET | NOT_MET | ESCALATED | SKIPPED | MARKET_ADVERSE
+  elapsed_ms   Text           // time taken inside this tool call
+  created_at   Text           // row insertion time NST
+
+  @@index([cycle_ts])
+  @@index([tool])
+  @@index([decision])
+}
+
+
