@@ -143,6 +143,7 @@ def _openrouter_fallback(
     response_mime_type: str,
     temperature: float,
     context: str,
+    use_search: bool = False,
 ) -> Optional[str]:
     """
     Fallback to OpenRouter paid Gemini when all SDK keys fail.
@@ -163,7 +164,7 @@ def _openrouter_fallback(
             max_tokens  = 10000,
             temperature = temperature,
             context     = f"{context}_openrouter_fallback",
-            use_search = True,  # OpenRouter fallback does NOT support search grounding
+            use_search = True,
         )
     except Exception as e:
         log.error("[%s] OpenRouter fallback also failed: %s", context, e)
@@ -252,15 +253,9 @@ def _gemini_with_retry(
                 if attempt < MAX_RETRIES:
                     continue
 
-    # All SDK attempts failed
-    if use_search:
-        # Google Search grounding is incompatible with OpenRouter — alert and bail
-        log.error("[%s] All Gemini SDK attempts failed (use_search=True) — no OpenRouter fallback", context)
-        _alert_admin(context, last_error)
-        return None
-
+    # All SDK attempts failed — try OpenRouter paid Gemini as fallback
     raw = _openrouter_fallback(
-        prompt, system, response_mime_type, temperature, context
+        prompt, system, response_mime_type, temperature, context, use_search
     )
 
     if raw is None:

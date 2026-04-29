@@ -97,7 +97,6 @@ def _strip_fences(raw: str) -> str:
         raw = raw.strip()
     return raw
 
-
 def _call(
     model:      str,
     messages:   list,
@@ -127,7 +126,6 @@ def _call(
         "max_tokens":  max_tokens,
         "temperature": temperature,
         "messages":    messages,
-
     }
     if extra_body:
         payload.update(extra_body)
@@ -147,7 +145,6 @@ def _call(
                 timeout=120,
             )
 
-            # Check for retryable HTTP status
             if resp.status_code in _RETRYABLE_STATUS:
                 last_error = f"HTTP {resp.status_code}: {resp.text[:200]}"
                 if attempt < MAX_RETRIES:
@@ -163,13 +160,32 @@ def _call(
                     _alert_admin(context, last_error)
                     return None
 
-            # Non-retryable HTTP error
             if resp.status_code != 200:
                 log.error("[%s] OpenRouter non-retryable HTTP %d: %s", context, resp.status_code, resp.text[:300])
                 return None
 
             data = resp.json()
-            raw  = data["choices"][0]["message"]["content"].strip()
+            message = data["choices"][0]["message"]
+
+            # Handle tool/search responses — content may be None or a list of blocks
+            content = message.get("content")
+            if content is None:
+                log.warning("[%s] OpenRouter returned None content (tool call with no text)", context)
+                return None
+            if isinstance(content, list):
+                # Extract text blocks only — ignore tool_use/tool_result blocks
+                raw = " ".join(
+                    block.get("text", "")
+                    for block in content
+                    if block.get("type") == "text"
+                ).strip()
+            else:
+                raw = content.strip()
+
+            if not raw:
+                log.warning("[%s] OpenRouter returned blank response", context)
+                return None
+
             log.info("[%s] OpenRouter responded on attempt %d", context, attempt)
             return raw
 
@@ -206,7 +222,6 @@ def _call(
                 log.error("[%s] OpenRouter non-retryable error: %s", context, exc)
                 return None
 
-    # All retries exhausted
     log.error("[%s] OpenRouter failed after %d attempts", context, MAX_RETRIES)
     _alert_admin(context, last_error)
     return None
