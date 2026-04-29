@@ -5,11 +5,11 @@ Single trading loop orchestrator. Called every 6 minutes by systemd timer
 during market hours (10:45 AM – 3:00 PM NST, Sun–Thu).
 
 Usage:
-    python main.py            → paper trading (default, safe)
-    python main.py -paper     → paper trading (explicit)
-    python main.py -live      → live trading (CAUTION: sets PAPER_MODE=false)
-    python main.py --dry-run  → full pipeline, zero DB writes, zero API calls
-    python main.py --skip-guard → bypass calendar_guard (for manual testing)
+    python -main.py            → paper trading (default, safe)
+    python -main.py -paper     → paper trading (explicit)
+    python -main.py -live      → live trading (CAUTION: sets PAPER_MODE=false)
+    python -main.py --dry-run  → full pipeline, zero DB writes, zero API calls
+    python -main.py --skip-guard → bypass calendar_guard (for manual testing)
 
 Paper mode differences vs live:
     - No circuit breaker check
@@ -487,7 +487,14 @@ def run_trading_loop(paper_mode: bool, dry_run: bool, skip_guard: bool) -> int:
         else:
             log.info("%s ❓ %s: %s", label, action, sym)
 
-    # ── Step 11: Summary ──────────────────────────────────────────────────────
+    # ── Step 11: Agentic WAIT monitor ────────────────────────────────────────
+    try:
+        from agent import run_wait_monitor
+        run_wait_monitor()
+    except Exception as e:
+        log.warning("%s Agent WAIT monitor failed (non-fatal): %s", label, e)
+
+    # ── Step 12: Summary ──────────────────────────────────────────────────────
     log.info("─" * 65)
     log.info("%s Cycle complete — BUY:%d WAIT:%d AVOID:%d",
              label, buy_count, wait_count, avoid_count)
