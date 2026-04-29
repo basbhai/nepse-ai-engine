@@ -15,7 +15,6 @@ google-generativeai
 psycopg2-binary
 pandas
 numpy
-windows-curses
 python-telegram-bot==21.6
 nepali-datetime
 statsmodels
