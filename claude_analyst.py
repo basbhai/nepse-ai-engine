@@ -267,8 +267,8 @@ def _load_lessons(symbol: str, sector: str, limit: int = 6) -> list[str]:
         for r in sorted_rows:
             sym   = r.get("symbol", "?")
             ltype = r.get("lesson_type", "")
-            cond  = r.get("condition",   "")[:80]
-            find  = r.get("finding",     "")[:120]
+            cond  = r.get("condition",   "")
+            find  = r.get("finding",     "")
             act   = r.get("action",      "")
             conf  = r.get("confidence_level", "LOW")
             wr    = r.get("win_rate",    "")
@@ -648,6 +648,16 @@ def _build_prompt(
     fund_ctx:     dict = None,
 ) -> str:
     nst_now = datetime.now(tz=NST)
+    LESSON_ACTION_GLOSSARY = """LESSON ACTION CODES — apply these exactly when a lesson fires:
+    BLOCK_ENTRY              → Hard block. Do not issue BUY regardless of other signals.
+    ADD_TO_REASONING         → Factor this into your reasoning. Weight it alongside indicators.
+    INCREASE_CONFIDENCE_BY_N → Add N points to your confidence score for this stock.
+    REDUCE_CONFIDENCE_BY_N   → Subtract N points from your confidence score.
+    INCREASE_ALLOCATION_BY_N → Note in reasoning: increase suggested allocation by N%.
+    REDUCE_ALLOCATION_BY_N   → Note in reasoning: reduce suggested allocation by N%.
+    A lesson fires when its IF condition matches the current stock's attributes."""
+
+
 
     lessons_str  = "\n".join(f"  - {l}" for l in lessons) if lessons else "  No lessons yet."
     holdings_str = "\n".join(
@@ -751,6 +761,8 @@ Herding Check:   {herding_alert}
 ==============================================
 LEARNING HUB LESSONS (most relevant first)
 ==============================================
+{LESSON_ACTION_GLOSSARY}
+
 {lessons_str}
 
 ==============================================

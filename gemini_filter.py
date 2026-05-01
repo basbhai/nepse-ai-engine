@@ -493,8 +493,8 @@ def _assemble_flags(
             ltp              = c.ltp,
             action           = action,
             urgency          = str(f.get("urgency", "NORMAL")).upper(),
-            gemini_reason    = str(f.get("reason", ""))[:500],
-            gemini_risk      = str(f.get("risk",   ""))[:500],
+            gemini_reason    = str(f.get("reason", "")),
+            gemini_risk      = str(f.get("risk",   "")),
             primary_signal   = str(f.get("primary_signal", c.primary_signal)),
             composite_score  = c.composite_score,
             tech_score       = c.tech_score,
@@ -643,6 +643,7 @@ def run_gemini_filter(
     Main entry point. Called every 6 min by trading.yml
     after filter_engine.run_filter().
     """
+    from sheets import run_raw_sql
     if date is None:
         date = datetime.now(tz=NST).strftime("%Y-%m-%d")
 
@@ -688,6 +689,26 @@ def run_gemini_filter(
     total_capital   = _load_total_capital()
     symbols         = [c.symbol for c in candidates]
     lessons         = _load_relevant_lessons(symbols)
+    # ── Hard dedup: skip symbols Claude already decided on today ─────────────
+    try:
+        today = datetime.now(tz=NST).strftime("%Y-%m-%d")
+        done_rows = run_raw_sql(
+            """
+            SELECT DISTINCT symbol FROM market_log
+            WHERE date = %s AND action IN ('BUY', 'AVOID')
+            """,
+            (today,),
+        )
+        already_done = {r["symbol"] for r in (done_rows or [])}
+        if already_done:
+            before = len(candidates)
+            candidates = [c for c in candidates if c.symbol not in already_done]
+            logger.info(
+                "Dedup: removed %d already-decided symbols %s",
+                before - len(candidates), already_done,
+            )
+    except Exception as exc:
+        logger.warning("Dedup check failed — proceeding without filter: %s", exc)
 
     logger.info(
         "Portfolio: %d open | %d slots | capital NPR %.0f | %d lessons loaded",
