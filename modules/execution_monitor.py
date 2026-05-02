@@ -755,7 +755,7 @@ def run_monitor(paper_mode: bool = True, once: bool = False) -> None:
     log.info("EXECUTION MONITOR starting | mode=%s", "PAPER" if paper_mode else "LIVE")
     log.info("=" * 65)
 
-    from modules.atrad_scraper import fetch_order_book, fetch_trades, _ensure_session
+    from modules.atrad_scraper import fetch_order_book, _ensure_session
 
     # Per-symbol rolling state
     intel_states:    dict[str, str]          = {}   # current GIS state per symbol
