@@ -58,6 +58,14 @@ from calendar_guard import flag_adhoc_closure, today_nst
 from AI import ask_deepseek_text
 from config import NST
 
+# ── Political event detector (optional — fails gracefully if tables not ready) ─
+try:
+    import modules.event_detector as _event_detector
+    _ED_AVAILABLE = True
+except Exception:
+    _event_detector = None  # type: ignore[assignment]
+    _ED_AVAILABLE = False
+
 # ══════════════════════════════════════════════════════════════════════════════
 # LOGGING
 # ══════════════════════════════════════════════════════════════════════════════
@@ -539,6 +547,44 @@ def _is_budget_season(now: datetime) -> str:
     return "YES" if now.month in (5, 6) else "NO"
 
 
+def _compute_lagged_adj() -> float:
+    """
+    Sum magnitude_applied for ACTIVE pattern_validation_log rows whose
+    prediction window includes today. MONITOR_ONLY patterns are excluded.
+    Clamped to [political_lagged_adj_min, political_lagged_adj_max] settings.
+    Returns 0.0 on any error. Never raises.
+    """
+    if not _ED_AVAILABLE:
+        return 0.0
+    try:
+        from sheets import run_raw_sql
+        today_str = datetime.now(tz=NST).strftime("%Y-%m-%d")
+        rows = run_raw_sql(
+            """
+            SELECT pvl.magnitude_applied
+            FROM pattern_validation_log pvl
+            INNER JOIN news_effect_patterns nep
+                    ON nep.event_type = pvl.event_type
+                   AND nep.status     = 'ACTIVE'
+                   AND nep.active     = 'true'
+            WHERE pvl.outcome              = 'PENDING'
+              AND pvl.predicted_date_start <= %(today)s
+              AND pvl.predicted_date_end   >= %(today)s
+            """,
+            params={"today": today_str},
+        ) or []
+        adj = sum(float(r["magnitude_applied"]) for r in rows if r.get("magnitude_applied"))
+        max_adj = float(get_setting("political_lagged_adj_max", default="5.0") or "5.0")
+        min_adj = float(get_setting("political_lagged_adj_min", default="-5.0") or "-5.0")
+        clamped = max(min_adj, min(max_adj, adj))
+        if clamped:
+            log.debug("Lagged political adj: %.1f (raw=%.1f, rows=%d)", clamped, adj, len(rows))
+        return clamped
+    except Exception as exc:
+        log.debug("_compute_lagged_adj non-fatal: %s", exc)
+        return 0.0
+
+
 def _compute_nepal_score(manual: dict, scraped: dict, macro: dict) -> tuple[int, str, str]:
     """
     Compute nepal_score (-5 to +5), status label, and key event string.
@@ -547,14 +593,14 @@ def _compute_nepal_score(manual: dict, scraped: dict, macro: dict) -> tuple[int,
     score = 0
     events = []
 
-    # Bandh — hard negative
+    # Bandh — hard negative (reduced from -2 to -1; lagged pattern adds further adj)
     if scraped.get("bandh_today") == "YES":
-        score -= 2
+        score -= 1
         events.append(f"BANDH: {scraped.get('bandh_detail','')[:50]}")
 
-    # Crisis
+    # Crisis (reduced from -2 to -1; lagged pattern adds further adj)
     if scraped.get("crisis_detected") == "YES":
-        score -= 2
+        score -= 1
         events.append(f"CRISIS: {scraped.get('crisis_detail','')[:50]}")
 
     # IPO drain (liquidity leaves market)
@@ -595,8 +641,14 @@ def _compute_nepal_score(manual: dict, scraped: dict, macro: dict) -> tuple[int,
     elif sentiment == "NEGATIVE":
         score -= 1
 
+    # Lagged political event adjustment (from pattern_validation_log windows)
+    lagged_adj = _compute_lagged_adj()
+    if lagged_adj:
+        score += lagged_adj
+        events.append(f"LAG_ADJ: {lagged_adj:+.1f}")
+
     # Clamp to range
-    score = max(-5, min(5, score))
+    score = max(-5, min(5, int(round(score))))
 
     if score >= 3:
         status = "BULLISH"
@@ -644,6 +696,36 @@ def run(force_keywords: bool = False) -> bool:
     nepal_score, nepal_status, key_event = _compute_nepal_score(
         manual, scraped, macro
     )
+
+    # ── Political event detection ─────────────────────────────────────────────
+    if _ED_AVAILABLE:
+        try:
+            _patterns_map = {
+                p["event_type"]: p
+                for p in _event_detector._load_all_patterns()
+            }
+            _events = _event_detector.detect_event_types(
+                headlines_political=scraped.get("headlines_politics", ""),
+                headlines_economy=scraped.get("headlines_economy",  ""),
+                headlines_nepse=scraped.get("headlines_stock",    ""),
+            )
+            _today_str = nst_now.strftime("%Y-%m-%d")
+            for _ev in _events:
+                _pat = _patterns_map.get(_ev["event_type"])
+                if _pat:
+                    _event_detector.write_prediction(
+                        event=_ev,
+                        pattern=_pat,
+                        nepal_crisis_score=nepal_score,
+                        event_date_str=_today_str,
+                    )
+            if _events:
+                log.info(
+                    "Political events detected: %s",
+                    [e["event_type"] for e in _events],
+                )
+        except Exception as _exc:
+            log.debug("Event detection non-fatal: %s", _exc)
 
     pulse = {
         "date": nst_now.strftime("%Y-%m-%d"),

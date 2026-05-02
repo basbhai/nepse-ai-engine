@@ -121,6 +121,11 @@ def _is_saturday_before_first_sunday() -> bool:
     return tomorrow.weekday() == 6 and tomorrow.day <= 7
 
 
+def _is_quarterly_review_month() -> bool:
+    """True in March, June, September, December — quarterly pattern council months."""
+    return datetime.now(NST).month in (3, 6, 9, 12)
+
+
 def _check_already_run(run_month: str) -> bool:
     """True if council for this month already has log entries."""
     try:
@@ -132,6 +137,19 @@ def _check_already_run(run_month: str) -> bool:
         return cnt > 0
     except Exception:
         return False
+
+
+# ── Permanent agenda items (injected in Python, not as prompt instructions) ───
+MONTHLY_PERMANENT_ITEMS = [
+    "Political event pattern accuracy: review last 30 days of lag predictions vs actual "
+    "NEPSE moves — flag any patterns with declining weighted_accuracy trend",
+]
+
+QUARTERLY_PERMANENT_ITEMS = [
+    "Quarterly pattern council: promote/demote/disable news_effect_patterns based on "
+    "weighted_accuracy — ACTIVE ≥70% keep, 50-69% demote to MONITOR_ONLY, "
+    "<50% with ≥5 resolved predictions disable; <5 predictions no change",
+]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -286,6 +304,46 @@ def _load_pending_proposals() -> list[dict]:
         return []
 
 
+def _load_pattern_validation_data() -> list[dict]:
+    """
+    Load political event pattern accuracy for council context.
+    Groups pattern_validation_log by event_type with weighted accuracy.
+    Returns [] on error. Never raises.
+    """
+    try:
+        rows = run_raw_sql(
+            """
+            SELECT
+                pvl.event_type,
+                nep.status                                                         AS pattern_status,
+                nep.evidence_quality,
+                COUNT(*)                                                            AS total,
+                SUM(CASE WHEN pvl.outcome = 'PENDING'         THEN 1 ELSE 0 END)  AS pending,
+                SUM(CASE WHEN pvl.outcome = 'CORRECT'         THEN 1 ELSE 0 END)  AS correct,
+                SUM(CASE WHEN pvl.outcome = 'WRONG_DIRECTION' THEN 1 ELSE 0 END)  AS wrong_direction,
+                SUM(CASE WHEN pvl.outcome = 'WRONG_TIMING'    THEN 1 ELSE 0 END)  AS wrong_timing,
+                ROUND(
+                    (
+                        SUM(CASE WHEN pvl.outcome = 'CORRECT'       THEN 1.0 ELSE 0 END) +
+                        SUM(CASE WHEN pvl.outcome = 'WRONG_TIMING'  THEN 0.5 ELSE 0 END)
+                    ) / NULLIF(
+                        SUM(CASE WHEN pvl.outcome != 'PENDING' THEN 1 ELSE 0 END), 0
+                    ), 3
+                )                                                                  AS weighted_accuracy
+            FROM pattern_validation_log pvl
+            LEFT JOIN news_effect_patterns nep
+                   ON nep.event_type = pvl.event_type AND nep.active = 'true'
+            GROUP BY pvl.event_type, nep.status, nep.evidence_quality
+            ORDER BY pvl.event_type
+            """
+        ) or []
+        log.info("pattern_validation_data loaded: %d rows", len(rows))
+        return [dict(r) for r in rows]
+    except Exception as e:
+        log.warning("_load_pattern_validation_data failed (non-fatal): %s", e)
+        return []
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # TOKEN BUDGET HELPERS
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -311,6 +369,7 @@ def _build_data_context(
     nrb: list[dict],
     audit: list[dict],
     lessons: list[dict],
+    pattern_validation: list[dict] | None = None,
 ) -> tuple[str, dict]:
     budget = MAX_DATA_TOKENS // 6
 
@@ -320,6 +379,7 @@ def _build_data_context(
     nrb_rows,    nrb_omit    = _trim_rows_to_budget(nrb,           budget)
     audit_rows,  audit_omit  = _trim_rows_to_budget(audit,         budget)
     lesson_rows, lesson_omit = _trim_rows_to_budget(lessons,       budget)
+    pv_rows,     pv_omit     = _trim_rows_to_budget(pattern_validation or [], budget)
 
     def _section(title, rows, omitted):
         note  = f" [{omitted} oldest omitted]" if omitted else ""
@@ -338,12 +398,14 @@ def _build_data_context(
     if nrb_rows:    parts.append(_section("NRB MONTHLY (last 3)",                 nrb_rows,    nrb_omit))
     if audit_rows:  parts.append(_section("CLAUDE ACCURACY AUDIT (last 4 weeks)", audit_rows,  audit_omit))
     if lesson_rows: parts.append(_section("ACTIVE LEARNING LESSONS (top 20)",     lesson_rows, lesson_omit))
+    if pv_rows:     parts.append(_section("POLITICAL EVENT PATTERN ACCURACY",     pv_rows,     pv_omit))
 
     context = "\n\n".join(parts)
     counts  = {
         "daily_context": len(dc_rows), "trade_journal": len(tj_rows),
         "gate_misses":   len(gm_rows), "nrb":           len(nrb_rows),
         "audit":         len(audit_rows), "lessons":    len(lesson_rows),
+        "pattern_validation": len(pv_rows),
         "est_tokens":    len(context) // 4,
     }
     return context, counts
@@ -1056,9 +1118,11 @@ def run_preview(dry_run: bool = False) -> None:
     prior_councils = _load_prior_councils(run_month)
     accuracy_review = _load_accuracy_review()
     pending_proposals = _load_pending_proposals()
+    pattern_validation = _load_pattern_validation_data()
 
     data_context, counts = _build_data_context(
-        daily_context, trade_journal, gate_misses, nrb, audit_history, lessons
+        daily_context, trade_journal, gate_misses, nrb, audit_history, lessons,
+        pattern_validation=pattern_validation,
     )
     log.info("Data: dc=%d tj=%d gm=%d nrb=%d ~%d tokens",
              counts["daily_context"], counts["trade_journal"],
@@ -1201,9 +1265,11 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
     prior_councils    = _load_prior_councils(run_month)
     accuracy_review   = _load_accuracy_review()
     pending_proposals = _load_pending_proposals()
+    pattern_validation = _load_pattern_validation_data()
 
     data_context, counts = _build_data_context(
         daily_context, trade_journal, gate_misses, nrb, audit_history, lessons,
+        pattern_validation=pattern_validation,
     )
     log.info(
         "Data loaded — dc=%d tj=%d gm=%d nrb=%d audit=%d lessons=%d est_tokens=%d",
@@ -1298,6 +1364,18 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
         if not approved_items:
             approved_items = proposed_items
         _write_agenda(run_month, approved_items)
+
+    # ── Inject permanent agenda items (Python-level, not prompt instructions) ──
+    approved_items = list(approved_items)  # ensure mutable copy
+    for item in MONTHLY_PERMANENT_ITEMS:
+        if item not in approved_items:
+            approved_items.append(item)
+    if _is_quarterly_review_month():
+        for item in QUARTERLY_PERMANENT_ITEMS:
+            if item not in approved_items:
+                approved_items.append(item)
+        log.info("Quarterly review month — added %d quarterly permanent items",
+                 len(QUARTERLY_PERMANENT_ITEMS))
 
     n_items = len(approved_items)
     log.info("NEPSE MONTHLY COUNCIL — %s — %d agenda items", run_month, n_items)
@@ -1514,6 +1592,12 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
     # ── Write lessons ─────────────────────────────────────────────────────────
     lessons_written = _write_lessons(lessons_from_chairman, run_month, dry_run=dry_run)
 
+    # ── Quarterly pattern status review ───────────────────────────────────────
+    if _is_quarterly_review_month():
+        log.info("Running quarterly political pattern review...")
+        _pattern_tally = _run_quarterly_pattern_review(dry_run=dry_run)
+        log.info("Quarterly pattern review tally: %s", _pattern_tally)
+
     # ── Write monthly_override ────────────────────────────────────────────────
     _write_monthly_override(
         run_month, confidence_score, market_state_now, checklist, dry_run=dry_run,
@@ -1562,6 +1646,101 @@ def _run_weight_review(dry_run: bool = False) -> Optional[dict]:
     """Quarterly lesson weight review using DeepSeek R1 + Opus validation."""
     log.info("Weight review not yet implemented — skipping")
     return None
+
+
+def _run_quarterly_pattern_review(dry_run: bool = False) -> dict:
+    """
+    Quarterly pattern status update based on weighted_accuracy thresholds.
+    Called in quarterly months (Mar/Jun/Sep/Dec) after council lessons are written.
+
+    Promotion rules (applied to non-DISABLED patterns with active='true'):
+      - resolved ≥ 5 AND weighted_accuracy ≥ 0.70 AND status == 'MONITOR_ONLY' → promote to ACTIVE
+      - resolved ≥ 5 AND weighted_accuracy in [0.50, 0.70) → no change (WATCH)
+      - resolved ≥ 5 AND weighted_accuracy < 0.50 → demote: ACTIVE→MONITOR_ONLY, MONITOR_ONLY→DISABLED
+      - resolved < 5 → no change (insufficient data)
+
+    Returns tally dict. Never raises.
+    """
+    tally = {"promoted": 0, "demoted": 0, "disabled": 0, "unchanged": 0, "skipped": 0}
+    try:
+        rows = run_raw_sql(
+            """
+            SELECT
+                nep.id,
+                nep.event_type,
+                nep.status,
+                COUNT(pvl.id)                                                        AS total,
+                SUM(CASE WHEN pvl.outcome != 'PENDING' THEN 1 ELSE 0 END)           AS resolved,
+                ROUND(
+                    (
+                        SUM(CASE WHEN pvl.outcome = 'CORRECT'       THEN 1.0 ELSE 0 END) +
+                        SUM(CASE WHEN pvl.outcome = 'WRONG_TIMING'  THEN 0.5 ELSE 0 END)
+                    ) / NULLIF(
+                        SUM(CASE WHEN pvl.outcome != 'PENDING' THEN 1 ELSE 0 END), 0
+                    ), 3
+                )                                                                    AS weighted_accuracy
+            FROM news_effect_patterns nep
+            LEFT JOIN pattern_validation_log pvl ON pvl.event_type = nep.event_type
+            WHERE nep.active = 'true' AND nep.status != 'DISABLED'
+            GROUP BY nep.id, nep.event_type, nep.status
+            """
+        ) or []
+
+        now_str = datetime.now(NST).strftime("%Y-%m-%d")
+
+        for r in rows:
+            pat_id   = r["id"]
+            et       = r["event_type"]
+            status   = r.get("status", "")
+            resolved = int(r.get("resolved") or 0)
+            acc      = float(r.get("weighted_accuracy") or 0.0)
+
+            if resolved < 5:
+                log.info("Pattern %s: insufficient resolved predictions (%d) — skip", et, resolved)
+                tally["skipped"] += 1
+                continue
+
+            new_status = None
+            if acc >= 0.70 and status == "MONITOR_ONLY":
+                new_status = "ACTIVE"
+                tally["promoted"] += 1
+                log.info("Pattern %s: PROMOTED to ACTIVE (acc=%.3f, n=%d)", et, acc, resolved)
+            elif acc < 0.50:
+                if status == "ACTIVE":
+                    new_status = "MONITOR_ONLY"
+                    tally["demoted"] += 1
+                    log.info("Pattern %s: DEMOTED to MONITOR_ONLY (acc=%.3f, n=%d)", et, acc, resolved)
+                elif status == "MONITOR_ONLY":
+                    new_status = "DISABLED"
+                    tally["disabled"] += 1
+                    log.info("Pattern %s: DISABLED (acc=%.3f, n=%d)", et, acc, resolved)
+            else:
+                tally["unchanged"] += 1
+                log.info("Pattern %s: unchanged %s (acc=%.3f, n=%d)", et, status, acc, resolved)
+
+            if new_status and not dry_run:
+                upsert_row(
+                    "news_effect_patterns",
+                    {"id": str(pat_id)},
+                    {
+                        "id":               str(pat_id),
+                        "status":           new_status,
+                        "weighted_accuracy": str(acc),
+                        "occurrence_count":  str(resolved),
+                        "notes": (
+                            f"[{now_str} quarterly-review] {status}→{new_status} "
+                            f"acc={acc:.3f} resolved={resolved}"
+                        ),
+                    },
+                )
+            elif new_status and dry_run:
+                log.info("[DRY-RUN] Would update %s: %s→%s", et, status, new_status)
+
+        log.info("Quarterly pattern review: %s", tally)
+    except Exception as exc:
+        log.error("_run_quarterly_pattern_review failed: %s", exc)
+
+    return tally
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

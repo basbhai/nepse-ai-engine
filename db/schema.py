@@ -53,6 +53,8 @@ TABS: dict[str, str] = {
     "accuracy_review_log": "accuracy_review_log",
     "system_proposals": "system_proposals",
     "agent_trace": "agent_trace",
+    "news_effect_patterns": "news_effect_patterns",
+    "pattern_validation_log": "pattern_validation_log",
 }
 
 TABLE_DDL: dict[str, str] = {
@@ -1413,6 +1415,63 @@ TABLE_DDL: dict[str, str] = {
         ON "system_proposals" (component);
     """,
 
+    "news_effect_patterns": """
+CREATE TABLE IF NOT EXISTS "news_effect_patterns" (
+    id SERIAL PRIMARY KEY,
+    event_type TEXT NOT NULL,
+    event_category TEXT DEFAULT 'POLITICAL',
+    lag_start TEXT NOT NULL,
+    lag_end TEXT NOT NULL,
+    magnitude TEXT NOT NULL,
+    market_regime TEXT DEFAULT 'ALL',
+    status TEXT DEFAULT 'ACTIVE',
+    confidence_basis TEXT NOT NULL,
+    evidence_quality TEXT NOT NULL,
+    occurrence_count TEXT DEFAULT '0',
+    weighted_accuracy TEXT DEFAULT '0',
+    source TEXT DEFAULT 'research_validation_2026',
+    superseded_by TEXT,
+    active TEXT DEFAULT 'true',
+    notes TEXT,
+    inserted_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS ix_news_effect_patterns_event_type
+    ON "news_effect_patterns" (event_type);
+CREATE INDEX IF NOT EXISTS ix_news_effect_patterns_status
+    ON "news_effect_patterns" (status);
+""",
+
+    "pattern_validation_log": """
+CREATE TABLE IF NOT EXISTS "pattern_validation_log" (
+    id SERIAL PRIMARY KEY,
+    event_type TEXT NOT NULL,
+    event_date TEXT NOT NULL,
+    event_cluster_id TEXT,
+    pattern_id TEXT NOT NULL,
+    lag_start TEXT NOT NULL,
+    lag_end TEXT NOT NULL,
+    magnitude_applied TEXT NOT NULL,
+    market_regime TEXT DEFAULT 'UNKNOWN',
+    nepal_crisis_score_at_detection TEXT DEFAULT '0',
+    predicted_date_start TEXT NOT NULL,
+    predicted_date_end TEXT NOT NULL,
+    actual_nepse_pct TEXT,
+    magnitude_error TEXT,
+    outcome TEXT DEFAULT 'PENDING',
+    co_occurrence_count TEXT DEFAULT '1',
+    escalated_from TEXT,
+    scored_by TEXT DEFAULT 'pending',
+    scored_at TEXT,
+    inserted_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS ix_pattern_validation_log_event_type
+    ON "pattern_validation_log" (event_type);
+CREATE INDEX IF NOT EXISTS ix_pattern_validation_log_outcome
+    ON "pattern_validation_log" (outcome);
+CREATE INDEX IF NOT EXISTS ix_pattern_validation_log_predicted_date_start
+    ON "pattern_validation_log" (predicted_date_start);
+""",
+
     "agent_trace": """
     CREATE TABLE IF NOT EXISTS "agent_trace" (
         id SERIAL PRIMARY KEY,
@@ -1485,4 +1544,18 @@ TABLE_COLUMNS: dict[str, list[str]] = {
     "accuracy_review_log": ["run_month", "trade_count", "signal_accuracy", "sector_accuracy", "market_state_accuracy", "confidence_calibration", "false_block_analysis", "deepseek_proposals", "status", "inserted_at"],
     "system_proposals": ["run_month", "source", "component", "proposal_type", "current_behavior", "proposed_change", "data_evidence", "requires_new_data", "new_data_source", "confidence", "status", "approved_at", "rejected_at", "rejection_reason", "inserted_at"],
     "agent_trace": ["cycle_ts", "step", "tool", "request_args", "response", "escalated", "decision", "elapsed_ms", "created_at"],
+    "news_effect_patterns": [
+        "event_type", "event_category", "lag_start", "lag_end", "magnitude",
+        "market_regime", "status", "confidence_basis", "evidence_quality",
+        "occurrence_count", "weighted_accuracy", "source", "superseded_by",
+        "active", "notes",
+    ],
+    "pattern_validation_log": [
+        "event_type", "event_date", "event_cluster_id", "pattern_id",
+        "lag_start", "lag_end", "magnitude_applied", "market_regime",
+        "nepal_crisis_score_at_detection", "predicted_date_start",
+        "predicted_date_end", "actual_nepse_pct", "magnitude_error",
+        "outcome", "co_occurrence_count", "escalated_from",
+        "scored_by", "scored_at",
+    ],
 }

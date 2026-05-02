@@ -30,6 +30,14 @@ from config import NST
 
 logger = logging.getLogger(__name__)
 
+# ── Political event context (optional — fails gracefully if tables not ready) ─
+try:
+    import modules.event_detector as _event_detector_ca
+    _CA_ED_AVAILABLE = True
+except Exception:
+    _event_detector_ca = None  # type: ignore[assignment]
+    _CA_ED_AVAILABLE = False
+
 # Module-level buy-block state set once per run_analysis() call
 _BUY_BLOCKED:     bool = False
 _BUY_BLOCK_SCORE: int  = 0
@@ -672,6 +680,17 @@ def _build_prompt(
     hold_days        = getattr(flag, "suggested_hold", 17)
     fund_section_str = _format_fundamental_section(fund_ctx) if fund_ctx else ""
 
+    # Political event context block (empty string if nothing active)
+    _event_ctx = ""
+    if _CA_ED_AVAILABLE:
+        try:
+            _event_ctx = _event_detector_ca.build_claude_context() or ""
+        except Exception:
+            _event_ctx = ""
+    event_ctx_section = (
+        f"\n{_event_ctx}\n" if _event_ctx else ""
+    )
+
     return f"""You are a senior NEPSE quantitative analyst with deep knowledge of Nepal market research.
 Analyze this specific stock and produce a precise trading recommendation.
 
@@ -757,7 +776,7 @@ SITUATIONAL CONTEXT
 ==============================================
 Trading Day:     {day_context}
 Herding Check:   {herding_alert}
-
+{event_ctx_section}
 ==============================================
 LEARNING HUB LESSONS (most relevant first)
 ==============================================

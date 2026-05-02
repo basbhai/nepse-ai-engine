@@ -499,6 +499,45 @@ def _serialize_compact(rows: list[dict], keys: tuple) -> str:
     return "\n".join(lines)
 
 
+def _load_pattern_accuracy() -> list[dict]:
+    """
+    Load political pattern accuracy grouped by event_type.
+    Computes weighted accuracy: CORRECT=1.0, WRONG_TIMING=0.5, WRONG_DIRECTION=0.0.
+    Returns [] on error. Never raises.
+    """
+    try:
+        rows = run_raw_sql(
+            """
+            SELECT
+                pvl.event_type,
+                nep.status                                                        AS pattern_status,
+                nep.evidence_quality,
+                COUNT(*)                                                           AS total,
+                SUM(CASE WHEN pvl.outcome = 'PENDING'        THEN 1 ELSE 0 END)  AS pending,
+                SUM(CASE WHEN pvl.outcome = 'CORRECT'        THEN 1 ELSE 0 END)  AS correct,
+                SUM(CASE WHEN pvl.outcome = 'WRONG_DIRECTION' THEN 1 ELSE 0 END) AS wrong_direction,
+                SUM(CASE WHEN pvl.outcome = 'WRONG_TIMING'   THEN 1 ELSE 0 END)  AS wrong_timing,
+                ROUND(
+                    (
+                        SUM(CASE WHEN pvl.outcome = 'CORRECT'        THEN 1.0 ELSE 0 END) +
+                        SUM(CASE WHEN pvl.outcome = 'WRONG_TIMING'   THEN 0.5 ELSE 0 END)
+                    ) / NULLIF(
+                        SUM(CASE WHEN pvl.outcome != 'PENDING' THEN 1 ELSE 0 END), 0
+                    ), 3
+                )                                                                 AS weighted_accuracy
+            FROM pattern_validation_log pvl
+            LEFT JOIN news_effect_patterns nep
+                   ON nep.event_type = pvl.event_type AND nep.active = 'true'
+            GROUP BY pvl.event_type, nep.status, nep.evidence_quality
+            ORDER BY pvl.event_type
+            """
+        ) or []
+        return [dict(r) for r in rows]
+    except Exception as e:
+        log.warning("_load_pattern_accuracy failed: %s", e)
+        return []
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # PROMPT BUILDERS (unchanged from here onwards)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -626,11 +665,35 @@ Use [] for empty arrays. Use exact key names shown  -  any deviation silently br
   }
 }
 
+POLITICAL EVENT PATTERN REVIEW:
+Each week you receive accuracy data for political event patterns (news_effect_patterns table).
+Your job: for each pattern with ≥3 resolved predictions, assess whether it is performing.
+- weighted_accuracy ≥ 0.70 and ≥5 predictions → recommend KEEP or PROMOTE
+- weighted_accuracy 0.50-0.69 → recommend WATCH (no status change yet)
+- weighted_accuracy < 0.50 and ≥5 resolved → recommend FLAG_FOR_DEMOTION (quarterly council decides)
+- Fewer than 3 resolved predictions → recommend INSUFFICIENT_DATA
+Output your assessment as pattern_reviews (see schema below).
+NOTE: You are ONLY flagging patterns for the quarterly council — you do NOT change status directly.
+
 Key name rules (parser is exact-match):
   lessons_to_write      NOT new_lessons, NOT lessons
   lessons_to_deactivate NOT lessons_superseded, NOT deactivate
   gate_proposals        NOT proposals
   claude_audit          NOT audit, NOT accuracy_audit
+  pattern_reviews       NOT pattern_assessment, NOT pattern_scores
+
+Add this block to your JSON output (after claude_audit):
+  "pattern_reviews": [
+    {
+      "event_type": "<e.g. CIVIL_UNREST>",
+      "pattern_status": "<ACTIVE|MONITOR_ONLY>",
+      "total_predictions": <int>,
+      "resolved_predictions": <int>,
+      "weighted_accuracy": <float 0.0-1.0>,
+      "recommendation": "<KEEP | PROMOTE | WATCH | FLAG_FOR_DEMOTION | INSUFFICIENT_DATA>",
+      "reasoning": "<one sentence>"
+    }
+  ]
 """
 
 def _build_user_prompt(
@@ -648,6 +711,7 @@ def _build_user_prompt(
     nepse_trend: list[dict],
     backtest: list[dict],
     claude_audit_history: list[dict],
+    pattern_accuracy: list[dict] | None = None,
 ) -> str:
 
     nrb_str = json.dumps({k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in nrb.items() if v is not None}, ensure_ascii=False, default=str) if nrb else "No NRB data available"
@@ -735,13 +799,17 @@ Use this to spot trends: is BUY accuracy improving or degrading? Is false_avoid_
 Are macro calls consistently off? Trend direction matters more than any single week.
 {_serialize_compact(claude_audit_history, _CLAUDE_AUDIT_KEYS) if claude_audit_history else "No prior audit history yet  -  this is the first review."}
 
+=== POLITICAL EVENT PATTERN ACCURACY (since system inception) ===
+{_serialize_compact(pattern_accuracy or [], ("event_type","pattern_status","evidence_quality","total","pending","correct","wrong_direction","wrong_timing","weighted_accuracy")) if pattern_accuracy else "No pattern predictions logged yet."}
+
 === YOUR TASK ===
 1. Analyse trade + WAIT/AVOID outcomes + daily context.
 2. Find patterns: which signals work, which fail, in which conditions/sectors.
 3. Cross-reference: did macro explain the outcome? Alpha near 0 = macro caused it.
 4. Review each active lesson  -  still valid, strengthen, or supersede?
 5. Write new lessons only with sufficient evidence (anti-overfitting rules).
-6. Output JSON as specified. No markdown."""
+6. Review political event pattern accuracy and write pattern_reviews for patterns with ≥3 resolved predictions.
+7. Output JSON as specified. No markdown."""
 
 # ─────────────────────────────────────────────────────────────────────────────
 # GPT OUTPUT VALIDATION
@@ -1171,6 +1239,17 @@ def run(dry_run: bool = False):
         log.warning("Use --dry-run to preview, or manually delete existing rows to re-run")
         return None
 
+    # ── Auto-score pending political event predictions whose window has passed ──
+    try:
+        import sys as _sys
+        import os as _os
+        _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+        from modules.event_detector import score_pending_predictions
+        _score_tally = score_pending_predictions(dry_run=dry_run)
+        log.info("Pending predictions scored: %s", _score_tally)
+    except Exception as _exc:
+        log.debug("score_pending_predictions non-fatal: %s", _exc)
+
     # -- Load all data
     trades, trade_agg = _load_trade_journal()
     wait_avoid    = _load_wait_avoid_outcomes()
@@ -1184,6 +1263,8 @@ def run(dry_run: bool = False):
     nepse_trend   = _load_nepse_trend()
     backtest      = _load_backtest_results()
     claude_audit_history = _load_claude_audit_history()
+    pattern_accuracy = _load_pattern_accuracy()
+    log.info("Pattern accuracy rows loaded: %d", len(pattern_accuracy))
 
     # -- Build prompts
     system_prompt = _build_system_prompt()
@@ -1191,6 +1272,7 @@ def run(dry_run: bool = False):
         review_week, trades, trade_agg, wait_avoid, buy_decisions, daily_context,
         active_lessons, nrb, gate_summary, macro_trend, fd_trend, nepse_trend,
         backtest, claude_audit_history,
+        pattern_accuracy=pattern_accuracy,
     )
 
     log.info("Calling GPT-5o for weekly review (prompt ~%d tokens)...",
@@ -1221,11 +1303,54 @@ def run(dry_run: bool = False):
     review_summary   = gpt_output.get("review_summary", "")
     lessons_to_write = gpt_output.get("lessons_to_write", [])
     lessons_to_deact = gpt_output.get("lessons_to_deactivate", [])
+    pattern_reviews  = gpt_output.get("pattern_reviews", [])
 
     log.info("GPT review complete:")
     log.info("  Summary: %s", review_summary)
     log.info("  Lessons to write: %d", len(lessons_to_write))
     log.info("  Lessons to deactivate: %d", len(lessons_to_deact))
+    log.info("  Pattern reviews: %d", len(pattern_reviews))
+
+    # ── Persist pattern reviews: sync computed weighted_accuracy back to table ─
+    if pattern_reviews and not dry_run:
+        _now_str = now.strftime("%Y-%m-%d %H:%M")
+        for pr in pattern_reviews:
+            et  = pr.get("event_type", "")
+            rec = pr.get("recommendation", "")
+            if not et:
+                continue
+            try:
+                # Find matching pattern row
+                existing = run_raw_sql(
+                    "SELECT id, notes FROM news_effect_patterns "
+                    "WHERE event_type = %s AND active = 'true' LIMIT 1",
+                    (et,),
+                ) or []
+                if not existing:
+                    continue
+                row_id = existing[0]["id"]
+                old_notes = existing[0].get("notes") or ""
+                review_note = (
+                    f"[{_now_str} weekly-review] {rec}: {pr.get('reasoning','')}"
+                )
+                new_notes = f"{old_notes} | {review_note}" if old_notes else review_note
+                # Also sync computed weighted_accuracy from pattern_accuracy data
+                acc_row = next(
+                    (a for a in pattern_accuracy if a.get("event_type") == et), None
+                )
+                update_fields: dict = {"notes": new_notes[:2000]}
+                if acc_row and acc_row.get("weighted_accuracy") is not None:
+                    update_fields["weighted_accuracy"] = str(acc_row["weighted_accuracy"])
+                from sheets import upsert_row
+                upsert_row(
+                    "news_effect_patterns",
+                    {"id": str(row_id)},
+                    {**update_fields, "id": str(row_id)},
+                )
+                log.info("Pattern %s updated: rec=%s acc=%s",
+                         et, rec, update_fields.get("weighted_accuracy", "—"))
+            except Exception as _pe:
+                log.warning("Pattern review persist failed for %s: %s", et, _pe)
 
     # ── Write to DB
     written, deactivated = _write_lessons(

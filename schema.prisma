@@ -1385,6 +1385,62 @@ model system_proposals {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// POLITICAL EVENT PATTERN SYSTEM
+// ─────────────────────────────────────────────────────────────────────────────
+
+model news_effect_patterns {
+  id                 Int      @id @default(autoincrement())
+  event_type         String
+  event_category     String   @default("POLITICAL")
+  lag_start          String
+  lag_end            String
+  magnitude          String
+  market_regime      String   @default("ALL")
+  status             String   @default("ACTIVE")
+  confidence_basis   String
+  evidence_quality   String
+  occurrence_count   String   @default("0")
+  weighted_accuracy  String   @default("0")
+  source             String   @default("research_validation_2026")
+  superseded_by      String?
+  active             String   @default("true")
+  notes              String?
+  inserted_at        DateTime @default(now())
+
+  @@index([event_type])
+  @@index([status])
+  @@index([active])
+}
+
+model pattern_validation_log {
+  id                          Int      @id @default(autoincrement())
+  event_type                  String
+  event_date                  String
+  event_cluster_id            String?
+  pattern_id                  String
+  lag_start                   String
+  lag_end                     String
+  magnitude_applied           String
+  market_regime               String   @default("UNKNOWN")
+  nepal_crisis_score_at_detection String @default("0")
+  predicted_date_start        String
+  predicted_date_end          String
+  actual_nepse_pct            String?
+  magnitude_error             String?
+  outcome                     String   @default("PENDING")
+  co_occurrence_count         String   @default("1")
+  escalated_from              String?
+  scored_by                   String   @default("pending")
+  scored_at                   String?
+  inserted_at                 DateTime @default(now())
+
+  @@index([event_type])
+  @@index([outcome])
+  @@index([event_date])
+  @@index([predicted_date_start])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // AGENT TRACE — audit log for every step the agentic WAIT monitor takes
 // ─────────────────────────────────────────────────────────────────────────────
 

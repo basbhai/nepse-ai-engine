@@ -122,6 +122,10 @@ BACKUP_TABLES = [
     # ── Accuracy & proposals ──────────────────────────────────────────────────
     "accuracy_review_log",    # DeepSeek monthly stats — not reconstructible
     "system_proposals",       # architectural proposals + approval audit trail
+
+    # ── Political event pattern learning system ───────────────────────────────
+    "news_effect_patterns",   # validated political patterns — seeded + council-updated
+    "pattern_validation_log", # lag predictions + accuracy outcomes — irreplaceable
 ]
 
 # Primary keys per table — used for ON CONFLICT
@@ -146,6 +150,8 @@ PRIMARY_KEYS = {
     "monthly_override":          ["id"],
     "accuracy_review_log":       ["id"],
     "system_proposals":          ["id"],
+    "news_effect_patterns":      ["id"],
+    "pattern_validation_log":    ["id"],
 }
 
 
