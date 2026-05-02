@@ -329,7 +329,7 @@ def _upsert_setting(key: str, value: str, existing: set[str], dry_run: bool) -> 
         log.info("[DRY-RUN] Would %s setting: %s = %s", action, key, value)
         return
     from sheets import upsert_row
-    upsert_row("settings", {"key": key}, {"key": key, "value": value})
+    upsert_row("settings", {"key": key, "value": value}, conflict_columns=["key"])
     log.info("Upserted setting: %s = %s", key, value)
 
 
