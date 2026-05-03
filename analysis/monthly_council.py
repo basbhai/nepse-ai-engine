@@ -5,25 +5,35 @@ analysis/monthly_council.py — NEPSE AI Engine
 Multi-model deliberation council. Runs once per month (first Sunday).
 
 Pipeline:
-  Stage -1 : GPT-5.4-nano   — hindsight audit of last month's council vs outcomes
-  Stage 0a : GPT-5.4-nano   — draft 3-5 agenda items informed by audit
-  Stage 0b : Haiku-4.5      — review, approve, reorder agenda → write to DB
-  Stage 1-5: Per agenda item (5 models, sequential, adversarial):
-               Grok 4.20        [web]  — contrarian/sentiment
-               GPT-5.4          [web]  — macro/narrative
-               DeepSeek V4 Pro  [no]   — quant/math/technical
-               Gemini 3.1 Pro   [web]  — DEVIL'S ADVOCATE (mandatory counter-narrative)
-               Sonnet 4.5       [web]  — deep fundamental
+  Stage -1 : FREE_MODEL_0  — hindsight audit of last month's council vs outcomes
+  Stage 0a : FREE_MODEL_1  — draft 3-5 agenda items informed by audit
+  Stage 0b : FREE_MODEL_2  — review, approve, reorder agenda → write to DB
+  Stage 1-5: Per agenda item (5 slots, rotating free models, sequential, adversarial):
+               Slot 1  [web=False] — contrarian/sentiment
+               Slot 2  [web=False] — macro/narrative
+               Slot 3  [web=False] — quant/math/technical
+               Slot 4  [web=False] — devil's advocate
+               Slot 5  [web=False] — deep fundamental
              Each model reads full data + all prior responses.
              Adversarial instruction: engage with prior model's claim.
-             Gemini (Stage 4) MUST challenge consensus if all prior are same direction.
-  Stage 6  : Opus 4.6 [web]  — red team (independent, no shared context)
-  Stage 7  : Opus 4.7 [web]  — chairman synthesis (independent, upgraded prompt)
+  Stage 6  : FREE_MODEL   — red team (independent, no shared context)
+  Stage 7  : FREE_MODEL   — chairman synthesis
   Stage 8  : Telegram notification
+
+─────────────────────────────────────────────────────────────────────────────
+TEST STACK vs PRODUCTION STACK
+─────────────────────────────────────────────────────────────────────────────
+Set COUNCIL_USE_FREE_STACK = True  → rotates 3 free models, no cost
+Set COUNCIL_USE_FREE_STACK = False → uses original flagship model stack
+
+When you are ready for next real council meeting:
+  1. Set COUNCIL_USE_FREE_STACK = False
+  2. Done. Original models restore automatically.
+─────────────────────────────────────────────────────────────────────────────
 
 PRE-COUNCIL (Saturday before first Sunday):
   Runs Stage -1 + Stage 0a → sends draft agenda to Telegram for review.
-  You can reply /agenda_add <item> to add items, /agenda_ok to approve.
+  Reply /agenda_add <item> to add items, /agenda_ok to approve.
   If no response by Sunday 9 AM NST → auto-approves.
 
 Inputs (30-day lookback):
@@ -69,36 +79,71 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# ── Council model constants ───────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# ── STACK SWITCH ─────────────────────────────────────────────────────────────
+# Set True for free-model testing, False for real council with flagship models
+# ═══════════════════════════════════════════════════════════════════════════════
+COUNCIL_USE_FREE_STACK = True
+
+# ── Free test models (rotate round-robin) ─────────────────────────────────────
+_FREE_MODELS = [
+    "tencent/hy3-preview:free",
+    "google/gemma-3-27b-it:free",
+    "openai/gpt-oss-20b:free",
+]
+_free_counter = 0   # module-level rotation counter
+
+def _next_free_model() -> str:
+    """Return next free model in round-robin rotation and log it."""
+    global _free_counter
+    model = _FREE_MODELS[_free_counter % len(_FREE_MODELS)]
+    _free_counter += 1
+    log.info("[FREE_STACK] rotating to model: %s", model)
+    return model
+
+# ── Production model constants ────────────────────────────────────────────────
 # Pre-council / agenda stages (cheap)
-COUNCIL_AUDIT_MODEL    = "openai/gpt-5.4-nano"      # Stage -1, 0a
-COUNCIL_REVIEW_MODEL   = "anthropic/claude-haiku-4.5" # Stage 0b
+_PROD_AUDIT_MODEL    = "openai/gpt-5.4-nano"
+_PROD_REVIEW_MODEL   = "anthropic/claude-haiku-4.5"
 
 # Discussion models (5 flagship models — different families)
-COUNCIL_GROK_MODEL     = "x-ai/grok-4.20"                    # Stage 1 — sentiment/news [web]
-COUNCIL_GPT_MODEL      = "openai/gpt-5.4"                    # Stage 2 — macro/narrative [web]
-COUNCIL_DEEPSEEK_MODEL = "deepseek/deepseek-v4-pro"           # Stage 3 — quant/math [no web]
-COUNCIL_GEMINI_MODEL   = "google/gemini-3.1-pro-preview"      # Stage 4 — devil's advocate [web]
-COUNCIL_SONNET_MODEL   = "anthropic/claude-sonnet-4.5"        # Stage 5 — deep fundamental [web]
+_PROD_GROK_MODEL     = "x-ai/grok-4.20"
+_PROD_GPT_MODEL      = "openai/gpt-5.4"
+_PROD_DEEPSEEK_MODEL = "deepseek/deepseek-v4-pro"
+_PROD_GEMINI_MODEL   = "google/gemini-3.1-pro-preview"
+_PROD_SONNET_MODEL   = "anthropic/claude-sonnet-4.5"
 
 # Post-discussion (flagship)
-COUNCIL_REDTEAM_MODEL  = "anthropic/claude-opus-4.6"          # Stage 6 — red team [web]
-COUNCIL_CHAIRMAN_MODEL = "anthropic/claude-opus-4.7"          # Stage 7 — chairman [web]
+_PROD_REDTEAM_MODEL  = "anthropic/claude-opus-4.6"
+_PROD_CHAIRMAN_MODEL = "anthropic/claude-opus-4.7"
 
-# Weight review (quarterly)
+# ── Active model constants (resolved at import based on stack switch) ─────────
+# When free stack: all stages use _next_free_model() at call time.
+# When prod stack: fixed constants below.
+COUNCIL_AUDIT_MODEL    = _PROD_AUDIT_MODEL    if not COUNCIL_USE_FREE_STACK else None
+COUNCIL_REVIEW_MODEL   = _PROD_REVIEW_MODEL   if not COUNCIL_USE_FREE_STACK else None
+COUNCIL_GROK_MODEL     = _PROD_GROK_MODEL     if not COUNCIL_USE_FREE_STACK else None
+COUNCIL_GPT_MODEL      = _PROD_GPT_MODEL      if not COUNCIL_USE_FREE_STACK else None
+COUNCIL_DEEPSEEK_MODEL = _PROD_DEEPSEEK_MODEL if not COUNCIL_USE_FREE_STACK else None
+COUNCIL_GEMINI_MODEL   = _PROD_GEMINI_MODEL   if not COUNCIL_USE_FREE_STACK else None
+COUNCIL_SONNET_MODEL   = _PROD_SONNET_MODEL   if not COUNCIL_USE_FREE_STACK else None
+COUNCIL_REDTEAM_MODEL  = _PROD_REDTEAM_MODEL  if not COUNCIL_USE_FREE_STACK else None
+COUNCIL_CHAIRMAN_MODEL = _PROD_CHAIRMAN_MODEL if not COUNCIL_USE_FREE_STACK else None
+
+# Weight review (quarterly) — always DeepSeek R1
 COUNCIL_WEIGHT_DEEPSEEK = "deepseek/deepseek-r1"
 
 # ── Token budget ──────────────────────────────────────────────────────────────
 MAX_DATA_TOKENS       = 2000
-MAX_DISCUSSION_TOKENS = 800    # increased for flagship models
-MAX_CHAIRMAN_TOKENS   = 2000   # increased — upgraded chairman
-MAX_REDTEAM_TOKENS    = 1200   # increased — upgraded red team
+MAX_DISCUSSION_TOKENS = 800
+MAX_CHAIRMAN_TOKENS   = 2000
+MAX_REDTEAM_TOKENS    = 1200
 MAX_AGENDA_TOKENS     = 600
 
 DATA_LOOKBACK_DAYS = 30
 
 # ── Pre-council agenda preview DB key ────────────────────────────────────────
-AGENDA_PREVIEW_SETTING = "COUNCIL_AGENDA_PREVIEW"
+AGENDA_PREVIEW_SETTING    = "COUNCIL_AGENDA_PREVIEW"
 AGENDA_PREVIEW_OK_SETTING = "COUNCIL_AGENDA_APPROVED"
 
 
@@ -107,27 +152,23 @@ AGENDA_PREVIEW_OK_SETTING = "COUNCIL_AGENDA_APPROVED"
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _is_first_sunday_of_month() -> bool:
-    """True only on the first Sunday of the calendar month (NST)."""
     now = datetime.now(NST)
     return now.weekday() == 6 and now.day <= 7
 
 
 def _is_saturday_before_first_sunday() -> bool:
-    """True on Saturday that immediately precedes first Sunday of month (NST)."""
     now = datetime.now(NST)
-    if now.weekday() != 5:  # not Saturday
+    if now.weekday() != 5:
         return False
     tomorrow = now + timedelta(days=1)
     return tomorrow.weekday() == 6 and tomorrow.day <= 7
 
 
 def _is_quarterly_review_month() -> bool:
-    """True in March, June, September, December — quarterly pattern council months."""
     return datetime.now(NST).month in (3, 6, 9, 12)
 
 
 def _check_already_run(run_month: str) -> bool:
-    """True if council for this month already has log entries."""
     try:
         rows = run_raw_sql(
             "SELECT COUNT(*) AS cnt FROM monthly_council_log WHERE run_month = %s",
@@ -139,7 +180,7 @@ def _check_already_run(run_month: str) -> bool:
         return False
 
 
-# ── Permanent agenda items (injected in Python, not as prompt instructions) ───
+# ── Permanent agenda items ────────────────────────────────────────────────────
 MONTHLY_PERMANENT_ITEMS = [
     "Political event pattern accuracy: review last 30 days of lag predictions vs actual "
     "NEPSE moves — flag any patterns with declining weighted_accuracy trend",
@@ -201,9 +242,7 @@ def _load_gate_misses() -> list[dict]:
 
 def _load_nrb_monthly() -> list[dict]:
     try:
-        rows = run_raw_sql(
-            "SELECT * FROM nrb_monthly ORDER BY id DESC LIMIT 3",
-        ) or []
+        rows = run_raw_sql("SELECT * FROM nrb_monthly ORDER BY id DESC LIMIT 3") or []
         log.info("nrb_monthly loaded: %d rows", len(rows))
         return rows
     except Exception as e:
@@ -213,9 +252,7 @@ def _load_nrb_monthly() -> list[dict]:
 
 def _load_claude_audit() -> list[dict]:
     try:
-        rows = run_raw_sql(
-            "SELECT * FROM claude_audit ORDER BY id DESC LIMIT 4",
-        ) or []
+        rows = run_raw_sql("SELECT * FROM claude_audit ORDER BY id DESC LIMIT 4") or []
         log.info("claude_audit loaded: %d rows", len(rows))
         return rows
     except Exception as e:
@@ -277,9 +314,7 @@ def _load_prior_councils(run_month: str) -> list[dict]:
 
 def _load_accuracy_review() -> Optional[dict]:
     try:
-        rows = run_raw_sql(
-            "SELECT * FROM accuracy_review_log ORDER BY id DESC LIMIT 1"
-        )
+        rows = run_raw_sql("SELECT * FROM accuracy_review_log ORDER BY id DESC LIMIT 1")
         return rows[0] if rows else None
     except Exception:
         return None
@@ -305,11 +340,6 @@ def _load_pending_proposals() -> list[dict]:
 
 
 def _load_pattern_validation_data() -> list[dict]:
-    """
-    Load political event pattern accuracy for council context.
-    Groups pattern_validation_log by event_type with weighted accuracy.
-    Returns [] on error. Never raises.
-    """
     try:
         rows = run_raw_sql(
             """
@@ -420,30 +450,143 @@ def _council_call(
     messages: list,
     max_tokens: int,
     context: str,
-    temperature: float = 0.1,       # lower temp = less hallucination
+    temperature: float = 0.1,
     use_search: bool = False,
 ) -> Optional[str]:
-    """Wrapper around AI.openrouter._call for council-exclusive model calls."""
-    return _call(model, messages, max_tokens, temperature, context,
-                 use_search=use_search)
+    """
+    Wrapper around AI.openrouter._call for council-exclusive model calls.
+
+    Free stack: use_search is always forced False — free models don't support
+    the web search tool reliably and it was the root cause of None-content
+    responses in the original stack.
+
+    Always logs the full raw response for debugging regardless of parse outcome.
+    """
+    # Free models don't support web search tool — force off
+    effective_search = False if COUNCIL_USE_FREE_STACK else use_search
+
+    raw = _call(
+        model,
+        messages,
+        max_tokens,
+        temperature,
+        context,
+        use_search=effective_search,
+    )
+
+    # ── Always log raw response ───────────────────────────────────────────────
+    if raw:
+        log.info("[%s] RAW RESPONSE (%d chars):\n%s", context, len(raw), raw)
+    else:
+        log.warning("[%s] RAW RESPONSE: None", context)
+
+    return raw
 
 
 def _parse_json_safe(raw: str, context: str = "") -> Optional[dict]:
-    """Strip markdown fences and parse JSON. Returns None on failure."""
+    """
+    Robust JSON extractor. Handles all known model response patterns:
+
+      1. Clean JSON:           {"direction": "Bearish", ...}
+      2. Grok bold-wrapped:    **{"direction": "Bearish", ...}**
+      3. Fence at start:       ```json\n{...}\n```
+      4. Prose then fence:     "Here is my analysis.\n\n```json\n{...}\n```"
+      5. Inline fence:         Some text **{"key": "val"}** more text
+      6. Truncated JSON:       {"direction": "Bearish", "confidence": 6  ← length-finish
+
+    Returns parsed dict or None. Logs full raw on failure.
+    """
     if not raw:
+        log.warning("[%s] _parse_json_safe: empty input", context)
         return None
+
     text = raw.strip()
-    if text.startswith("```"):
-        lines = text.split("\n")
-        inner = lines[1:-1] if lines[-1].strip() == "```" else lines[1:]
-        text  = "\n".join(inner).strip()
-        if text.lower().startswith("json"):
-            text = text[4:].strip()
+
+    # ── Strategy 1: strip leading ** and trailing ** (Grok pattern) ──────────
+    if text.startswith("**"):
+        text = text.lstrip("*").strip()
+        if text.endswith("**"):
+            text = text.rstrip("*").strip()
+
+    # ── Strategy 2: find ```json ... ``` block anywhere in text ──────────────
+    if "```" in text:
+        # Find the first ``` block
+        fence_start = text.find("```")
+        fence_end   = text.find("```", fence_start + 3)
+        if fence_end != -1:
+            block = text[fence_start + 3 : fence_end].strip()
+            # Strip optional "json" language tag
+            if block.lower().startswith("json"):
+                block = block[4:].strip()
+            text = block
+        else:
+            # Unclosed fence — take everything after the opening ```
+            block = text[fence_start + 3:].strip()
+            if block.lower().startswith("json"):
+                block = block[4:].strip()
+            text = block
+
+    # ── Strategy 3: find first { in remaining text ───────────────────────────
+    brace_idx = text.find("{")
+    if brace_idx > 0:
+        text = text[brace_idx:]
+
+    # ── Strategy 4: try parse as-is ──────────────────────────────────────────
     try:
         return json.loads(text)
-    except json.JSONDecodeError as e:
-        log.error("[%s] JSON parse failed: %s | raw[:300]: %s", context, e, raw[:300])
-        return None
+    except json.JSONDecodeError:
+        pass
+
+    # ── Strategy 5: handle truncated JSON (finish_reason=length) ─────────────
+    # Close any open string then close the object
+    try:
+        # Find last complete key-value by trimming to last comma
+        last_comma = text.rfind(",")
+        if last_comma > 0:
+            trimmed = text[:last_comma] + "}"
+            return json.loads(trimmed)
+    except json.JSONDecodeError:
+        pass
+
+    log.error(
+        "[%s] _parse_json_safe: all strategies failed\nFULL RAW:\n%s",
+        context, raw,
+    )
+    return None
+
+
+# ── Discussion model label list for free stack ────────────────────────────────
+_DISCUSSION_LABELS = [
+    ("slot_1_contrarian",   "stage_1_contrarian"),
+    ("slot_2_macro",        "stage_2_macro"),
+    ("slot_3_quant",        "stage_3_quant"),
+    ("slot_4_devil",        "stage_4_devil"),
+    ("slot_5_fundamental",  "stage_5_fundamental"),
+]
+
+# ── Production model sequence ─────────────────────────────────────────────────
+_PROD_DISCUSSION_MODELS = [
+    (_PROD_GROK_MODEL,     "grok_4.20",   "stage_1_grok",          True),
+    (_PROD_GPT_MODEL,      "gpt_5.4",     "stage_2_gpt",           True),
+    (_PROD_DEEPSEEK_MODEL, "deepseek_v4", "stage_3_deepseek",      False),
+    (_PROD_GEMINI_MODEL,   "gemini_3.1",  "stage_4_gemini_devil",  True),
+    (_PROD_SONNET_MODEL,   "sonnet_4.5",  "stage_5_sonnet",        True),
+]
+
+
+def _get_discussion_models() -> list[tuple]:
+    """
+    Returns list of (model, model_label, stage_key, use_search) tuples.
+    Free stack: rotates free models, web search always False.
+    Prod stack: original flagship models with their search flags.
+    """
+    if COUNCIL_USE_FREE_STACK:
+        result = []
+        for model_label, stage_key in _DISCUSSION_LABELS:
+            model = _next_free_model()
+            result.append((model, model_label, stage_key, False))
+        return result
+    return _PROD_DISCUSSION_MODELS
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -464,7 +607,7 @@ def _write_agenda(run_month: str, items: list[str]) -> None:
                 "run_month":   run_month,
                 "item_number": str(i),
                 "agenda_item": item,
-                "approved_by": "haiku_4.5",
+                "approved_by": "free_stack" if COUNCIL_USE_FREE_STACK else "haiku_4.5",
             }, conflict_columns=["run_month", "item_number"])
     except Exception as e:
         log.error("monthly_council_agenda write failed: %s", e)
@@ -490,14 +633,9 @@ def _write_monthly_override(
     checklist: dict,
     dry_run: bool = False,
 ) -> None:
-    # Capital preservation override: confidence ≤ 20 AND BEAR/CRISIS → block all BUY
-    buy_blocked = (
-        "true"
-        if confidence_score <= 20 and market_state in ("BEAR", "CRISIS")
-        else "false"
-    )
+    buy_blocked  = "true" if confidence_score <= 20 and market_state in ("BEAR", "CRISIS") else "false"
     buy_cautious = "true" if confidence_score <= 50 else "false"
-    now_nst = datetime.now(NST).strftime("%Y-%m-%d %H:%M:%S")
+    now_nst      = datetime.now(NST).strftime("%Y-%m-%d %H:%M:%S")
 
     if dry_run:
         log.info(
@@ -531,11 +669,6 @@ def _write_monthly_override(
 
 
 _REQUIRED_LESSON_FIELDS = {"lesson_type", "condition", "finding", "action", "confidence_level"}
-_VALID_ACTIONS = {
-    "MONITOR", "REDUCE_CONFIDENCE_BY_15", "REDUCE_CONFIDENCE_BY_25",
-    "REQUIRE_VOLUME_CONFIRM", "REQUIRE_MACRO_STABLE",
-    "WAIT_FOR_CONFIRMATION", "TIGHTEN_STOP", "BLOCK_ENTRY",
-}
 
 
 def _validate_lesson(lesson: dict, index: int) -> bool:
@@ -734,7 +867,7 @@ def _build_agenda_review_messages(
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
-# ── Position anchor guard (all discussion models) ─────────────────────────────
+# ── Position anchor guard ─────────────────────────────────────────────────────
 _POSITION_ANCHOR_GUARD = (
     "\n\nYou have been provided current open positions. Do not assume these positions are "
     "correct. Evaluate the agenda item as if entering fresh with no existing positions. "
@@ -743,10 +876,22 @@ _POSITION_ANCHOR_GUARD = (
     "rather than asserting it. Never fabricate specific statistics or figures."
 )
 
-# ── Model personas ─────────────────────────────────────────────────────────────
-_MODEL_PERSONAS = {
+# ── Generic free-stack discussion persona ─────────────────────────────────────
+def _free_stack_persona(slot_label: str) -> str:
+    return (
+        f"You are a senior NEPSE market analyst ({slot_label}) on the NEPSE Monthly Council. "
+        "NEPSE (Nepal Stock Exchange) trades Mon-Fri in NPR. "
+        "You work purely from the data context provided. "
+        "No web search available — use only the data given.\n\n"
+        "Your role: provide an independent, evidence-based assessment of the agenda item. "
+        "If prior analysts have all reached the same direction, present the strongest "
+        "counter-argument you can justify from the data."
+        + _POSITION_ANCHOR_GUARD
+    )
 
-    COUNCIL_GROK_MODEL: (
+# ── Production model personas ─────────────────────────────────────────────────
+_PROD_MODEL_PERSONAS = {
+    _PROD_GROK_MODEL: (
         "You are Grok 4.20, a contrarian market analyst on the NEPSE Monthly Council. "
         "You have web search access — use it to verify current NEPSE news, NRB announcements, "
         "and political events before making claims.\n\n"
@@ -754,8 +899,7 @@ _MODEL_PERSONAS = {
         "whether 30-day evidence strengthened or weakened the case. Re-evaluate from evidence."
         + _POSITION_ANCHOR_GUARD
     ),
-
-    COUNCIL_GPT_MODEL: (
+    _PROD_GPT_MODEL: (
         "You are GPT-5.4, a macro analyst on the NEPSE Monthly Council. "
         "You have web search access — use it to verify current NRB policy, inflation figures, "
         "remittance data, and forex reserves before citing them.\n\n"
@@ -763,67 +907,34 @@ _MODEL_PERSONAS = {
         "When you cite a specific number, verify it."
         + _POSITION_ANCHOR_GUARD
     ),
-
-    COUNCIL_DEEPSEEK_MODEL: (
+    _PROD_DEEPSEEK_MODEL: (
         "You are DeepSeek V4 Pro, a quantitative analyst on the NEPSE Monthly Council. "
         "You work purely from the data context provided — no web search. "
         "Focus on: statistical patterns in the trade data, signal quality metrics, "
         "risk-adjusted returns, drawdown analysis, mean-reversion signals, Kelly fractions.\n\n"
-        "Challenge narrative claims with math. Show your calculations. "
-        "Sceptical of qualitative arguments without quantitative backing."
+        "Challenge narrative claims with math. Show your calculations."
         + _POSITION_ANCHOR_GUARD
     ),
-
-    COUNCIL_GEMINI_MODEL: (
+    _PROD_GEMINI_MODEL: (
         "You are Gemini 3.1 Pro, the DEVIL'S ADVOCATE on the NEPSE Monthly Council. "
         "You have web search access — use it to find counter-evidence.\n\n"
-        "MANDATORY DEVIL'S ADVOCATE RULE:\n"
-        "1. Read all prior analyst responses carefully.\n"
-        "2. If all prior analysts have the same direction (all Bearish or all Bullish), "
-        "you MUST present the strongest possible counter-argument, supported by data.\n"
-        "3. Search the web for evidence that contradicts the consensus.\n"
-        "4. If you find genuine counter-evidence, present it as your key_driver.\n"
-        "5. If after searching you genuinely cannot find a counter-argument, explicitly state: "
-        "'DEVIL'S ADVOCATE: After searching, I cannot find credible counter-evidence because [reason].' "
-        "Then provide your honest assessment.\n\n"
-        "VOLUME DATA CONSTRAINT: Volume data not available in daily_context_log. "
-        "When you would normally cite volume, state: 'VOLUME DATA UNAVAILABLE' and "
-        "reduce confidence by 10 points.\n\n"
-        "CIRCUIT LIMIT EXCEPTION: Do NOT apply low-volume trap flag to stocks at circuit limit."
+        "MANDATORY: If all prior analysts agree, you MUST present the strongest counter-argument. "
+        "Search for evidence that contradicts the consensus."
         + _POSITION_ANCHOR_GUARD
     ),
-
-    COUNCIL_SONNET_MODEL: (
+    _PROD_SONNET_MODEL: (
         "You are Claude Sonnet 4.5, a fundamental analyst on the NEPSE Monthly Council. "
         "You have web search access — use it to verify sector fundamentals, company news, "
         "NRB circulars, and dividend announcements.\n\n"
-        "Stress-test positions, weigh tail risks, consider second-order effects. "
-        "Focus on: sector-level fundamentals, company-specific drivers, NRB policy impact."
+        "Stress-test positions, weigh tail risks, consider second-order effects."
         + _POSITION_ANCHOR_GUARD
     ),
 }
-
-# ── Web search flags per model ────────────────────────────────────────────────
-_MODEL_USE_SEARCH = {
-    COUNCIL_GROK_MODEL:     True,   # news/sentiment verification
-    COUNCIL_GPT_MODEL:      True,   # macro data verification
-    COUNCIL_DEEPSEEK_MODEL: False,  # pure math — no web distraction
-    COUNCIL_GEMINI_MODEL:   True,   # devil's advocate needs counter-evidence
-    COUNCIL_SONNET_MODEL:   True,   # fundamental verification
-}
-
-# ── Discussion model sequence ─────────────────────────────────────────────────
-_DISCUSSION_MODELS = [
-    (COUNCIL_GROK_MODEL,     "grok_4.20",    "stage_1_grok"),
-    (COUNCIL_GPT_MODEL,      "gpt_5.4",      "stage_2_gpt"),
-    (COUNCIL_DEEPSEEK_MODEL, "deepseek_v4",  "stage_3_deepseek"),
-    (COUNCIL_GEMINI_MODEL,   "gemini_3.1",   "stage_4_gemini_devil"),
-    (COUNCIL_SONNET_MODEL,   "sonnet_4.5",   "stage_5_sonnet"),
-]
 
 
 def _build_discussion_messages(
     model: str,
+    model_label: str,
     agenda_item: str,
     item_number: int,
     total_items: int,
@@ -831,15 +942,19 @@ def _build_discussion_messages(
     prior_responses: list[dict],
     open_positions: Optional[list[dict]] = None,
 ) -> list[dict]:
-    persona = _MODEL_PERSONAS.get(model, "You are a senior NEPSE market analyst." + _POSITION_ANCHOR_GUARD)
-    system  = (
+    if COUNCIL_USE_FREE_STACK:
+        persona = _free_stack_persona(model_label)
+    else:
+        persona = _PROD_MODEL_PERSONAS.get(model, "You are a senior NEPSE market analyst." + _POSITION_ANCHOR_GUARD)
+
+    system = (
         f"{persona}\n\n"
-        "Output ONLY valid JSON with keys: "
+        "Output ONLY valid JSON with exactly these keys: "
         "direction (Bullish/Bearish/Neutral), "
         "confidence (integer 0-100), "
         "key_driver (string ≤150 chars), "
         "risk_factor (string ≤150 chars). "
-        "No markdown. No preamble."
+        "No markdown fences. No preamble. No explanation. Output JSON only."
     )
 
     prior_block = ""
@@ -871,7 +986,7 @@ def _build_discussion_messages(
         f"MARKET DATA (last 30 days):\n{data_context}\n"
         f"{positions_block}"
         f"{prior_block}\n\n"
-        f"Analyse this agenda item and output your JSON assessment."
+        f"Output your JSON assessment now. JSON only, no other text."
     )
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
@@ -881,17 +996,22 @@ def _build_redteam_messages(
     open_positions: list[dict],
     run_month: str,
 ) -> list[dict]:
-    system = (
+    persona = (
+        "You are an independent Red Team analyst on the NEPSE Monthly Council. "
+        "You have NOT participated in the discussion. "
+        "You work purely from the transcript provided — no web search."
+        if COUNCIL_USE_FREE_STACK else
         "You are the NEPSE Monthly Council Red Team analyst (Claude Opus 4.6 — independent). "
         "You have NOT participated in the discussion. You have web search access — use it "
-        "to verify disputed facts and find current market data that may contradict or support claims.\n\n"
+        "to verify disputed facts and find current market data."
+    )
+    system = (
+        f"{persona}\n\n"
         "Your job:\n"
         "1. Find the two sharpest conflicting viewpoints across all analysts.\n"
         "2. Assess which conflict represents the highest risk to open positions.\n"
-        "3. If any conflict involves a factual claim about the trading system itself "
-        "(e.g., whether a filter exists), flag it as requires_human_review=true.\n"
-        "4. If any factual claim can be verified via web search, verify it and state whether "
-        "the analyst was correct.\n\n"
+        "3. If any conflict involves a factual claim about the trading system itself, "
+        "flag it as requires_human_review=true.\n\n"
         "Output ONLY valid JSON:\n"
         "{\n"
         "  \"conflict_1\": \"...\",\n"
@@ -901,15 +1021,15 @@ def _build_redteam_messages(
         "  \"requires_human_review\": true|false,\n"
         "  \"human_review_reason\": \"... (only if requires_human_review=true)\",\n"
         "  \"factual_corrections\": [{\"claim\": \"...\", \"analyst\": \"...\", \"correction\": \"...\"}]\n"
-        "}"
+        "}\n"
+        "No markdown fences. No preamble. JSON only."
     )
     positions_str = json.dumps(open_positions, ensure_ascii=False, default=str) if open_positions else "No open positions."
     user = (
         f"RED TEAM REVIEW — {run_month}\n\n"
         f"FULL COUNCIL DISCUSSION TRANSCRIPT:\n{transcript}\n\n"
         f"CURRENT OPEN POSITIONS:\n{positions_str}\n\n"
-        f"Identify the two sharpest conflicts. Assess highest risk. "
-        f"Flag any system-design contradictions for human review. Output JSON."
+        f"Identify the two sharpest conflicts. Output JSON."
     )
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
@@ -923,26 +1043,33 @@ def _build_chairman_messages(
     pending_proposals: Optional[list[dict]] = None,
     redteam_result: Optional[dict] = None,
 ) -> list[dict]:
-    system = (
+    persona = (
+        "You are the Chairman of the NEPSE Monthly Council. "
+        "You work purely from the transcript provided — no web search."
+        if COUNCIL_USE_FREE_STACK else
         "You are the Chairman of the NEPSE Monthly Council (Claude Opus 4.7 — independent). "
-        "You have web search access — use it to verify key facts before synthesising.\n\n"
-        "CRITICAL RESPONSIBILITIES:\n"
-        "1. RESOLVE RED TEAM CONTRADICTIONS: If the Red Team flagged a contradiction about "
-        "the trading system's capabilities, you MUST explicitly state which view is correct "
-        "based on your knowledge. If unresolvable from data, output requires_human_review=true "
-        "in system_verdict.\n\n"
-        "2. JUSTIFY CONFIDENCE SCORE: Your confidence score must be supported by explicit "
-        "evidence from the discussion. State 2-3 specific reasons in market_assessment.\n\n"
-        "3. SPECIFIC LESSONS WITH THRESHOLDS: Each lesson must include concrete, actionable "
-        "thresholds — not generic advice. Example of GOOD: 'Block entry if Nepal Score ≤ -3 "
-        "AND market_state = SIDEWAYS AND confidence < 50'. Example of BAD: 'Be more careful "
-        "in sideways markets'.\n\n"
-        "4. CAPITAL PRESERVATION: If confidence_score ≤ 20 AND market_state is BEAR or CRISIS, "
-        "explicitly state in trading_checklist that all BUY signals should be blocked.\n\n"
-        "5. DEVIL'S ADVOCATE: Explicitly note whether Gemini's counter-narrative changed any "
-        "conclusions or was correctly rejected.\n\n"
-        "UNCERTAINTY RULE: If you are not certain of a fact, state it as uncertain. "
-        "Never fabricate statistics."
+        "You have web search access — use it to verify key facts before synthesising."
+    )
+    system = (
+        f"{persona}\n\n"
+        "Synthesise the full council discussion into final actionable guidance.\n\n"
+        "CRITICAL:\n"
+        "1. Confidence score must be supported by explicit evidence from the discussion.\n"
+        "2. Each lesson must include concrete thresholds — not generic advice.\n"
+        "3. If confidence_score ≤ 20 AND market_state is BEAR or CRISIS, block all BUY signals.\n\n"
+        "Output ONLY valid JSON:\n"
+        "{\n"
+        "  \"confidence_score\": 0-100,\n"
+        "  \"market_assessment\": \"≤300 chars\",\n"
+        "  \"lessons\": [{\"lesson_type\": \"...\", \"condition\": \"specific threshold\", "
+        "\"finding\": \"...\", \"action\": \"...\", \"confidence_level\": \"LOW|MEDIUM|HIGH\", "
+        "\"gpt_reasoning\": \"...\"}],\n"
+        "  \"trading_checklist\": {\"stop_trigger\": \"...\", \"go_trigger\": \"...\", \"noise_items\": []},\n"
+        "  \"position_evaluations\": [{\"symbol\": \"...\", \"holding_supported\": true, \"reasoning\": \"...\"}],\n"
+        "  \"system_verdict\": {\"proposals_reviewed\": [], \"new_system_findings\": [], "
+        "\"requires_human_review\": false, \"human_review_items\": []}\n"
+        "}\n"
+        "No markdown fences. No preamble. JSON only."
     )
 
     items_str     = "\n".join(f"{i+1}. {item}" for i, item in enumerate(agenda_items))
@@ -959,24 +1086,7 @@ def _build_chairman_messages(
         f"CURRENT OPEN POSITIONS:\n{positions_str}\n\n"
         f"PENDING SYSTEM PROPOSALS:\n{proposals_str}\n\n"
         f"FULL COUNCIL DISCUSSION TRANSCRIPT:\n{transcript}\n\n"
-        f"Produce final council synthesis. Output JSON:\n"
-        "{\n"
-        "  \"strategic_narratives\": [{\"agenda_item\": \"...\", \"narrative\": \"...\", "
-        "\"council_direction\": \"Bullish|Bearish|Neutral\", \"council_confidence\": 0-100}],\n"
-        "  \"confidence_score\": 0-100,\n"
-        "  \"confidence_justification\": \"2-3 specific reasons from discussion evidence\",\n"
-        "  \"devils_advocate_assessment\": \"Did Gemini's counter-narrative change conclusions? Why/why not?\",\n"
-        "  \"market_assessment\": \"≤300 chars\",\n"
-        "  \"lessons\": [{\"lesson_type\": \"...\", \"condition\": \"specific threshold condition\", "
-        "\"finding\": \"...\", \"action\": \"...\", \"confidence_level\": \"LOW|MEDIUM|HIGH\", "
-        "\"gpt_reasoning\": \"why this lesson is warranted\"}],\n"
-        "  \"trading_checklist\": {\"stop_trigger\": \"specific condition with threshold\", "
-        "\"go_trigger\": \"specific condition with threshold\", \"noise_items\": [...]},\n"
-        "  \"position_evaluations\": [{\"symbol\": \"...\", \"holding_supported\": true, \"reasoning\": \"...\"}],\n"
-        "  \"system_verdict\": {\"proposals_reviewed\": [...], \"new_system_findings\": [...], "
-        "\"accuracy_improvement_priority\": [...], \"requires_human_review\": false, "
-        "\"human_review_items\": []}\n"
-        "}"
+        f"Output final council JSON now."
     )
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
@@ -1021,13 +1131,10 @@ def _send_agenda_preview(
     proposed_items: list[str],
     dry_run: bool = False,
 ) -> None:
-    """
-    Send draft agenda to Telegram for human review on Saturday.
-    Stores proposed items in settings DB for retrieval on Sunday.
-    """
     items_str = "\n".join(f"  {i+1}. {item}" for i, item in enumerate(proposed_items))
+    stack_tag = " [FREE STACK TEST]" if COUNCIL_USE_FREE_STACK else ""
     msg = (
-        f"🗓 *NEPSE MONTHLY COUNCIL — Draft Agenda*\n"
+        f"🗓 *NEPSE MONTHLY COUNCIL — Draft Agenda{stack_tag}*\n"
         f"_{run_month} — Preview (council runs tomorrow)_\n\n"
         f"*Proposed agenda items:*\n{items_str}\n\n"
         f"📝 To add an item: `/agenda_add Your item here`\n"
@@ -1039,7 +1146,6 @@ def _send_agenda_preview(
         log.info("[DRY RUN] Would send agenda preview:\n%s", msg)
         return
 
-    # Store proposed agenda in settings for Sunday retrieval
     try:
         upsert_row("settings", {
             "key":        AGENDA_PREVIEW_SETTING,
@@ -1057,7 +1163,6 @@ def _send_agenda_preview(
     except Exception as e:
         log.error("Failed to store agenda preview in settings: %s", e)
 
-    # Send Telegram alert
     try:
         from helper.notifier import _send_admin_only
         _send_admin_only(msg, parse_mode="Markdown")
@@ -1067,11 +1172,7 @@ def _send_agenda_preview(
 
 
 def _load_agenda_preview() -> tuple[list[str], list[str]]:
-    """
-    Load Saturday's proposed agenda + any user additions from settings.
-    Returns (proposed_items, user_additions).
-    """
-    proposed = []
+    proposed  = []
     additions = []
     try:
         rows = run_raw_sql(
@@ -1098,26 +1199,23 @@ def _load_agenda_preview() -> tuple[list[str], list[str]]:
 
 
 def run_preview(dry_run: bool = False) -> None:
-    """
-    Pre-council Saturday preview run.
-    Runs Stage -1 + Stage 0a → sends draft agenda to Telegram.
-    """
     now_nst   = datetime.now(NST)
     run_month = now_nst.strftime("%Y-%m")
 
     log.info("=" * 65)
     log.info("NEPSE MONTHLY COUNCIL — AGENDA PREVIEW (%s)", run_month)
+    log.info("Stack: %s", "FREE TEST" if COUNCIL_USE_FREE_STACK else "PRODUCTION")
     log.info("=" * 65)
 
-    daily_context  = _load_daily_context()
-    trade_journal  = _load_trade_journal()
-    gate_misses    = _load_gate_misses()
-    nrb            = _load_nrb_monthly()
-    audit_history  = _load_claude_audit()
-    lessons        = _load_active_lessons()
-    prior_councils = _load_prior_councils(run_month)
-    accuracy_review = _load_accuracy_review()
-    pending_proposals = _load_pending_proposals()
+    daily_context      = _load_daily_context()
+    trade_journal      = _load_trade_journal()
+    gate_misses        = _load_gate_misses()
+    nrb                = _load_nrb_monthly()
+    audit_history      = _load_claude_audit()
+    lessons            = _load_active_lessons()
+    prior_councils     = _load_prior_councils(run_month)
+    accuracy_review    = _load_accuracy_review()
+    pending_proposals  = _load_pending_proposals()
     pattern_validation = _load_pattern_validation_data()
 
     data_context, counts = _build_data_context(
@@ -1128,36 +1226,26 @@ def run_preview(dry_run: bool = False) -> None:
              counts["daily_context"], counts["trade_journal"],
              counts["gate_misses"], counts["nrb"], counts["est_tokens"])
 
-    # Stage -1: Audit
     audit_msgs = _build_audit_messages(data_context, prior_councils, run_month)
     if dry_run:
         audit_text = "[DRY RUN audit]"
     else:
-        log.info("[preview] Stage -1: audit...")
-        audit_text = _council_call(
-            COUNCIL_AUDIT_MODEL, audit_msgs, MAX_AGENDA_TOKENS, "preview_audit",
-            use_search=False,
-        ) or ""
+        m = _next_free_model() if COUNCIL_USE_FREE_STACK else COUNCIL_AUDIT_MODEL
+        log.info("[preview] Stage -1: audit (model=%s)...", m)
+        audit_text = _council_call(m, audit_msgs, MAX_AGENDA_TOKENS, "preview_audit") or ""
 
-    # Stage 0a: Agenda draft
     draft_msgs = _build_agenda_draft_messages(
         data_context, audit_text, run_month,
         accuracy_review=accuracy_review,
         pending_proposals=pending_proposals,
     )
     if dry_run:
-        proposed_items = [
-            "Is NEPSE BEAR sustained or approaching reversal? [DRY RUN]",
-            "Should position sizing reduce given current win rate? [DRY RUN]",
-            "Which sectors show accumulation signals? [DRY RUN]",
-        ]
+        proposed_items = ["General NEPSE market outlook [DRY RUN]"]
     else:
-        log.info("[preview] Stage 0a: agenda draft...")
-        draft_raw    = _council_call(
-            COUNCIL_AUDIT_MODEL, draft_msgs, MAX_AGENDA_TOKENS, "preview_0a",
-            use_search=False,
-        )
-        draft_json   = _parse_json_safe(draft_raw, "preview_0a")
+        m = _next_free_model() if COUNCIL_USE_FREE_STACK else COUNCIL_AUDIT_MODEL
+        log.info("[preview] Stage 0a: agenda draft (model=%s)...", m)
+        draft_raw      = _council_call(m, draft_msgs, MAX_AGENDA_TOKENS, "preview_0a")
+        draft_json     = _parse_json_safe(draft_raw, "preview_0a")
         proposed_items = draft_json.get("agenda_items", []) if draft_json else []
         if not proposed_items:
             proposed_items = ["General NEPSE market outlook [FALLBACK]"]
@@ -1189,7 +1277,8 @@ def _send_council_notification(
         log.warning("Could not import notifier — skipping Telegram notification")
         return
 
-    items_str = "\n".join(f"  {i+1}. {item[:80]}" for i, item in enumerate(agenda_items))
+    items_str   = "\n".join(f"  {i+1}. {item[:80]}" for i, item in enumerate(agenda_items))
+    stack_tag   = " 🧪 FREE STACK TEST" if COUNCIL_USE_FREE_STACK else ""
 
     system_block = ""
     if system_verdict:
@@ -1197,15 +1286,15 @@ def _send_council_notification(
             1 for p in system_verdict.get("proposals_reviewed", [])
             if p.get("council_assessment") == "ENDORSE"
         )
-        n_new    = len(system_verdict.get("new_system_findings", []))
+        n_new        = len(system_verdict.get("new_system_findings", []))
         system_block = f"\n⚙️ Proposals: *{endorsed} endorsed* | *{n_new} new findings*"
 
     review_block = ""
     if requires_human_review:
-        review_block = "\n\n🔴 *REQUIRES HUMAN REVIEW* — Red Team flagged system-design contradiction."
+        review_block = "\n\n🔴 *REQUIRES HUMAN REVIEW* — Red Team flagged contradiction."
 
     msg = (
-        f"🏛 *NEPSE MONTHLY COUNCIL — {run_month}*\n\n"
+        f"🏛 *NEPSE MONTHLY COUNCIL — {run_month}*{stack_tag}\n\n"
         f"📊 Confidence: *{confidence_score}/100*\n\n"
         f"📋 Agenda ({len(agenda_items)} items):\n{items_str}\n\n"
         f"✅ GO: _{checklist.get('go_trigger', 'N/A')}_\n"
@@ -1227,12 +1316,6 @@ def _send_council_notification(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False) -> None:
-    """
-    Full monthly council pipeline.
-    dry_run=True  — load data, build prompts, print token estimates, skip API/DB.
-    force=True    — skip first-Sunday guard.
-    print_prompts — print all stage prompts without making API calls.
-    """
     now_nst   = datetime.now(NST)
     run_month = now_nst.strftime("%Y-%m")
     now_str   = now_nst.strftime("%Y-%m-%d %H:%M:%S")
@@ -1250,21 +1333,21 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
 
     log.info("=" * 65)
     log.info("NEPSE MONTHLY COUNCIL — %s", run_month)
-    log.info("Stack: Grok4.20 + GPT5.4 + DeepSeekV4 + Gemini3.1(devil) + Sonnet4.5")
-    log.info("       + Opus4.6(redteam) + Opus4.7(chairman)")
+    log.info("Stack: %s", "FREE TEST (tencent/gemma/gpt-oss rotating)" if COUNCIL_USE_FREE_STACK else
+             "PRODUCTION (Grok+GPT+DeepSeek+Gemini+Sonnet+Opus)")
     log.info("=" * 65)
 
     # ── Load all data ─────────────────────────────────────────────────────────
-    daily_context     = _load_daily_context()
-    trade_journal     = _load_trade_journal()
-    gate_misses       = _load_gate_misses()
-    nrb               = _load_nrb_monthly()
-    audit_history     = _load_claude_audit()
-    lessons           = _load_active_lessons()
-    open_positions    = _load_open_positions()
-    prior_councils    = _load_prior_councils(run_month)
-    accuracy_review   = _load_accuracy_review()
-    pending_proposals = _load_pending_proposals()
+    daily_context      = _load_daily_context()
+    trade_journal      = _load_trade_journal()
+    gate_misses        = _load_gate_misses()
+    nrb                = _load_nrb_monthly()
+    audit_history      = _load_claude_audit()
+    lessons            = _load_active_lessons()
+    open_positions     = _load_open_positions()
+    prior_councils     = _load_prior_councils(run_month)
+    accuracy_review    = _load_accuracy_review()
+    pending_proposals  = _load_pending_proposals()
     pattern_validation = _load_pattern_validation_data()
 
     data_context, counts = _build_data_context(
@@ -1277,7 +1360,6 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
         counts["nrb"], counts["audit"], counts["lessons"], counts["est_tokens"],
     )
 
-    # ── Check for Saturday agenda preview (user-added items + pre-approved) ──
     preview_proposed, user_additions = _load_agenda_preview()
     if preview_proposed:
         log.info("Found Saturday agenda preview: %d items, %d user additions",
@@ -1290,24 +1372,20 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
     est_audit  = sum(len(m["content"]) for m in audit_msgs) // 4
 
     if dry_run or print_prompts:
-        print(f"\n{'='*65}")
-        print(f"STAGE -1 ({COUNCIL_AUDIT_MODEL} hindsight audit) — ~{est_audit} tokens")
+        print(f"\n{'='*65}\nSTAGE -1 (audit) — ~{est_audit} tokens")
         if print_prompts:
             print(f"USER: {audit_msgs[1]['content'][:400]}...")
         audit_text = "[DRY RUN audit]"
     else:
-        log.info("[stage_audit] Calling %s for audit...", COUNCIL_AUDIT_MODEL)
-        audit_text = _council_call(
-            COUNCIL_AUDIT_MODEL, audit_msgs, MAX_AGENDA_TOKENS, "council_audit",
-            use_search=False,
-        ) or ""
+        m = _next_free_model() if COUNCIL_USE_FREE_STACK else COUNCIL_AUDIT_MODEL
+        log.info("[stage_audit] Calling %s for audit...", m)
+        audit_text = _council_call(m, audit_msgs, MAX_AGENDA_TOKENS, "council_audit") or ""
         log.info("Stage -1 complete (%d chars)", len(audit_text))
 
     # ═════════════════════════════════════════════════════════════════════════
     # STAGE 0a: Agenda draft
     # ═════════════════════════════════════════════════════════════════════════
     if preview_proposed:
-        # Saturday preview already ran — use that agenda
         proposed_items = preview_proposed
         log.info("Using Saturday preview agenda (%d items)", len(proposed_items))
     else:
@@ -1319,21 +1397,12 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
         est_draft = sum(len(m["content"]) for m in draft_msgs) // 4
 
         if dry_run or print_prompts:
-            print(f"\n{'='*65}")
-            print(f"STAGE 0a ({COUNCIL_AUDIT_MODEL} agenda draft) — ~{est_draft} tokens")
-            if print_prompts:
-                print(f"USER: {draft_msgs[1]['content'][:400]}...")
-            proposed_items = [
-                "Is NEPSE banking sector liquidity improving enough to support re-entry? [DRY RUN]",
-                "Should we reduce position sizing given current NRB NPL trends? [DRY RUN]",
-                "Is the current market state SIDEWAYS or transitioning to BULL? [DRY RUN]",
-            ]
+            print(f"\n{'='*65}\nSTAGE 0a (agenda draft) — ~{est_draft} tokens")
+            proposed_items = ["General NEPSE market outlook [DRY RUN]"]
         else:
-            log.info("[stage_0a_draft] Calling %s for agenda draft...", COUNCIL_AUDIT_MODEL)
-            draft_raw      = _council_call(
-                COUNCIL_AUDIT_MODEL, draft_msgs, MAX_AGENDA_TOKENS, "council_0a_draft",
-                use_search=False,
-            )
+            m = _next_free_model() if COUNCIL_USE_FREE_STACK else COUNCIL_AUDIT_MODEL
+            log.info("[stage_0a_draft] Calling %s for agenda draft...", m)
+            draft_raw      = _council_call(m, draft_msgs, MAX_AGENDA_TOKENS, "council_0a_draft")
             draft_json     = _parse_json_safe(draft_raw, "council_0a_draft")
             proposed_items = draft_json.get("agenda_items", []) if draft_json else []
             if not proposed_items:
@@ -1341,7 +1410,7 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
             log.info("Stage 0a: %d proposed items", len(proposed_items))
 
     # ═════════════════════════════════════════════════════════════════════════
-    # STAGE 0b: Haiku agenda review
+    # STAGE 0b: Agenda review
     # ═════════════════════════════════════════════════════════════════════════
     review_msgs = _build_agenda_review_messages(
         proposed_items, data_context, run_month,
@@ -1350,23 +1419,20 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
     est_review = sum(len(m["content"]) for m in review_msgs) // 4
 
     if dry_run or print_prompts:
-        print(f"\n{'='*65}")
-        print(f"STAGE 0b ({COUNCIL_REVIEW_MODEL} agenda review) — ~{est_review} tokens")
+        print(f"\n{'='*65}\nSTAGE 0b (agenda review) — ~{est_review} tokens")
         approved_items = proposed_items
     else:
-        log.info("[stage_0b_review] Calling %s for agenda review...", COUNCIL_REVIEW_MODEL)
-        review_raw    = _council_call(
-            COUNCIL_REVIEW_MODEL, review_msgs, MAX_AGENDA_TOKENS, "council_0b_review",
-            use_search=False,
-        )
-        review_json   = _parse_json_safe(review_raw, "council_0b_review")
+        m = _next_free_model() if COUNCIL_USE_FREE_STACK else COUNCIL_REVIEW_MODEL
+        log.info("[stage_0b_review] Calling %s for agenda review...", m)
+        review_raw     = _council_call(m, review_msgs, MAX_AGENDA_TOKENS, "council_0b_review")
+        review_json    = _parse_json_safe(review_raw, "council_0b_review")
         approved_items = review_json.get("approved_agenda", proposed_items) if review_json else proposed_items
         if not approved_items:
             approved_items = proposed_items
         _write_agenda(run_month, approved_items)
 
-    # ── Inject permanent agenda items (Python-level, not prompt instructions) ──
-    approved_items = list(approved_items)  # ensure mutable copy
+    # ── Inject permanent items ────────────────────────────────────────────────
+    approved_items = list(approved_items)
     for item in MONTHLY_PERMANENT_ITEMS:
         if item not in approved_items:
             approved_items.append(item)
@@ -1374,14 +1440,12 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
         for item in QUARTERLY_PERMANENT_ITEMS:
             if item not in approved_items:
                 approved_items.append(item)
-        log.info("Quarterly review month — added %d quarterly permanent items",
-                 len(QUARTERLY_PERMANENT_ITEMS))
 
     n_items = len(approved_items)
     log.info("NEPSE MONTHLY COUNCIL — %s — %d agenda items", run_month, n_items)
 
     # ═════════════════════════════════════════════════════════════════════════
-    # STAGES 1-5: Per-agenda-item discussion (5 flagship models)
+    # STAGES 1-5: Per-agenda-item discussion
     # ═════════════════════════════════════════════════════════════════════════
     discussion_log:      list[dict] = []
     disagreement_scores: dict       = {}
@@ -1391,23 +1455,19 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
         item_responses:   list[dict] = []
         item_confidences: list[int]  = []
 
-        for model, model_label, stage_key in _DISCUSSION_MODELS:
+        # Resolve discussion models for this item
+        discussion_models = _get_discussion_models()
+
+        for model, model_label, stage_key, use_search in discussion_models:
             msgs       = _build_discussion_messages(
-                model, agenda_item, item_idx, n_items,
+                model, model_label, agenda_item, item_idx, n_items,
                 data_context, item_responses,
                 open_positions=open_positions,
             )
             est_tokens = sum(len(m["content"]) for m in msgs) // 4
-            use_search = _MODEL_USE_SEARCH.get(model, False)
 
             if dry_run or print_prompts:
-                print(f"\n{'='*65}")
-                print(f"[{stage_key}] item {item_idx}/{n_items}: {agenda_item[:60]}")
-                if print_prompts:
-                    print(f"SYSTEM: {msgs[0]['content'][:300]}...")
-                    print(f"USER: {msgs[1]['content'][:300]}...")
-                print(f"[{'DRY RUN'}] Would call {model} (web_search={use_search}) "
-                      f"~{est_tokens} tokens")
+                print(f"\n[{stage_key}] item {item_idx}/{n_items} — model={model} ~{est_tokens} tok")
                 direction   = "Neutral"
                 confidence  = 50
                 key_driver  = f"[DRY RUN — {model_label}]"
@@ -1417,15 +1477,18 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
                     "key_driver": key_driver, "risk_factor": risk_factor,
                 })
             else:
-                log.info("[%s] item %d/%d | web_search=%s", stage_key, item_idx, n_items, use_search)
-                raw    = _council_call(model, msgs, MAX_DISCUSSION_TOKENS, f"council_{stage_key}",
-                                       use_search=use_search)
+                log.info("[%s] item %d/%d | model=%s | web_search=%s",
+                         stage_key, item_idx, n_items, model, use_search)
+                raw    = _council_call(model, msgs, MAX_DISCUSSION_TOKENS,
+                                       f"council_{stage_key}", use_search=use_search)
                 parsed = _parse_json_safe(raw, f"council_{stage_key}")
+
                 direction     = str(parsed.get("direction",   "Neutral")) if parsed else "Neutral"
                 confidence    = int(parsed.get("confidence",  50))        if parsed else 50
                 key_driver    = str(parsed.get("key_driver",  ""))        if parsed else ""
                 risk_factor   = str(parsed.get("risk_factor", ""))        if parsed else ""
                 full_response = raw or ""
+
                 log.info("[%s] direction=%s confidence=%d", stage_key, direction, confidence)
 
             entry = {
@@ -1474,28 +1537,24 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
             })
 
     # ═════════════════════════════════════════════════════════════════════════
-    # STAGE 6: Opus 4.6 red team
+    # STAGE 6: Red team
     # ═════════════════════════════════════════════════════════════════════════
     transcript   = _format_transcript(approved_items, discussion_log)
     redteam_msgs = _build_redteam_messages(transcript, open_positions, run_month)
     est_redteam  = sum(len(m["content"]) for m in redteam_msgs) // 4
 
     if dry_run or print_prompts:
-        print(f"\n{'='*65}")
-        print(f"STAGE 6 ({COUNCIL_REDTEAM_MODEL} red team) — ~{est_redteam} tokens [web_search=True]")
-        if print_prompts:
-            print(f"USER: {redteam_msgs[1]['content'][:400]}...")
+        print(f"\n{'='*65}\nSTAGE 6 (red team) — ~{est_redteam} tokens")
         redteam_result = {
             "highest_risk": {"recommended_action": "MONITOR"},
             "requires_human_review": False,
             "red_team_verdict": "[DRY RUN]",
         }
     else:
-        log.info("[stage_6_redteam] Calling %s (web_search=True)...", COUNCIL_REDTEAM_MODEL)
-        redteam_raw    = _council_call(
-            COUNCIL_REDTEAM_MODEL, redteam_msgs, MAX_REDTEAM_TOKENS,
-            "council_6_redteam", use_search=True,
-        )
+        m = _next_free_model() if COUNCIL_USE_FREE_STACK else COUNCIL_REDTEAM_MODEL
+        log.info("[stage_6_redteam] Calling %s...", m)
+        redteam_raw    = _council_call(m, redteam_msgs, MAX_REDTEAM_TOKENS,
+                                       "council_6_redteam", use_search=False)
         redteam_result = _parse_json_safe(redteam_raw, "council_6_redteam") or {}
         log.info("Stage 6 complete — requires_human_review=%s",
                  redteam_result.get("requires_human_review", False))
@@ -1503,7 +1562,7 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
             "run_month":     run_month,
             "stage":         "stage_6_redteam",
             "agenda_item":   "ALL",
-            "model":         COUNCIL_REDTEAM_MODEL,
+            "model":         m,
             "full_response": redteam_raw or "",
             "inserted_at":   now_str,
         })
@@ -1511,7 +1570,7 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
     requires_human_review = bool(redteam_result.get("requires_human_review", False))
 
     # ═════════════════════════════════════════════════════════════════════════
-    # STAGE 7: Opus 4.7 chairman synthesis
+    # STAGE 7: Chairman synthesis
     # ═════════════════════════════════════════════════════════════════════════
     chairman_msgs = _build_chairman_messages(
         transcript, approved_items, run_month, disagreement_scores,
@@ -1522,61 +1581,42 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
     est_chairman = sum(len(m["content"]) for m in chairman_msgs) // 4
 
     if dry_run or print_prompts:
-        print(f"\n{'='*65}")
-        print(f"STAGE 7 ({COUNCIL_CHAIRMAN_MODEL} chairman) — ~{est_chairman} tokens [web_search=True]")
-        if print_prompts:
-            print(f"USER: {chairman_msgs[1]['content'][:400]}...")
-        chairman_json = {
-            "strategic_narratives": [],
+        print(f"\n{'='*65}\nSTAGE 7 (chairman) — ~{est_chairman} tokens")
+        chairman_json        = {
             "confidence_score": 50,
-            "confidence_justification": "[DRY RUN]",
-            "devils_advocate_assessment": "[DRY RUN]",
             "market_assessment": "[DRY RUN]",
             "lessons": [],
-            "trading_checklist": {
-                "stop_trigger": "[DRY RUN]",
-                "go_trigger":   "[DRY RUN]",
-                "noise_items":  [],
-            },
+            "trading_checklist": {"stop_trigger": "[DRY RUN]", "go_trigger": "[DRY RUN]", "noise_items": []},
             "position_evaluations": [],
-            "system_verdict": {
-                "proposals_reviewed": [],
-                "new_system_findings": [],
-                "accuracy_improvement_priority": [],
-                "requires_human_review": False,
-                "human_review_items": [],
-            },
+            "system_verdict": {"proposals_reviewed": [], "new_system_findings": [],
+                               "requires_human_review": False, "human_review_items": []},
         }
-        confidence_score = 50
-        checklist        = chairman_json["trading_checklist"]
+        confidence_score      = 50
+        checklist             = chairman_json["trading_checklist"]
         lessons_from_chairman = []
-        system_verdict   = chairman_json.get("system_verdict", {})
+        system_verdict        = chairman_json.get("system_verdict", {})
     else:
-        log.info("[stage_7_chairman] Calling %s (web_search=True)...", COUNCIL_CHAIRMAN_MODEL)
-        chairman_raw  = _council_call(
-            COUNCIL_CHAIRMAN_MODEL, chairman_msgs, MAX_CHAIRMAN_TOKENS,
-            "council_7_chairman", temperature=0.1, use_search=True,
-        )
-        chairman_json = _parse_json_safe(chairman_raw, "council_7_chairman") or {}
+        m = _next_free_model() if COUNCIL_USE_FREE_STACK else COUNCIL_CHAIRMAN_MODEL
+        log.info("[stage_7_chairman] Calling %s...", m)
+        chairman_raw   = _council_call(m, chairman_msgs, MAX_CHAIRMAN_TOKENS,
+                                       "council_7_chairman", temperature=0.1,
+                                       use_search=False)
+        chairman_json  = _parse_json_safe(chairman_raw, "council_7_chairman") or {}
 
-        confidence_score       = int(chairman_json.get("confidence_score", 50))
-        checklist              = chairman_json.get("trading_checklist", {})
-        lessons_from_chairman  = chairman_json.get("lessons", [])
-        system_verdict         = chairman_json.get("system_verdict", {})
+        confidence_score      = int(chairman_json.get("confidence_score", 50))
+        checklist             = chairman_json.get("trading_checklist", {})
+        lessons_from_chairman = chairman_json.get("lessons", [])
+        system_verdict        = chairman_json.get("system_verdict", {})
 
-        # Chairman may also flag human review
         if chairman_json.get("system_verdict", {}).get("requires_human_review", False):
             requires_human_review = True
 
-        log.info("Stage 7 complete — confidence=%d devil_advocate=%s",
-                 confidence_score,
-                 chairman_json.get("devils_advocate_assessment", "?")[:80])
-
+        log.info("Stage 7 complete — confidence=%d", confidence_score)
         _write_log_entry({
             "run_month":     run_month,
             "stage":         "stage_7_chairman",
             "agenda_item":   "ALL",
-            "model":         COUNCIL_CHAIRMAN_MODEL,
+            "model":         m,
             "confidence":    str(confidence_score),
             "full_response": chairman_raw or "",
             "inserted_at":   now_str,
@@ -1618,23 +1658,17 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
 
     log.info("=" * 65)
     log.info("COUNCIL COMPLETE — %s", run_month)
+    log.info("  Stack:               %s", "FREE TEST" if COUNCIL_USE_FREE_STACK else "PRODUCTION")
     log.info("  Confidence:          %d/100", confidence_score)
     log.info("  Lessons written:     %d", lessons_written)
     log.info("  Requires human review: %s", requires_human_review)
     log.info("=" * 65)
 
     if dry_run:
-        print(f"\n{'='*65}")
-        print(f"[DRY RUN SUMMARY] run_month={run_month}")
+        print(f"\n{'='*65}\n[DRY RUN SUMMARY] run_month={run_month}")
+        print(f"  Stack: {'FREE TEST' if COUNCIL_USE_FREE_STACK else 'PRODUCTION'}")
         print(f"  Data: {counts}")
         print(f"  Agenda items: {len(proposed_items)}")
-        print(f"  Discussion models: 5 (Grok+GPT+DeepSeek+Gemini+Sonnet)")
-        print(f"  Token estimates:")
-        print(f"    Stage -1  audit:     ~{est_audit} in")
-        print(f"    Stage 0b  review:    ~{est_review} in")
-        print(f"    Stage 1-5 per item:  ~est_tokens in × 5 models × {n_items} items")
-        print(f"    Stage 6   redteam:   ~{est_redteam} in")
-        print(f"    Stage 7   chairman:  ~{est_chairman} in")
         print(f"  No API calls. No DB writes.")
 
 
@@ -1643,24 +1677,11 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _run_weight_review(dry_run: bool = False) -> Optional[dict]:
-    """Quarterly lesson weight review using DeepSeek R1 + Opus validation."""
     log.info("Weight review not yet implemented — skipping")
     return None
 
 
 def _run_quarterly_pattern_review(dry_run: bool = False) -> dict:
-    """
-    Quarterly pattern status update based on weighted_accuracy thresholds.
-    Called in quarterly months (Mar/Jun/Sep/Dec) after council lessons are written.
-
-    Promotion rules (applied to non-DISABLED patterns with active='true'):
-      - resolved ≥ 5 AND weighted_accuracy ≥ 0.70 AND status == 'MONITOR_ONLY' → promote to ACTIVE
-      - resolved ≥ 5 AND weighted_accuracy in [0.50, 0.70) → no change (WATCH)
-      - resolved ≥ 5 AND weighted_accuracy < 0.50 → demote: ACTIVE→MONITOR_ONLY, MONITOR_ONLY→DISABLED
-      - resolved < 5 → no change (insufficient data)
-
-    Returns tally dict. Never raises.
-    """
     tally = {"promoted": 0, "demoted": 0, "disabled": 0, "unchanged": 0, "skipped": 0}
     try:
         rows = run_raw_sql(
@@ -1696,7 +1717,7 @@ def _run_quarterly_pattern_review(dry_run: bool = False) -> dict:
             acc      = float(r.get("weighted_accuracy") or 0.0)
 
             if resolved < 5:
-                log.info("Pattern %s: insufficient resolved predictions (%d) — skip", et, resolved)
+                log.info("Pattern %s: insufficient resolved (%d) — skip", et, resolved)
                 tally["skipped"] += 1
                 continue
 
@@ -1704,27 +1725,23 @@ def _run_quarterly_pattern_review(dry_run: bool = False) -> dict:
             if acc >= 0.70 and status == "MONITOR_ONLY":
                 new_status = "ACTIVE"
                 tally["promoted"] += 1
-                log.info("Pattern %s: PROMOTED to ACTIVE (acc=%.3f, n=%d)", et, acc, resolved)
             elif acc < 0.50:
                 if status == "ACTIVE":
                     new_status = "MONITOR_ONLY"
                     tally["demoted"] += 1
-                    log.info("Pattern %s: DEMOTED to MONITOR_ONLY (acc=%.3f, n=%d)", et, acc, resolved)
                 elif status == "MONITOR_ONLY":
                     new_status = "DISABLED"
                     tally["disabled"] += 1
-                    log.info("Pattern %s: DISABLED (acc=%.3f, n=%d)", et, acc, resolved)
             else:
                 tally["unchanged"] += 1
-                log.info("Pattern %s: unchanged %s (acc=%.3f, n=%d)", et, status, acc, resolved)
 
             if new_status and not dry_run:
                 upsert_row(
                     "news_effect_patterns",
                     {"id": str(pat_id)},
                     {
-                        "id":               str(pat_id),
-                        "status":           new_status,
+                        "id":                str(pat_id),
+                        "status":            new_status,
                         "weighted_accuracy": str(acc),
                         "occurrence_count":  str(resolved),
                         "notes": (
@@ -1733,6 +1750,7 @@ def _run_quarterly_pattern_review(dry_run: bool = False) -> dict:
                         ),
                     },
                 )
+                log.info("Pattern %s: %s→%s (acc=%.3f, n=%d)", et, status, new_status, acc, resolved)
             elif new_status and dry_run:
                 log.info("[DRY-RUN] Would update %s: %s→%s", et, status, new_status)
 
@@ -1753,8 +1771,11 @@ def main():
         format="%(asctime)s [%(levelname)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
-    from log_config import attach_file_handler
-    attach_file_handler(__name__)
+    try:
+        from log_config import attach_file_handler
+        attach_file_handler(__name__)
+    except Exception:
+        pass
 
     parser = argparse.ArgumentParser(description="NEPSE Monthly Council")
     parser.add_argument("--dry-run",       action="store_true", help="No API, no DB")
