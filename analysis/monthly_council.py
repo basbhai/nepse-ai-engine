@@ -87,9 +87,9 @@ COUNCIL_USE_FREE_STACK = True
 
 # ── Free test models (rotate round-robin) ─────────────────────────────────────
 _FREE_MODELS = [
-    "tencent/hy3-preview:free",
-    "google/gemma-3-27b-it:free",
+  
     "openai/gpt-oss-20b:free",
+  
 ]
 _free_counter = 0   # module-level rotation counter
 
@@ -1327,7 +1327,7 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
             return
 
     # ── Duplicate guard ───────────────────────────────────────────────────────
-    if not dry_run and not print_prompts and _check_already_run(run_month):
+    if not dry_run and not print_prompts and not force and _check_already_run(run_month):
         log.warning("Council for %s already has log entries — aborting.", run_month)
         return
 
@@ -1404,7 +1404,11 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
             log.info("[stage_0a_draft] Calling %s for agenda draft...", m)
             draft_raw      = _council_call(m, draft_msgs, MAX_AGENDA_TOKENS, "council_0a_draft")
             draft_json     = _parse_json_safe(draft_raw, "council_0a_draft")
-            proposed_items = draft_json.get("agenda_items", []) if draft_json else []
+            raw_items = draft_json.get("agenda_items", []) if draft_json else []
+            proposed_items = [
+                (i.get("title") or i.get("agenda_item") or str(i)) if isinstance(i, dict) else str(i)
+                for i in raw_items
+            ] or ["General NEPSE market outlook [FALLBACK]"]
             if not proposed_items:
                 proposed_items = ["General NEPSE market outlook [FALLBACK]"]
             log.info("Stage 0a: %d proposed items", len(proposed_items))
@@ -1426,7 +1430,11 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
         log.info("[stage_0b_review] Calling %s for agenda review...", m)
         review_raw     = _council_call(m, review_msgs, MAX_AGENDA_TOKENS, "council_0b_review")
         review_json    = _parse_json_safe(review_raw, "council_0b_review")
-        approved_items = review_json.get("approved_agenda", proposed_items) if review_json else proposed_items
+        raw_agenda = review_json.get("approved_agenda", proposed_items) if review_json else proposed_items
+        approved_items = [
+            (i.get("title") or i.get("agenda_item") or str(i)) if isinstance(i, dict) else str(i)
+            for i in raw_agenda
+        ]
         if not approved_items:
             approved_items = proposed_items
         _write_agenda(run_month, approved_items)
