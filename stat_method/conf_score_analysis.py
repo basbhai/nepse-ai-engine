@@ -1,9 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-conf_score_analysis.py — NEPSE AI Engine
-=========================================
+conf_score_analysis.py — NEPSE AI Engine (Enhanced)
+====================================================
 Runs 6 statistical methods on conf_score vs price returns
-for each symbol and sector.
+for ALL available symbols, fully segmented by sector.
+
+Enhancements (v2):
+  - Stationarity check (ADF) before Granger; differencing if needed.
+  - Benjamini-Hochberg multiple‑testing correction for regressions.
+  - Adaptive threshold sweep (5th–95th percentile).
+  - Newey‑West HAC standard errors in per‑symbol regressions.
+  - Improved missing‑data handling in volume independence.
+  - Richer report with executive summary & warnings.
 
 Methods:
   1. Quintile Sort          — monotonic return pattern per bucket
@@ -11,27 +19,25 @@ Methods:
   3. Granger Causality      — does conf_score lead price or follow it
   4. Panel Regression       — marginal effect with volume control
   5. Threshold Detection    — where is the real breakpoint
-  6. Volume Independence    — confirm conf_score ≠ volume proxy
+  6. Volume Independence    — confirm conf_score is not volume proxy
 
 Output:
   conf_score_results/
-    per_symbol_summary.csv     — all metrics per symbol
-    sector_summary.csv         — aggregated per sector
-    quintile_returns.csv       — bucket return profiles
-    ic_timeseries.csv          — daily IC values
-    granger_results.csv        — causality test results
-    threshold_results.csv      — detected thresholds per sector
-    report.txt                 — plain text summary
-
-Run:
-  cd ~/nepse-engine
-  python conf_score_analysis.py
-
-Requirements:
-  pip install pandas numpy scipy statsmodels psycopg2-binary --break-system-packages
+    sector_quintile_returns.csv
+    ic_timeseries.csv
+    sector_ic_summary.csv
+    granger_per_symbol.csv
+    sector_granger_summary.csv
+    per_symbol_regression.csv
+    sector_regression_summary.csv
+    sector_threshold.csv
+    volume_per_symbol.csv
+    sector_volume_summary.csv
+    report.txt
 """
 
 import os
+import sys
 import warnings
 import logging
 from datetime import datetime
@@ -40,6 +46,9 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 from scipy.stats import spearmanr
+import statsmodels.api as sm
+from statsmodels.tsa.stattools import adfuller, grangercausalitytests
+from dotenv import load_dotenv
 
 warnings.filterwarnings("ignore")
 
@@ -49,87 +58,54 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 log = logging.getLogger(__name__)
-
+load_dotenv()
 # ─────────────────────────────────────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────────────────────────────────────
 
-DB_URL = "postgresql://postgres:nepse123@127.0.0.1:5432/nepse_engine"
-OUTPUT_DIR = "conf_score_results"
-START_DATE = "2022-01-01"
-MIN_ROWS_PER_SYMBOL = 100
+DB_URL       = os.getenv("DATABASE_URL")
+OUTPUT_DIR   = "conf_score_results"
+START_DATE   = "2021-01-01"
+MIN_ROWS     = 60
 FORWARD_DAYS = [1, 3, 5, 10]
-QUINTILES = 5
-GRANGER_LAGS = [1, 2, 3, 5]
-
-# Symbols to analyse — top liquid stocks per sector
-SYMBOLS = [
-    # Commercial Banks
-    "KBL", "PRVU", "GBIME", "NABIL", "HBL", "EBL", "NMB",
-    # Development Banks
-    "JBBL", "LBBL", "SHINE", "MLBL", "MNBBL", "SADBL", "GBBL",
-    # Finance
-    "MFIL", "NFS", "RLFL", "SFCL", "PROFL", "PFL", "GUFL",
-    # Hotels
-    "SHL", "CGH", "TRH", "OHL",
-    # Hydro Power
-    "NGPL", "HDHPC", "API", "NHPC", "AKJCL", "RIDI", "AKPL", "AHPC", "UPPER",
-    # Investment
-    "NIFRA", "HIDCL", "NRN", "HATHY", "CHDC",
-    # Life Insurance
-    "NLIC", "SJLIC", "ALICL", "NLICL", "HLI", "RNLI",
-    # Manufacturing
-    "SHIVM", "GCIL", "HDL", "SARBTM",
-    # Microfinance
-    "FMDBL", "CBBL", "SKBBL", "RSDC", "NUBL",
-    # Mutual Fund
-    "PRSF", "NSIF2", "GIBF1", "NICBF", "NMB50",
-    # Non Life Insurance
-    "IGI", "SGIC", "HEI", "NLG", "NICL", "SPIL",
-    # Others
-    "NTC", "NRIC", "NRM",
-    # Tradings
-    "STC",
-]
-
+QUINTILES    = 5
+GRANGER_MAXLAG = 3
+HAC_LAGS     = 4               # Newey-West lags for OLS
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DATA LOADER
 # ─────────────────────────────────────────────────────────────────────────────
 
 def load_data() -> pd.DataFrame:
-    """Load price_history + sector from DB."""
     try:
         import psycopg2
         from psycopg2.extras import RealDictCursor
     except ImportError:
-        log.error("psycopg2 not installed. Run: pip install psycopg2-binary --break-system-packages")
-        raise
+        log.error("psycopg2 missing. Run: pip install psycopg2-binary --break-system-packages")
+        sys.exit(1)
 
-    sym_list = "', '".join(SYMBOLS)
     query = f"""
         SELECT
             p.date,
             p.symbol,
-            s.sectorname as sector,
-            NULLIF(p.conf_score, '')::float    as conf_score,
-            NULLIF(p.close, '')::float          as close,
-            NULLIF(p.prev_close, '')::float     as prev_close,
-            NULLIF(p.volume, '')::float         as volume,
-            NULLIF(p.turnover, '')::float       as turnover
+            COALESCE(s.sectorname, 'Unknown') AS sector,
+            NULLIF(p.conf_score, '')::float    AS conf_score,
+            NULLIF(p.close, '')::float         AS close,
+            NULLIF(p.prev_close, '')::float    AS prev_close,
+            NULLIF(p.volume, '')::float        AS volume,
+            NULLIF(p.turnover, '')::float      AS turnover
         FROM price_history p
         LEFT JOIN share_sectors s ON s.symbol = p.symbol
-        WHERE p.symbol IN ('{sym_list}')
-          AND p.date >= '{START_DATE}'
+        WHERE p.date >= '{START_DATE}'
           AND NULLIF(p.conf_score, '') IS NOT NULL
           AND p.conf_score != '0'
           AND NULLIF(p.close, '') IS NOT NULL
           AND NULLIF(p.prev_close, '') IS NOT NULL
-          AND p.prev_close != '0'
+          AND NULLIF(p.prev_close, '')::float > 0
         ORDER BY p.symbol, p.date
     """
 
-    log.info("Loading data from DB...")
+    log.info("Loading all symbols from DB (from %s)...", START_DATE)
     conn = psycopg2.connect(DB_URL)
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -141,136 +117,146 @@ def load_data() -> pd.DataFrame:
     df = pd.DataFrame([dict(r) for r in rows])
     df["date"] = pd.to_datetime(df["date"])
     df = df.dropna(subset=["conf_score", "close", "prev_close"])
-    df = df[df["prev_close"] > 0]
+    df = df[(df["prev_close"] > 0) & (df["close"] > 0)]
 
-    # Compute day return
+    # Exclude bonds/debentures
+    import re
+    is_equity = ~df["symbol"].apply(
+        lambda s: bool(re.search(r'\d{2,}', str(s)[3:])) or
+                  any(str(s).upper().endswith(p) for p in
+                      ["SY2", "SY3", "EF", "MF1", "MF2", "MF3",
+                       "STF", "LTF", "LICF", "HLICF"])
+    )
+    before = df["symbol"].nunique()
+    df = df[is_equity]
+    after = df["symbol"].nunique()
+    log.info("Filtered bonds/debentures: %d → %d equity symbols", before, after)
+
+    # Same-day return
     df["day_return"] = (df["close"] - df["prev_close"]) / df["prev_close"] * 100
 
-    # Compute forward returns per symbol
+    # Forward returns
     log.info("Computing forward returns...")
     df = df.sort_values(["symbol", "date"]).reset_index(drop=True)
     for fwd in FORWARD_DAYS:
         df[f"fwd_{fwd}d"] = (
             df.groupby("symbol")["close"]
-            .transform(lambda x: x.shift(-fwd) / x - 1) * 100
+            .transform(lambda x: (x.shift(-fwd) / x - 1) * 100)
         )
 
-    log.info("Loaded %d rows for %d symbols", len(df), df["symbol"].nunique())
+    # Drop symbols with too few rows
+    counts = df.groupby("symbol").size()
+    df = df[df["symbol"].isin(counts[counts >= MIN_ROWS].index)]
+
+    log.info("Final: %d rows | %d symbols | %d sectors",
+             len(df), df["symbol"].nunique(), df["sector"].nunique())
     return df
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# METHOD 1 — QUINTILE SORT
+# METHOD 1 — QUINTILE SORT (unchanged except for adaptive later)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def quintile_sort(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Sort all stock-days into quintiles by conf_score.
-    Compute mean forward returns per quintile per sector.
-    """
     log.info("Method 1: Quintile Sort...")
     results = []
 
-    # Market-wide quintiles
-    df["quintile"] = pd.qcut(df["conf_score"], QUINTILES, labels=False) + 1
-
-    for fwd in FORWARD_DAYS:
-        col = f"fwd_{fwd}d"
-        sub = df.dropna(subset=[col])
-        for q in range(1, QUINTILES + 1):
-            mask = sub["quintile"] == q
-            qdata = sub[mask][col]
-            results.append({
-                "sector": "ALL",
-                "quintile": q,
-                "forward_days": fwd,
-                "n": len(qdata),
-                "avg_return": round(qdata.mean(), 4),
-                "median_return": round(qdata.median(), 4),
-                "win_rate": round((qdata > 0).mean() * 100, 2),
-                "avg_conf_score": round(sub[mask]["conf_score"].mean(), 2),
-            })
-
-    # Per sector quintiles
-    for sector, sdf in df.groupby("sector"):
-        if len(sdf) < MIN_ROWS_PER_SYMBOL * 3:
-            continue
+    def run_q(label, sub):
         try:
-            sdf = sdf.copy()
-            sdf["sq"] = pd.qcut(sdf["conf_score"], QUINTILES, labels=False) + 1
+            sub = sub.copy()
+            sub["q"] = pd.qcut(sub["conf_score"], QUINTILES,
+                                labels=False, duplicates="drop") + 1
         except Exception:
-            continue
+            return
         for fwd in FORWARD_DAYS:
             col = f"fwd_{fwd}d"
-            sub = sdf.dropna(subset=[col])
-            for q in range(1, QUINTILES + 1):
-                mask = sub["sq"] == q
-                qdata = sub[mask][col]
-                if len(qdata) < 10:
+            s = sub.dropna(subset=[col])
+            for q in sorted(s["q"].dropna().unique()):
+                qd = s[s["q"] == q]
+                ret = qd[col]
+                if len(ret) < 5:
                     continue
                 results.append({
-                    "sector": sector,
-                    "quintile": q,
-                    "forward_days": fwd,
-                    "n": len(qdata),
-                    "avg_return": round(qdata.mean(), 4),
-                    "median_return": round(qdata.median(), 4),
-                    "win_rate": round((qdata > 0).mean() * 100, 2),
-                    "avg_conf_score": round(sub[mask]["conf_score"].mean(), 2),
+                    "group": label, "quintile": int(q),
+                    "forward_days": fwd, "n": len(ret),
+                    "avg_conf": round(qd["conf_score"].mean(), 2),
+                    "avg_return": round(ret.mean(), 4),
+                    "median_return": round(ret.median(), 4),
+                    "win_rate_pct": round((ret > 0).mean() * 100, 2),
+                    "std_return": round(ret.std(), 4),
                 })
 
-    return pd.DataFrame(results)
+    run_q("ALL_MARKET", df)
+    for sector, sdf in df.groupby("sector"):
+        if sdf["symbol"].nunique() >= 2:
+            run_q(sector, sdf)
+
+    out = pd.DataFrame(results)
+    if not out.empty:
+        q1 = out[out["quintile"] == 1][["group","forward_days","avg_return"]].rename(
+            columns={"avg_return":"q1_ret"})
+        q5 = out[out["quintile"] == 5][["group","forward_days","avg_return"]].rename(
+            columns={"avg_return":"q5_ret"})
+        sp = q1.merge(q5, on=["group","forward_days"], how="inner")
+        sp["q5_q1_spread"] = round(sp["q5_ret"] - sp["q1_ret"], 4)
+        out = out.merge(sp[["group","forward_days","q5_q1_spread"]],
+                        on=["group","forward_days"], how="left")
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# METHOD 2 — INFORMATION COEFFICIENT
+# METHOD 2 — INFORMATION COEFFICIENT (unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def information_coefficient(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    Daily cross-sectional Spearman correlation between conf_score and fwd returns.
-    Returns IC timeseries and per-symbol IC summary.
-    """
+def information_coefficient(df: pd.DataFrame) -> tuple:
     log.info("Method 2: Information Coefficient...")
     ic_rows = []
 
-    for fwd in FORWARD_DAYS:
-        col = f"fwd_{fwd}d"
-        sub = df.dropna(subset=[col])
-        for date, ddf in sub.groupby("date"):
-            if len(ddf) < 5:
-                continue
-            rho, pval = spearmanr(ddf["conf_score"], ddf[col])
-            ic_rows.append({
-                "date": date,
-                "forward_days": fwd,
-                "ic": round(rho, 4),
-                "pval": round(pval, 4),
-                "n_stocks": len(ddf),
-            })
+    def run_ic(label, sub):
+        for fwd in FORWARD_DAYS:
+            col = f"fwd_{fwd}d"
+            s = sub.dropna(subset=[col, "conf_score"])
+            for date, ddf in s.groupby("date"):
+                if len(ddf) < 5:
+                    continue
+                try:
+                    rho, pval = spearmanr(ddf["conf_score"], ddf[col])
+                    ic_rows.append({
+                        "group": label, "date": date,
+                        "forward_days": fwd,
+                        "ic": round(rho, 4),
+                        "pval": round(pval, 4),
+                        "n_stocks": len(ddf),
+                    })
+                except Exception:
+                    pass
+
+    run_ic("ALL_MARKET", df)
+    for sector, sdf in df.groupby("sector"):
+        if sdf["symbol"].nunique() >= 3:
+            run_ic(sector, sdf)
 
     ic_ts = pd.DataFrame(ic_rows)
-
-    # Summary per forward horizon
     summary_rows = []
-    for fwd in FORWARD_DAYS:
-        sub = ic_ts[ic_ts["forward_days"] == fwd]["ic"].dropna()
-        if len(sub) < 10:
+
+    for (group, fwd), gdf in ic_ts.groupby(["group","forward_days"]):
+        ic_vals = gdf["ic"].dropna()
+        if len(ic_vals) < 10:
             continue
-        mean_ic = sub.mean()
-        std_ic = sub.std()
-        icir = mean_ic / std_ic if std_ic > 0 else 0
-        t_stat = mean_ic / (std_ic / np.sqrt(len(sub))) if std_ic > 0 else 0
+        mean_ic = ic_vals.mean()
+        std_ic  = ic_vals.std()
+        icir    = mean_ic / std_ic if std_ic > 0 else 0
+        t_stat  = mean_ic / (std_ic / np.sqrt(len(ic_vals))) if std_ic > 0 else 0
         summary_rows.append({
-            "forward_days": fwd,
+            "group": group, "forward_days": fwd,
             "mean_ic": round(mean_ic, 4),
-            "std_ic": round(std_ic, 4),
-            "icir": round(icir, 4),
-            "t_stat": round(t_stat, 4),
-            "hit_rate": round((sub > 0).mean() * 100, 2),
-            "n_days": len(sub),
+            "std_ic":  round(std_ic, 4),
+            "icir":    round(icir, 4),
+            "t_stat":  round(t_stat, 4),
+            "hit_rate_pct": round((ic_vals > 0).mean() * 100, 2),
+            "n_days":  len(ic_vals),
             "signal_strength": (
-                "STRONG" if abs(mean_ic) > 0.05 and abs(icir) > 0.5
+                "STRONG"   if abs(mean_ic) > 0.05 and abs(icir) > 0.5
                 else "MODERATE" if abs(mean_ic) > 0.02
                 else "WEAK"
             ),
@@ -280,410 +266,496 @@ def information_coefficient(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFram
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# METHOD 3 — GRANGER CAUSALITY
+# METHOD 3 — GRANGER CAUSALITY (with stationarity checks)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def granger_causality(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Test whether conf_score Granger-causes price returns, or the reverse.
-    Uses statsmodels grangercausalitytests.
-    """
-    log.info("Method 3: Granger Causality...")
+def check_stationarity(series, series_name, symbol):
+    """Return (is_stationary, differenced_series) after ADF test."""
+    clean = series.dropna()
+    if len(clean) < 30:
+        return False, None
     try:
-        from statsmodels.tsa.stattools import grangercausalitytests
-    except ImportError:
-        log.warning("statsmodels not installed — skipping Granger test")
-        return pd.DataFrame()
+        p = adfuller(clean, autolag="AIC")[1]
+    except:
+        return False, None
+    if p <= 0.05:
+        return True, clean
+    else:
+        # Try differencing
+        diff = clean.diff().dropna()
+        if len(diff) < 30:
+            return False, None
+        try:
+            p_diff = adfuller(diff, autolag="AIC")[1]
+        except:
+            return False, None
+        if p_diff <= 0.05:
+            log.debug("  %s: %s non-stationary -> differenced", symbol, series_name)
+            return True, diff
+        return False, None
 
-    results = []
-    for symbol, sdf in df.groupby("symbol"):
-        sdf = sdf.sort_values("date").dropna(subset=["conf_score", "day_return"])
-        if len(sdf) < MIN_ROWS_PER_SYMBOL:
+def granger_causality(df: pd.DataFrame) -> tuple:
+    log.info("Method 3: Granger Causality (per symbol, with stationarity)...")
+
+    per_symbol = []
+    symbols = df["symbol"].unique()
+
+    for i, symbol in enumerate(symbols):
+        if i % 50 == 0:
+            log.info("  Granger: %d / %d", i, len(symbols))
+        sdf = df[df["symbol"] == symbol].sort_values("date").copy()
+        sdf = sdf.dropna(subset=["conf_score","day_return"])
+        if len(sdf) < MIN_ROWS:
             continue
+        sector = sdf["sector"].iloc[0]
 
-        # Test 1: conf_score → day_return (does score predict future return?)
-        try:
-            data_fwd = sdf[["day_return", "conf_score"]].dropna()
-            gc_fwd = grangercausalitytests(data_fwd, maxlag=3, verbose=False)
-            # Get best p-value across lags
-            pvals_fwd = [gc_fwd[lag][0]["ssr_ftest"][1] for lag in range(1, 4)]
-            best_p_fwd = min(pvals_fwd)
-            best_lag_fwd = pvals_fwd.index(best_p_fwd) + 1
-        except Exception:
-            best_p_fwd = None
-            best_lag_fwd = None
+        # Check stationarity
+        stat_conf, conf_series = check_stationarity(sdf["conf_score"], "conf_score", symbol)
+        stat_ret, ret_series   = check_stationarity(sdf["day_return"], "day_return", symbol)
 
-        # Test 2: day_return → conf_score (does price drive score?)
-        try:
-            data_rev = sdf[["conf_score", "day_return"]].dropna()
-            gc_rev = grangercausalitytests(data_rev, maxlag=3, verbose=False)
-            pvals_rev = [gc_rev[lag][0]["ssr_ftest"][1] for lag in range(1, 4)]
-            best_p_rev = min(pvals_rev)
-            best_lag_rev = pvals_rev.index(best_p_rev) + 1
-        except Exception:
-            best_p_rev = None
-            best_lag_rev = None
+        if not stat_conf or not stat_ret:
+            continue   # skip if not stationary even after differencing
 
-        # Interpret
-        score_leads = best_p_fwd is not None and best_p_fwd < 0.05
-        price_leads = best_p_rev is not None and best_p_rev < 0.05
-
-        if score_leads and not price_leads:
-            direction = "SCORE_LEADS_PRICE"
-        elif price_leads and not score_leads:
-            direction = "PRICE_LEADS_SCORE"
-        elif score_leads and price_leads:
-            direction = "BIDIRECTIONAL"
+        # Align the transformed series
+        # For Granger we need a common DataFrame with these two columns
+        if conf_series.index.equals(ret_series.index):
+            gc_df = pd.DataFrame({"conf_score": conf_series, "day_return": ret_series})
         else:
-            direction = "NO_CAUSALITY"
+            # Merge on date index if they differ due to differencing shift
+            merged = pd.concat([conf_series.rename("conf_score"),
+                                ret_series.rename("day_return")], axis=1).dropna()
+            if len(merged) < 30:
+                continue
+            gc_df = merged
 
-        results.append({
-            "symbol": symbol,
-            "sector": sdf["sector"].iloc[0],
-            "n": len(sdf),
-            "score_to_price_pval": round(best_p_fwd, 4) if best_p_fwd is not None else None,
-            "score_to_price_lag": best_lag_fwd,
-            "price_to_score_pval": round(best_p_rev, 4) if best_p_rev is not None else None,
-            "price_to_score_lag": best_lag_rev,
+        def gc(y_col, x_col):
+            try:
+                data = gc_df[[y_col, x_col]].dropna()
+                if len(data) < 30:
+                    return None, None
+                res = grangercausalitytests(data, maxlag=GRANGER_MAXLAG, verbose=False)
+                pvals = [res[lag][0]["ssr_ftest"][1] for lag in range(1, GRANGER_MAXLAG+1)]
+                bp = min(pvals)
+                bl = pvals.index(bp) + 1
+                return round(bp, 4), bl
+            except Exception:
+                return None, None
+
+        p_fwd, l_fwd = gc("day_return",  "conf_score")
+        p_rev, l_rev = gc("conf_score",  "day_return")
+
+        sl = p_fwd is not None and p_fwd < 0.05
+        pl = p_rev is not None and p_rev < 0.05
+
+        direction = (
+            "SCORE_LEADS_PRICE"  if sl and not pl else
+            "PRICE_LEADS_SCORE"  if pl and not sl else
+            "BIDIRECTIONAL"      if sl and pl else
+            "NO_CAUSALITY"
+        )
+
+        per_symbol.append({
+            "symbol": symbol, "sector": sector, "n": len(sdf),
+            "score_to_price_pval": p_fwd, "score_to_price_lag": l_fwd,
+            "price_to_score_pval": p_rev, "price_to_score_lag": l_rev,
             "direction": direction,
+            "conf_differenced": not stat_conf or (conf_series is not sdf["conf_score"]),
+            "ret_differenced": not stat_ret or (ret_series is not sdf["day_return"]),
         })
 
-    return pd.DataFrame(results)
+    per_sym_df = pd.DataFrame(per_symbol)
+    sector_rows = []
+
+    if not per_sym_df.empty:
+        for sector, sdf in per_sym_df.groupby("sector"):
+            c = sdf["direction"].value_counts().to_dict()
+            n = len(sdf)
+            psl = c.get("SCORE_LEADS_PRICE", 0)
+            ppl = c.get("PRICE_LEADS_SCORE", 0)
+            sector_rows.append({
+                "sector": sector, "n_symbols": n,
+                "score_leads_price": psl,
+                "price_leads_score": ppl,
+                "bidirectional": c.get("BIDIRECTIONAL", 0),
+                "no_causality":  c.get("NO_CAUSALITY",  0),
+                "pct_score_leads": round(psl / n * 100, 1) if n else 0,
+                "pct_price_leads": round(ppl / n * 100, 1) if n else 0,
+                "verdict": "LEADING" if psl > ppl else "LAGGING",
+            })
+
+    return per_sym_df, pd.DataFrame(sector_rows)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# METHOD 4 — PANEL REGRESSION PER SYMBOL
+# METHOD 4 — PER-SYMBOL REGRESSION (with Newey‑West & multiple testing)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def per_symbol_regression(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    OLS regression: fwd_return ~ conf_score + log(volume)
-    Per symbol, per forward horizon.
-    Gives beta, t-stat, R².
-    """
-    log.info("Method 4: Per-Symbol Regression...")
+def benjamini_hochberg(pvals: np.ndarray, alpha=0.05) -> np.ndarray:
+    """Return array of booleans (True if significant after BH correction)."""
+    pvals = np.asarray(pvals)
+    n = len(pvals)
+    if n == 0:
+        return np.array([], dtype=bool)
+    ranks = np.argsort(np.argsort(pvals)) + 1
+    thresholds = (ranks / n) * alpha
+    return pvals <= thresholds
+
+def per_symbol_regression(df: pd.DataFrame) -> tuple:
+    log.info("Method 4: Per-Symbol Regression (Newey‑West & adj. p-values)...")
     from scipy.stats import t as t_dist
 
-    results = []
-    for symbol, sdf in df.groupby("symbol"):
-        sdf = sdf.sort_values("date").copy()
+    per_symbol = []
+    symbols = df["symbol"].unique()
+
+    for i, symbol in enumerate(symbols):
+        if i % 50 == 0:
+            log.info("  Regression: %d / %d", i, len(symbols))
+        sdf = df[df["symbol"] == symbol].sort_values("date").copy()
         sector = sdf["sector"].iloc[0]
-        n_total = len(sdf)
 
         for fwd in [1, 5]:
             col = f"fwd_{fwd}d"
-            sub = sdf.dropna(subset=[col, "conf_score", "volume"]).copy()
+            sub = sdf.dropna(subset=[col,"conf_score","volume"]).copy()
             sub = sub[sub["volume"] > 0]
-            if len(sub) < MIN_ROWS_PER_SYMBOL:
+            if len(sub) < MIN_ROWS:
                 continue
 
-            sub["log_vol"] = np.log(sub["volume"])
-            X = np.column_stack([
-                np.ones(len(sub)),
-                sub["conf_score"].values,
-                sub["log_vol"].values,
-            ])
+            sub["log_vol"] = np.log(sub["volume"] + 1)
+            X = sm.add_constant(sub[["conf_score", "log_vol"]].values)
             y = sub[col].values
+            n = len(y)
 
             try:
-                # OLS via numpy
-                beta, residuals, _, _ = np.linalg.lstsq(X, y, rcond=None)
-                y_pred = X @ beta
-                ss_res = np.sum((y - y_pred) ** 2)
-                ss_tot = np.sum((y - y.mean()) ** 2)
-                r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 0
+                # Use OLS with HAC standard errors (Newey-West)
+                model = sm.OLS(y, X).fit(cov_type='HAC', cov_kwds={'maxlags': HAC_LAGS})
+                beta_conf = model.params[1]
+                se_conf = model.bse[1]
+                t_stat = model.tvalues[1]
+                pval = model.pvalues[1]
+                r2 = model.rsquared
 
-                # Standard errors
-                n, k = X.shape
-                sigma2 = ss_res / (n - k)
-                try:
-                    cov = sigma2 * np.linalg.inv(X.T @ X)
-                    se = np.sqrt(np.diag(cov))
-                    t_stat = beta[1] / se[1]
-                    pval = 2 * t_dist.sf(abs(t_stat), df=n - k)
-                except Exception:
-                    t_stat = None
-                    pval = None
+                corr_ret = spearmanr(sub["conf_score"], sub[col])[0]
+                corr_vol = spearmanr(sub["conf_score"], sub["volume"])[0]
 
-                results.append({
-                    "symbol": symbol,
-                    "sector": sector,
-                    "forward_days": fwd,
-                    "n": n_total,
-                    "obs_used": len(sub),
-                    "beta_conf": round(float(beta[1]), 6),
-                    "t_stat": round(float(t_stat), 4) if t_stat is not None else None,
-                    "pval": round(float(pval), 4) if pval is not None else None,
+                per_symbol.append({
+                    "symbol": symbol, "sector": sector,
+                    "forward_days": fwd, "n": n,
+                    "beta_conf": round(float(beta_conf), 6),
+                    "se_conf": round(float(se_conf), 6),
+                    "t_stat": round(float(t_stat), 3),
+                    "pval": round(float(pval), 6),
                     "r2": round(float(r2), 6),
-                    "significant": pval is not None and pval < 0.05,
-                    "corr_conf_return": round(
-                        spearmanr(sub["conf_score"], sub[col])[0], 4
-                    ),
-                    "corr_conf_volume": round(
-                        spearmanr(sub["conf_score"], sub["volume"])[0], 4
-                    ),
+                    "significant_p05": bool(pval < 0.05),   # raw
+                    "corr_conf_return": round(corr_ret, 4),
+                    "corr_conf_volume": round(corr_vol, 4),
                     "avg_conf": round(sub["conf_score"].mean(), 2),
                     "avg_return": round(sub[col].mean(), 4),
                 })
             except Exception as e:
-                log.debug("Regression failed for %s fwd=%d: %s", symbol, fwd, e)
+                log.debug("Regression failed for %s (%d): %s", symbol, fwd, str(e))
+                pass
 
-    return pd.DataFrame(results)
+    per_sym_df = pd.DataFrame(per_symbol)
+
+    # Apply BH correction per forward horizon
+    if not per_sym_df.empty:
+        for fwd in per_sym_df["forward_days"].unique():
+            mask = per_sym_df["forward_days"] == fwd
+            pvals = per_sym_df.loc[mask, "pval"].values
+            adj_sig = benjamini_hochberg(pvals, alpha=0.05)
+            per_sym_df.loc[mask, "pval_adj_significant"] = adj_sig
+            # Also store adjusted p-values? We can compute them, but simple flag suffices.
+            # For completeness, we could compute FDR q-values, but for brevity we'll just mark.
+            per_sym_df.loc[mask, "significant_adj"] = adj_sig
+    else:
+        per_sym_df["significant_adj"] = False
+
+    # Sector summary using adjusted significance
+    sector_rows = []
+    if not per_sym_df.empty:
+        for (sector, fwd), sdf in per_sym_df.groupby(["sector","forward_days"]):
+            sig = sdf[sdf["significant_adj"] == True]
+            sector_rows.append({
+                "sector": sector, "forward_days": fwd,
+                "n_symbols": len(sdf),
+                "n_significant": len(sig),
+                "pct_significant": round(len(sig)/len(sdf)*100, 1) if len(sdf) else 0,
+                "avg_beta_conf": round(sdf["beta_conf"].mean(), 6),
+                "avg_corr_conf_return": round(sdf["corr_conf_return"].mean(), 4),
+                "avg_corr_conf_volume": round(sdf["corr_conf_volume"].mean(), 4),
+                "avg_r2": round(sdf["r2"].mean(), 6),
+            })
+
+    return per_sym_df, pd.DataFrame(sector_rows)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# METHOD 5 — THRESHOLD DETECTION
+# METHOD 5 — ADAPTIVE THRESHOLD DETECTION
 # ─────────────────────────────────────────────────────────────────────────────
 
 def threshold_detection(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Grid search for the conf_score threshold that maximises the
-    return difference between above-threshold and below-threshold stocks.
-    Tests every 2.5 point increment from 30 to 65.
-    """
-    log.info("Method 5: Threshold Detection...")
+    log.info("Method 5: Adaptive Threshold Detection...")
     results = []
-    thresholds = np.arange(30, 66, 2.5)
 
-    groups = {"ALL": df}
+    groups = {"ALL_MARKET": df}
     for sector, sdf in df.groupby("sector"):
-        if len(sdf) >= MIN_ROWS_PER_SYMBOL * 3:
+        if len(sdf) >= MIN_ROWS * 5:
             groups[sector] = sdf
 
     for group_name, gdf in groups.items():
-        for fwd in [1, 5]:
+        for fwd in FORWARD_DAYS:
             col = f"fwd_{fwd}d"
-            sub = gdf.dropna(subset=[col])
-            if len(sub) < 50:
+            sub = gdf.dropna(subset=[col,"conf_score"])
+            if len(sub) < 100:
                 continue
 
-            best_threshold = None
-            best_spread = -999
-            best_above_ret = None
-            best_below_ret = None
-            best_pval = None
-            best_n_above = None
-            best_n_below = None
+            # Adaptive thresholds: 5th to 95th percentile, step 2
+            low = np.percentile(sub["conf_score"], 5)
+            high = np.percentile(sub["conf_score"], 95)
+            if high - low < 10:
+                continue
+            thresholds = np.arange(low, high, 2)
+
+            best = {"threshold": None, "spread": -999}
 
             for thresh in thresholds:
                 above = sub[sub["conf_score"] >= thresh][col]
-                below = sub[sub["conf_score"] < thresh][col]
-
-                if len(above) < 20 or len(below) < 20:
+                below = sub[sub["conf_score"] <  thresh][col]
+                if len(above) < 30 or len(below) < 30:
                     continue
-
                 spread = above.mean() - below.mean()
-
-                # t-test for significance
                 try:
                     _, pval = stats.ttest_ind(above, below, equal_var=False)
-                except Exception:
+                except:
                     pval = 1.0
+                if spread > best["spread"]:
+                    best = {
+                        "threshold": thresh, "spread": spread,
+                        "above": round(above.mean(), 4),
+                        "below": round(below.mean(), 4),
+                        "pval":  round(pval, 4),
+                        "n_above": len(above),
+                        "n_below": len(below),
+                    }
 
-                if spread > best_spread:
-                    best_spread = spread
-                    best_threshold = thresh
-                    best_above_ret = round(above.mean(), 4)
-                    best_below_ret = round(below.mean(), 4)
-                    best_pval = round(pval, 4)
-                    best_n_above = len(above)
-                    best_n_below = len(below)
-
-            if best_threshold is not None:
+            if best["threshold"] is not None:
                 results.append({
-                    "group": group_name,
-                    "forward_days": fwd,
-                    "best_threshold": best_threshold,
-                    "spread_pct": round(best_spread, 4),
-                    "above_threshold_avg_return": best_above_ret,
-                    "below_threshold_avg_return": best_below_ret,
-                    "ttest_pval": best_pval,
-                    "significant": best_pval < 0.05,
-                    "n_above": best_n_above,
-                    "n_below": best_n_below,
+                    "group": group_name, "forward_days": fwd,
+                    "best_threshold": best["threshold"],
+                    "spread_pct": round(best["spread"], 4),
+                    "above_return": best["above"],
+                    "below_return": best["below"],
+                    "ttest_pval": best["pval"],
+                    "significant": bool(best["pval"] and best["pval"] < 0.05),
+                    "n_above": best["n_above"],
+                    "n_below": best["n_below"],
                 })
 
     return pd.DataFrame(results)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# METHOD 6 — VOLUME INDEPENDENCE PER SYMBOL
+# METHOD 6 — VOLUME INDEPENDENCE (improved gap handling)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def volume_independence(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Per-symbol correlation between conf_score and volume/turnover.
-    Confirms conf_score is not just a volume proxy.
-    """
-    log.info("Method 6: Volume Independence...")
-    results = []
+def volume_independence(df: pd.DataFrame) -> tuple:
+    log.info("Method 6: Volume Independence (improved gap handling)...")
+    per_symbol = []
+    symbols = df["symbol"].unique()
 
-    for symbol, sdf in df.groupby("symbol"):
-        sdf = sdf.dropna(subset=["conf_score", "volume", "turnover"])
+    for i, symbol in enumerate(symbols):
+        if i % 50 == 0:
+            log.info("  Volume: %d / %d", i, len(symbols))
+        sdf = df[df["symbol"] == symbol].sort_values("date").copy()
+        sdf = sdf.dropna(subset=["conf_score","volume","turnover"])
         sdf = sdf[sdf["volume"] > 0]
-        if len(sdf) < MIN_ROWS_PER_SYMBOL:
+        if len(sdf) < MIN_ROWS:
             continue
+        sector = sdf["sector"].iloc[0]
 
-        corr_vol, pval_vol = spearmanr(sdf["conf_score"], sdf["volume"])
-        corr_to, pval_to = spearmanr(sdf["conf_score"], sdf["turnover"])
+        corr_vol = spearmanr(sdf["conf_score"], sdf["volume"])[0]
+        corr_to  = spearmanr(sdf["conf_score"], sdf["turnover"])[0]
 
-        # Also correlate with momentum (lagged return)
-        sdf = sdf.sort_values("date")
-        sdf["lag1_return"] = sdf["day_return"].shift(1)
-        sub_lag = sdf.dropna(subset=["lag1_return"])
-        corr_mom = spearmanr(sub_lag["conf_score"], sub_lag["lag1_return"])[0] if len(sub_lag) >= 20 else None
+        # Compute lagged returns using forward-fill to handle missing days
+        sdf["day_return_ffill"] = sdf["day_return"].fillna(method="ffill")
+        sdf["lag1"] = sdf["day_return_ffill"].shift(1)
+        sdf["lag3"] = sdf["day_return_ffill"].rolling(3, min_periods=1).mean().shift(1)
+        sub_lag = sdf.dropna(subset=["lag1","lag3"])
 
-        results.append({
-            "symbol": symbol,
-            "sector": sdf["sector"].iloc[0],
-            "n": len(sdf),
-            "corr_conf_volume": round(corr_vol, 4),
+        corr_m1 = spearmanr(sub_lag["conf_score"], sub_lag["lag1"])[0] if len(sub_lag) >= 20 else None
+        corr_m3 = spearmanr(sub_lag["conf_score"], sub_lag["lag3"])[0] if len(sub_lag) >= 20 else None
+
+        per_symbol.append({
+            "symbol": symbol, "sector": sector, "n": len(sdf),
+            "corr_conf_volume":   round(corr_vol, 4),
             "corr_conf_turnover": round(corr_to, 4),
-            "corr_conf_momentum": round(corr_mom, 4) if corr_mom is not None else None,
+            "corr_conf_lag1_return": round(corr_m1, 4) if corr_m1 else None,
+            "corr_conf_lag3_return": round(corr_m3, 4) if corr_m3 else None,
             "volume_proxy_risk": (
-                "HIGH" if abs(corr_vol) > 0.5
-                else "MEDIUM" if abs(corr_vol) > 0.3
-                else "LOW"
+                "HIGH"   if abs(corr_vol) > 0.5 else
+                "MEDIUM" if abs(corr_vol) > 0.3 else "LOW"
             ),
-            "independent_signal": abs(corr_vol) < 0.3 and abs(corr_to) < 0.3,
+            "independent_signal": bool(abs(corr_vol) < 0.3 and abs(corr_to) < 0.3),
         })
 
-    return pd.DataFrame(results)
+    per_sym_df = pd.DataFrame(per_symbol)
+    sector_rows = []
+
+    if not per_sym_df.empty:
+        for sector, sdf in per_sym_df.groupby("sector"):
+            sector_rows.append({
+                "sector": sector,
+                "n_symbols": len(sdf),
+                "avg_corr_volume":   round(sdf["corr_conf_volume"].mean(), 4),
+                "avg_corr_turnover": round(sdf["corr_conf_turnover"].mean(), 4),
+                "avg_corr_lag1_ret": round(sdf["corr_conf_lag1_return"].dropna().mean(), 4),
+                "pct_high_vol_risk": round((sdf["volume_proxy_risk"]=="HIGH").mean()*100, 1),
+                "pct_independent":   round(sdf["independent_signal"].mean()*100, 1),
+            })
+
+    return per_sym_df, pd.DataFrame(sector_rows)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# REPORT WRITER
+# REPORT WRITER (enhanced)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def write_report(
-    quintile_df: pd.DataFrame,
-    ic_summary: pd.DataFrame,
-    ic_ts: pd.DataFrame,
-    granger_df: pd.DataFrame,
-    regression_df: pd.DataFrame,
-    threshold_df: pd.DataFrame,
-    volume_df: pd.DataFrame,
-) -> str:
-    lines = []
-    lines.append("=" * 70)
-    lines.append("CONF_SCORE STATISTICAL ANALYSIS — NEPSE AI ENGINE")
-    lines.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-    lines.append("=" * 70)
+def write_report(quintile_df, ic_summary, granger_sector,
+                 reg_sector, threshold_df, vol_sector, df) -> str:
+    sep = "=" * 70
+    lines = [sep,
+             "CONF_SCORE ANALYSIS — NEPSE AI ENGINE (v2)",
+             f"Generated : {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+             f"Data from : {START_DATE}",
+             f"Symbols   : {df['symbol'].nunique()}",
+             f"Sectors   : {df['sector'].nunique()}",
+             f"Total rows: {len(df):,}",
+             sep]
 
-    # IC Summary
-    lines.append("\n── METHOD 2: INFORMATION COEFFICIENT ──")
+    # Executive Summary
+    lines.append("\n── EXECUTIVE SUMMARY ──")
     if not ic_summary.empty:
-        for _, row in ic_summary.iterrows():
-            lines.append(
-                f"  {row['forward_days']:>2}d fwd | IC={row['mean_ic']:>7.4f} | "
-                f"ICIR={row['icir']:>6.4f} | t={row['t_stat']:>6.2f} | "
-                f"Hit={row['hit_rate']:>5.1f}% | {row['signal_strength']}"
-            )
-
-    # Granger summary
-    lines.append("\n── METHOD 3: GRANGER CAUSALITY ──")
-    if not granger_df.empty:
-        counts = granger_df["direction"].value_counts()
-        total = len(granger_df)
-        for direction, count in counts.items():
-            lines.append(f"  {direction:<25} {count:>3} / {total} symbols ({count/total*100:.1f}%)")
-
-        leads = granger_df[granger_df["direction"] == "SCORE_LEADS_PRICE"]
-        follows = granger_df[granger_df["direction"] == "PRICE_LEADS_SCORE"]
-        lines.append(f"\n  Score leads price (useful signal): {len(leads)} symbols")
-        lines.append(f"  Price leads score (lagging indicator): {len(follows)} symbols")
-
-    # Regression summary
-    lines.append("\n── METHOD 4: REGRESSION (1-day forward) ──")
-    if not regression_df.empty:
-        d1 = regression_df[regression_df["forward_days"] == 1]
-        sig = d1[d1["significant"] == True]
-        lines.append(f"  Significant beta (p<0.05): {len(sig)} / {len(d1)} symbols")
-        if len(d1) > 0:
-            lines.append(f"  Avg beta_conf: {d1['beta_conf'].mean():.6f}")
-            lines.append(f"  Avg Spearman corr: {d1['corr_conf_return'].mean():.4f}")
-
-    # Threshold summary
-    lines.append("\n── METHOD 5: THRESHOLD DETECTION ──")
-    if not threshold_df.empty:
-        market = threshold_df[
-            (threshold_df["group"] == "ALL") &
-            (threshold_df["forward_days"] == 1)
-        ]
-        if not market.empty:
-            row = market.iloc[0]
-            lines.append(f"  Market-wide best threshold (1d): {row['best_threshold']}")
-            lines.append(f"  Above threshold avg return:  {row['above_threshold_avg_return']:>7.4f}%")
-            lines.append(f"  Below threshold avg return:  {row['below_threshold_avg_return']:>7.4f}%")
-            lines.append(f"  Spread: {row['spread_pct']:.4f}% | p={row['ttest_pval']:.4f} | sig={row['significant']}")
-
-        lines.append("\n  Per-sector thresholds (1d):")
-        sector_thresh = threshold_df[
-            (threshold_df["group"] != "ALL") &
-            (threshold_df["forward_days"] == 1)
-        ].sort_values("best_threshold")
-        for _, row in sector_thresh.iterrows():
-            lines.append(
-                f"    {row['group']:<30} threshold={row['best_threshold']:>4.1f} | "
-                f"spread={row['spread_pct']:>6.4f}% | sig={row['significant']}"
-            )
-
-    # Volume independence
-    lines.append("\n── METHOD 6: VOLUME INDEPENDENCE ──")
-    if not volume_df.empty:
-        risk_counts = volume_df["volume_proxy_risk"].value_counts()
-        for risk, count in risk_counts.items():
-            lines.append(f"  {risk:<8} volume proxy risk: {count} symbols")
-        independent = volume_df["independent_signal"].sum()
-        lines.append(f"  Genuinely independent signal: {independent} / {len(volume_df)} symbols")
-        lines.append(f"  Avg corr(conf, volume):   {volume_df['corr_conf_volume'].mean():.4f}")
-        lines.append(f"  Avg corr(conf, momentum): {volume_df['corr_conf_momentum'].dropna().mean():.4f}")
-
-    # Quintile summary
-    lines.append("\n── METHOD 1: QUINTILE SORT (Market-wide, 1d forward) ──")
-    if not quintile_df.empty:
-        market_q = quintile_df[
-            (quintile_df["sector"] == "ALL") &
-            (quintile_df["forward_days"] == 1)
-        ].sort_values("quintile")
-        for _, row in market_q.iterrows():
-            lines.append(
-                f"  Q{int(row['quintile'])} (avg score={row['avg_conf_score']:>5.1f}) | "
-                f"avg_return={row['avg_return']:>7.4f}% | "
-                f"win_rate={row['win_rate']:>5.1f}% | n={row['n']}"
-            )
-
-    lines.append("\n" + "=" * 70)
-    lines.append("CONCLUSION")
-    lines.append("=" * 70)
-
-    # Auto-conclusion
-    if not ic_summary.empty:
-        ic_1d = ic_summary[ic_summary["forward_days"] == 1]
-        if not ic_1d.empty:
-            ic_val = ic_1d.iloc[0]["mean_ic"]
-            icir_val = ic_1d.iloc[0]["icir"]
-            if abs(ic_val) > 0.05 and abs(icir_val) > 0.5:
-                lines.append("Signal quality: STRONG — conf_score is actionable")
-            elif abs(ic_val) > 0.02:
-                lines.append("Signal quality: MODERATE — use as ADD_TO_REASONING")
+        mkt1 = ic_summary[(ic_summary["group"]=="ALL_MARKET") & (ic_summary["forward_days"]==1)]
+        if not mkt1.empty:
+            ic_v = mkt1.iloc[0]["mean_ic"]
+            lines.append(f"Market-wide 1-day IC: {ic_v:.4f}")
+            if abs(ic_v) > 0.05:
+                lines.append("  → conf_score is a STRONG signal.")
+            elif abs(ic_v) > 0.02:
+                lines.append("  → conf_score is a MODERATE signal.")
             else:
-                lines.append("Signal quality: WEAK — noise, do not gate on this")
+                lines.append("  → conf_score is a WEAK signal; use cautiously.")
+
+    if not reg_sector.empty:
+        d1 = reg_sector[reg_sector["forward_days"]==1]
+        if not d1.empty:
+            best_sec = d1.loc[d1["avg_corr_conf_return"].idxmax()]
+            lines.append(f"Strongest sector by avg correlation: {best_sec['sector']} "
+                         f"({best_sec['avg_corr_conf_return']:.4f})")
+
+    # Overlapping window note
+    lines.append("\nNote: Forward returns (3/5/10‑day) use overlapping windows. "
+                 "Standard errors are corrected via Newey‑West in regressions.")
+
+    # IC
+    lines.append("\n── IC / ICIR ──")
+    if not ic_summary.empty:
+        mkt = ic_summary[ic_summary["group"]=="ALL_MARKET"].sort_values("forward_days")
+        lines.append("  Market-wide:")
+        for _, r in mkt.iterrows():
+            lines.append(f"    {r['forward_days']:>2}d | IC={r['mean_ic']:>7.4f} | "
+                         f"ICIR={r['icir']:>6.3f} | t={r['t_stat']:>6.2f} | "
+                         f"Hit={r['hit_rate_pct']:>5.1f}% | {r['signal_strength']}")
+        lines.append("\n  Per sector (1d):")
+        sec = ic_summary[(ic_summary["group"]!="ALL_MARKET") &
+                         (ic_summary["forward_days"]==1)].sort_values("mean_ic", ascending=False)
+        for _, r in sec.iterrows():
+            lines.append(f"    {r['group']:<32} IC={r['mean_ic']:>7.4f} | "
+                         f"ICIR={r['icir']:>6.3f} | {r['signal_strength']}")
+
+    # Granger
+    lines.append("\n── GRANGER CAUSALITY ──")
+    if not granger_sector.empty:
+        for _, r in granger_sector.sort_values("pct_score_leads", ascending=False).iterrows():
+            lines.append(f"  {r['sector']:<32} leads={r['pct_score_leads']:>5.1f}% | "
+                         f"lags={r['pct_price_leads']:>5.1f}% | {r['verdict']}")
+
+    # Regression (using adjusted significance)
+    lines.append("\n── REGRESSION BY SECTOR (1d, adj. p-values) ──")
+    if not reg_sector.empty:
+        d1 = reg_sector[reg_sector["forward_days"]==1].sort_values(
+            "avg_corr_conf_return", ascending=False)
+        for _, r in d1.iterrows():
+            lines.append(f"  {r['sector']:<32} sig={r['pct_significant']:>5.1f}% | "
+                         f"corr={r['avg_corr_conf_return']:>7.4f} | "
+                         f"beta={r['avg_beta_conf']:>10.6f}")
+
+    # Threshold
+    lines.append("\n── THRESHOLD DETECTION (1d) ──")
+    if not threshold_df.empty:
+        d1 = threshold_df[threshold_df["forward_days"]==1].sort_values(
+            "spread_pct", ascending=False)
+        for _, r in d1.iterrows():
+            sig = "✓" if r["significant"] else "✗"
+            lines.append(f"  {r['group']:<32} thresh={r['best_threshold']:>4.1f} | "
+                         f"spread={r['spread_pct']:>6.4f}% | "
+                         f"above={r['above_return']:>7.4f}% | "
+                         f"below={r['below_return']:>7.4f}% | {sig}")
+
+    # Quintile
+    lines.append("\n── QUINTILE RETURNS — MARKET-WIDE (1d) ──")
+    if not quintile_df.empty:
+        mq = quintile_df[(quintile_df["group"]=="ALL_MARKET") &
+                         (quintile_df["forward_days"]==1)].sort_values("quintile")
+        for _, r in mq.iterrows():
+            lines.append(f"  Q{int(r['quintile'])} conf≈{r['avg_conf']:>5.1f} | "
+                         f"return={r['avg_return']:>7.4f}% | "
+                         f"win={r['win_rate_pct']:>5.1f}%")
+
+    # Volume
+    lines.append("\n── VOLUME INDEPENDENCE BY SECTOR ──")
+    if not vol_sector.empty:
+        for _, r in vol_sector.sort_values("avg_corr_volume").iterrows():
+            risk_warn = "⚠️ HIGH VOL PROXY" if r["pct_high_vol_risk"] > 30 else ""
+            lines.append(f"  {r['sector']:<32} corr_vol={r['avg_corr_volume']:>7.4f} | "
+                         f"corr_mom={r['avg_corr_lag1_ret']:>7.4f} | "
+                         f"indep={r['pct_independent']:>5.1f}% {risk_warn}")
+
+    # Conclusion
+    lines += ["\n"+sep, "CONCLUSION & RECOMMENDATIONS", sep]
+    if not ic_summary.empty:
+        m = ic_summary[(ic_summary["group"]=="ALL_MARKET") &
+                       (ic_summary["forward_days"]==1)]
+        if not m.empty:
+            ic_v = m.iloc[0]["mean_ic"]
+            ic_i = m.iloc[0]["icir"]
+            q = ("STRONG"   if abs(ic_v)>0.05 and abs(ic_i)>0.5 else
+                 "MODERATE" if abs(ic_v)>0.02 else "WEAK")
+            lines.append(f"Signal quality: {q}")
 
     if not threshold_df.empty:
-        market_1d = threshold_df[
-            (threshold_df["group"] == "ALL") &
-            (threshold_df["forward_days"] == 1) &
-            (threshold_df["significant"] == True)
-        ]
-        if not market_1d.empty:
-            thresh = market_1d.iloc[0]["best_threshold"]
-            lines.append(f"Recommended threshold: conf_score >= {thresh}")
-            lines.append(f"  Above {thresh}: ADD confidence")
-            lines.append(f"  Below {thresh - 10}: REDUCE confidence")
-        else:
-            lines.append("No statistically significant threshold found — treat as continuous signal")
+        mt = threshold_df[(threshold_df["group"]=="ALL_MARKET") &
+                          (threshold_df["forward_days"]==1) &
+                          (threshold_df["significant"]==True)]
+        if not mt.empty:
+            t = mt.iloc[0]["best_threshold"]
+            lines.append(f"Best threshold : conf_score >= {t}")
+            lines.append(f"  Above {t}   → ADD_TO_REASONING positive weight")
+            lines.append(f"  Below {t-10} → REDUCE_CONFIDENCE_BY_15")
+            lines.append("  (Consider piecewise non‑linear response across the score range)")
 
+    if not granger_sector.empty:
+        leads = (granger_sector["verdict"]=="LEADING").sum()
+        lines.append(f"Leading indicator in {leads}/{len(granger_sector)} sectors")
+
+    if not vol_sector.empty:
+        risky = vol_sector[vol_sector["pct_high_vol_risk"] > 30]
+        if len(risky):
+            lines.append(f"WARNING: {len(risky)} sector(s) with >30% high volume-proxy risk: "
+                         f"{', '.join(risky['sector'].tolist())}")
+            lines.append("Interpret conf_score cautiously there; add volume as a control.")
+
+    lines.append(sep)
     return "\n".join(lines)
 
 
@@ -693,42 +765,44 @@ def write_report(
 
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    log.info("Starting conf_score analysis — output dir: %s", OUTPUT_DIR)
+    log.info("Output directory: %s/", OUTPUT_DIR)
 
-    # Load
     df = load_data()
 
-    # Run all methods
-    quintile_df = quintile_sort(df)
-    ic_ts, ic_summary = information_coefficient(df)
-    granger_df = granger_causality(df)
-    regression_df = per_symbol_regression(df)
-    threshold_df = threshold_detection(df)
-    volume_df = volume_independence(df)
+    quintile_df               = quintile_sort(df)
+    ic_ts, ic_summary         = information_coefficient(df)
+    granger_sym, granger_sec  = granger_causality(df)
+    reg_sym, reg_sec          = per_symbol_regression(df)
+    threshold_df              = threshold_detection(df)
+    vol_sym, vol_sec          = volume_independence(df)
 
-    # Save CSVs
-    quintile_df.to_csv(f"{OUTPUT_DIR}/quintile_returns.csv", index=False)
-    ic_ts.to_csv(f"{OUTPUT_DIR}/ic_timeseries.csv", index=False)
-    ic_summary.to_csv(f"{OUTPUT_DIR}/ic_summary.csv", index=False)
-    granger_df.to_csv(f"{OUTPUT_DIR}/granger_results.csv", index=False)
-    regression_df.to_csv(f"{OUTPUT_DIR}/per_symbol_regression.csv", index=False)
-    threshold_df.to_csv(f"{OUTPUT_DIR}/threshold_results.csv", index=False)
-    volume_df.to_csv(f"{OUTPUT_DIR}/volume_independence.csv", index=False)
+    files = {
+        "sector_quintile_returns.csv":    quintile_df,
+        "ic_timeseries.csv":              ic_ts,
+        "sector_ic_summary.csv":          ic_summary,
+        "granger_per_symbol.csv":         granger_sym,
+        "sector_granger_summary.csv":     granger_sec,
+        "per_symbol_regression.csv":      reg_sym,
+        "sector_regression_summary.csv":  reg_sec,
+        "sector_threshold.csv":           threshold_df,
+        "volume_per_symbol.csv":          vol_sym,
+        "sector_volume_summary.csv":      vol_sec,
+    }
 
-    log.info("CSVs saved to %s/", OUTPUT_DIR)
+    for fname, frame in files.items():
+        path = os.path.join(OUTPUT_DIR, fname)
+        frame.to_csv(path, index=False)
+        log.info("Saved %s (%d rows)", fname, len(frame))
 
-    # Write report
-    report = write_report(
-        quintile_df, ic_summary, ic_ts,
-        granger_df, regression_df,
-        threshold_df, volume_df,
-    )
-    report_path = f"{OUTPUT_DIR}/report.txt"
-    with open(report_path, "w") as f:
+    report = write_report(quintile_df, ic_summary, granger_sec,
+                          reg_sec, threshold_df, vol_sec, df)
+    rpath = os.path.join(OUTPUT_DIR, "report.txt")
+    with open(rpath, "w") as f:
         f.write(report)
 
-    log.info("Report saved to %s", report_path)
+    log.info("Report: %s", rpath)
     print("\n" + report)
+    log.info("Done. Results in %s/", OUTPUT_DIR)
 
 
 if __name__ == "__main__":
