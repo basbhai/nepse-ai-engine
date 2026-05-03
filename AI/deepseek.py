@@ -14,6 +14,7 @@ Usage:
 import json
 import logging
 import os
+import platform
 import random
 import time
 from typing import Optional
@@ -41,10 +42,13 @@ RESPONSE_TIMEOUT = 90_000 # ms — max wait for markdown div to appear
 SEL_EMAIL       = 'input[placeholder="Phone number / email address"]'
 SEL_PASSWORD    = 'input[placeholder="Password"]'
 SEL_TEXTAREA    = 'textarea[placeholder="Message DeepSeek"]'
-SEL_MARKDOWN    = '.ds-markdown'   # new selector for response div
+SEL_MARKDOWN    = '.ds-markdown'   # response div selector
 
 _EMAIL    = os.getenv("DEEPSEEK_EMAIL", "")
 _PASSWORD = os.getenv("DEEPSEEK_PASSWORD", "")
+
+# Headless on Linux (production), visible on Windows (development)
+_HEADLESS = False
 
 # ---------------------------------------------------------------------------
 # Module-level singleton session
@@ -69,7 +73,7 @@ def _is_retryable(exc: Exception) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Telegram admin alert  (mirrors gemini.py)
+# Telegram admin alert
 # ---------------------------------------------------------------------------
 def _alert_admin(context: str, last_error: str) -> None:
     try:
@@ -96,17 +100,45 @@ def _alert_admin(context: str, last_error: str) -> None:
 # Session management
 # ---------------------------------------------------------------------------
 def _launch_and_login() -> None:
-    """Launch browser and log in to DeepSeek. Stores state in module globals."""
+    """Launch browser with stealth and log in to DeepSeek."""
     global _playwright_instance, _browser, _page, _logged_in
 
     from playwright.sync_api import sync_playwright
 
-    if _playwright_instance is None:
-        log.info("[deepseek] Launching Playwright browser")
-        _playwright_instance = sync_playwright().start()
-        _browser = _playwright_instance.chromium.launch(headless=False)
+    try:
+        from playwright_stealth import stealth_sync
+        _stealth_available = True
+    except ImportError:
+        log.warning("[deepseek] playwright-stealth not installed — captcha risk higher")
+        _stealth_available = False
 
-    _page = _browser.new_page()
+    if _playwright_instance is None:
+        log.info("[deepseek] Launching Playwright browser (headless=%s)", _HEADLESS)
+        _playwright_instance = sync_playwright().start()
+        _browser = _playwright_instance.chromium.launch(
+            headless=_HEADLESS,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+            ],
+        )
+
+    # Open new page with a realistic viewport + user agent
+    _page = _browser.new_context(
+        viewport={"width": 1280, "height": 800},
+        user_agent=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        locale="en-US",
+    ).new_page()
+
+    # Apply stealth patches (hides navigator.webdriver, canvas, WebGL fingerprints)
+    if _stealth_available:
+        stealth_sync(_page)
+        log.info("[deepseek] Stealth applied")
 
     log.info("[deepseek] Logging in")
     _page.goto(DEEPSEEK_SIGN_IN)
@@ -155,8 +187,8 @@ def close_session() -> None:
 def _playwright_call(prompt: str, system: Optional[str]) -> str:
     """
     Send a prompt to the DeepSeek chat UI and return the raw text from
-    the .ds-markdown div (instead of <pre>). Waits for generation to finish
-    by polling the text content until stable.
+    the .ds-markdown div. Waits for generation to finish by polling
+    the text content until stable.
     """
     full_prompt = f"{system}\n\n{prompt}" if system else prompt
 
@@ -179,7 +211,6 @@ def _playwright_call(prompt: str, system: Optional[str]) -> str:
 
     while stable < STABLE_CHECKS:
         _page.wait_for_timeout(POLL_INTERVAL_MS)
-        # Get combined text content of the div (includes all nested spans)
         current = md_div.inner_text()
         if current and current == last:
             stable += 1
@@ -194,7 +225,7 @@ def _playwright_call(prompt: str, system: Optional[str]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Strip markdown fences  (mirrors gemini.py)
+# Strip markdown fences
 # ---------------------------------------------------------------------------
 def _strip_fences(raw: str) -> str:
     if raw.startswith("```"):
@@ -222,22 +253,6 @@ def ask_deepseek_text(
 
     Signature is intentionally identical to ask_gemini_text() so callers
     can swap between the two without any changes.
-
-    Internally:
-      1. Launches a singleton browser session (login once, reuse)
-      2. Sends the prompt via the DeepSeek chat UI
-      3. Waits for generation to finish (stable .ds-markdown text)
-      4. Strips markdown fences and parses JSON
-      5. Retries up to MAX_RETRIES times with jitter on transient errors
-      6. Alerts admin via Telegram if all retries fail
-
-    Usage:
-        from AI.deepseek import ask_deepseek_text
-        result = ask_deepseek_text(
-            prompt  = "Analyse NEPSE top gainers today",
-            system  = "You are a financial analyst. Respond in JSON only.",
-            context = "nepse_gainers",
-        )
     """
     last_error = ""
     raw        = ""
@@ -254,7 +269,6 @@ def ask_deepseek_text(
             return result
 
         except json.JSONDecodeError as exc:
-            # Got a response but it wasn't valid JSON — log and retry
             last_error = f"JSONDecodeError: {exc} | raw: {raw[:200]}"
             log.error("[%s] Invalid JSON (attempt %d): %s", context, attempt, last_error)
 
