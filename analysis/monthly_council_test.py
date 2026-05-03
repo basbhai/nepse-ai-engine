@@ -1327,7 +1327,7 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
             return
 
     # ── Duplicate guard ───────────────────────────────────────────────────────
-    if not dry_run and not print_prompts and not force and _check_already_run(run_month):
+    if not dry_run and not print_prompts and _check_already_run(run_month):
         log.warning("Council for %s already has log entries — aborting.", run_month)
         return
 
