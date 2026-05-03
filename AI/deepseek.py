@@ -165,6 +165,21 @@ def _ensure_session() -> None:
         _launch_and_login()
 
 
+def _logout() -> None:
+    """Log out via UI dropdown after each response."""
+    global _logged_in
+    try:
+        _page.click('._2afd28d')
+        _page.wait_for_timeout(500)
+        _page.locator('.ds-dropdown-menu-option', has_text='Log out').click()
+        _page.wait_for_timeout(1000)
+        _logged_in = False
+        log.info("[deepseek] Logged out successfully")
+    except Exception as e:
+        log.warning("[deepseek] Logout failed: %s", e)
+        _logged_in = False
+
+
 def close_session() -> None:
     """Cleanly close the browser. Call at app shutdown."""
     global _playwright_instance, _browser, _page, _logged_in
@@ -221,6 +236,7 @@ def _playwright_call(prompt: str, system: Optional[str]) -> str:
     if not last:
         raise ValueError("DeepSeek returned empty response")
 
+    _logout()
     return last
 
 
