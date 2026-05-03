@@ -349,19 +349,23 @@ def _build_gemini_prompt(df: pd.DataFrame) -> str:
 Analyze these Nepal news headlines scraped today.
 Detect signals relevant to Nepal stock market (NEPSE).
 
-1. Is there a bandh, strike, chakka jam, or transport/business shutdown IN NEPAL today?
-   Only count events physically happening inside Nepal — ignore global news.
-2. Is any IPO, FPO, or right share application open on NEPSE today? must be general public not right, reserved issue.
-3. Is there a political crisis , PM resignation, or government instability IN NEPAL, only central government related?
+1. Is there a bandh IN NEPAL today? bandh_today=YES ONLY if a nationwide general strike
+   (नेपाल बन्द or उपत्यका बन्द) is called by a political party, trade union, or major
+   national organization. Regional road closures, highway blockades, local shutdowns,
+   landslide closures, mule trail bans do NOT qualify. When in doubt use NO.
+2. Is any IPO, FPO, or right share application open on NEPSE today? Must be general public issue only — not right share, not reserved issue.
+3. Is there a political crisis IN NEPAL affecting NEPSE? crisis_detected=YES only for:
+   PM/minister/SEBON/NRB chief/NEPSE chairman resignation or dismissal, parliament
+   dissolution, impeachment, or major government instability. A private company
+   executive resigning does NOT qualify. When in doubt use NO.
 4. What is the Gulf/Middle East stability? (affects Nepal remittance workers abroad)
 5. What is the remittance risk level based on Gulf/foreign employment news?
 6. What is the overall Nepal market sentiment today?
-7. Crisis details should be only that effect share market.
-8 india_nepal_relations: "STABLE" | "TENSE" | "HOSTILE"
-  (based on any India-Nepal border, trade, treaty, political news recent only)
-9 nrb_rate_decision: "CUT" | "RAISED" | "UNCHANGED"
-  (based on any NRB monetary policy announcement)
-
+7. Crisis details should only include events that directly affect the share market.
+8. india_nepal_relations: "STABLE" | "TENSE" | "HOSTILE"
+   (based on any India-Nepal border, trade, treaty, or political news — recent only)
+9. nrb_rate_decision: "CUT" | "RAISED" | "UNCHANGED"
+   (based on any NRB monetary policy announcement)
 
 Headlines:
 {data_str}
@@ -369,7 +373,7 @@ Headlines:
 Return ONLY this JSON object with no other text, no markdown, no explanation:
 {{
   "bandh_today": "YES or NO",
-  "bandh_detail": "who called it and where in Nepal, or empty string",
+  "bandh_detail": "which party/organization called it and scope (must be nationwide), or empty string",
   "ipo_fpo_active": "YES or NO",
   "ipo_fpo_detail": "company name and issue type, or empty string",
   "crisis_detected": "YES or NO",
@@ -379,12 +383,11 @@ Return ONLY this JSON object with no other text, no markdown, no explanation:
   "remittance_signal": "LOW or MEDIUM or HIGH",
   "remittance_detail": "reason from headlines, or empty string",
   "overall_sentiment": "POSITIVE or NEUTRAL or NEGATIVE",
-  "key_event": "single most important news that will directly effect NEPSE",
-  "headlines_politics": "title 1: lorem ipsum |title: 2: lorem_ipum[only related to Nepal]",
-  "headlines_economy":  "title 1: lorem ipsum |title: 2: lorem_ipum [only related to Nepal]",
-  "headlines_stock":    "title 1: lorem ipsum |title: 2: lorem_ipum [only related to NEPSE]"
+  "key_event": "single most important news that will directly affect NEPSE",
+  "headlines_politics": "title 1: lorem ipsum | title 2: lorem ipsum [only related to Nepal]",
+  "headlines_economy":  "title 1: lorem ipsum | title 2: lorem ipsum [only related to Nepal]",
+  "headlines_stock":    "title 1: lorem ipsum | title 2: lorem ipsum [only related to NEPSE]"
 }}"""
-
 
 def _is_nepal_source(source: str) -> bool:
     nepal_sources = {
@@ -405,16 +408,30 @@ def _keyword_detect(df: pd.DataFrame) -> dict:
     Pure keyword fallback — no AI dependency.
     Used when Deepseek is unavailable or key not set.
     """
-    bandh_keywords  = ["bandh", "strike", "chakka jam", "shutdown", "closure"]
-    crisis_keywords = ["resign", "dismiss", "impeach", "dissolution", "protest", "crisis"]
+    bandh_keywords  = ["नेपाल बन्द", "उपत्यका बन्द", "nationwide bandh", "chakka jam", "national strike", "general strike"]
+    # High-confidence political crisis — these alone are enough
+    crisis_keywords_strong = ["impeach", "dissolution", "संसद विघटन", "महाभियोग"]
+
+    # Role-anchored — only count if a government role appears nearby in the same headline
+    crisis_role_anchors = ["प्रधानमन्त्री", "मन्त्री", "सभापति", "prime minister", "minister", "home minister", "speaker", "chairman", "governor", "sebon", "nrb chief", "nepse chairman"]
+
+    crisis_keywords_weak = ["resign", "dismiss", "removed", "sacked", "राजीनामा", "बर्खास्त"]
 
     headlines = df["headline"].str.lower().tolist() if not df.empty else []
 
     bandh_today  = any(k in h for h in headlines for k in bandh_keywords)
-    crisis_today = any(k in h for h in headlines for k in crisis_keywords)
-
+ 
     bandh_detail  = next((h for h in headlines for k in bandh_keywords if k in h), "")
-    crisis_detail = next((h for h in headlines for k in crisis_keywords if k in h), "")
+    def _is_political_crisis(headline: str) -> bool:
+        h = headline.lower()
+        if any(k in h for k in crisis_keywords_strong):
+            return True
+        has_weak = any(k in h for k in crisis_keywords_weak)
+        has_role = any(r in h for r in crisis_role_anchors)
+        return has_weak and has_role
+
+    crisis_today  = any(_is_political_crisis(h) for h in headlines)
+    crisis_detail = next((h for h in headlines if _is_political_crisis(h)), "")
 
     return {
         "bandh_today":        "YES" if bandh_today  else "NO",

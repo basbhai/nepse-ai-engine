@@ -729,6 +729,8 @@ def _build_user_prompt(
     false_avoids   = sum(1 for r in wait_avoid if r.get("outcome") == "FALSE_AVOID")
     missed_entries = sum(1 for r in wait_avoid if r.get("outcome") == "MISSED_ENTRY")
     correct_waits  = sum(1 for r in wait_avoid if r.get("outcome") == "CORRECT_WAIT")
+    false_waits    = sum(1 for r in wait_avoid if r.get("outcome") == "FALSE_WAIT")
+    evaluated_wait_count = correct_waits + false_waits
 
     # BUY decision stats
     buys_with_outcome  = sum(1 for b in buy_decisions if b.get("tj_result"))
@@ -742,9 +744,11 @@ Review date: {datetime.now(NST).strftime("%Y-%m-%d %H:%M NST")}
 ALL-TIME trades: {total_all} ({wins_all} W, {losses_all} L)
 Recent trades shown below: {len(trades)} ({wins_w} W, {losses_w} L)
 BUY decisions shown: {len(buy_decisions)} ({buys_with_outcome} closed, {buys_open} open, {buys_not_traded} not traded)
-Evaluated WAIT/AVOID shown: {len(wait_avoid)}
+Evaluated WAIT/AVOID shown: {len(wait_avoid)} total rows (PENDING + stamped)
+  Stamped WAITs with outcome: {evaluated_wait_count}
   CORRECT_AVOID: {correct_avoids} | FALSE_AVOID: {false_avoids}
   MISSED_ENTRY: {missed_entries} | CORRECT_WAIT: {correct_waits}
+  wait_accuracy = correct_waits / evaluated_wait_count = {correct_waits} / {evaluated_wait_count} — do NOT divide by {len(wait_avoid)}
 Daily context rows: {len(daily_context)} trading days
 Active lessons: {len(active_lessons)}
 
