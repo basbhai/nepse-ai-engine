@@ -16,6 +16,7 @@ import logging
 import os
 import platform
 import random
+import re
 import time
 from typing import Optional
 
@@ -254,6 +255,26 @@ def _strip_fences(raw: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Sanitize control characters inside JSON string values
+# ---------------------------------------------------------------------------
+def _sanitize_json(raw: str) -> str:
+    """
+    Replace literal unescaped control characters (newline, carriage return,
+    tab) inside JSON string values. DeepSeek via Playwright sometimes returns
+    these literally inside strings — valid in display but invalid in JSON.
+    """
+    def _fix(m):
+        s = m.group(0)
+        s = s.replace('\n', '\\n')
+        s = s.replace('\r', '\\r')
+        s = s.replace('\t', '\\t')
+        return s
+
+    # Match each JSON string token (quoted, handles escaped chars inside)
+    return re.sub(r'"(?:[^"\\]|\\.)*"', _fix, raw, flags=re.DOTALL)
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 def ask_deepseek_text(
@@ -279,6 +300,7 @@ def ask_deepseek_text(
 
             raw    = _playwright_call(prompt, system)
             raw    = _strip_fences(raw)
+            raw    = _sanitize_json(raw)
             result = json.loads(raw)
 
             log.info("[%s] DeepSeek responded on attempt %d", context, attempt)
