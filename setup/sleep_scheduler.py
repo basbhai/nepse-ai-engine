@@ -10,7 +10,7 @@ Schedule (NST):
         Wake  10:00 AM  → morning workflow starts 10:30 AM
         Sleep  3:45 PM  → after EOD workflow completes
         Wake   9:00 PM  → nepal_pulse + summarizer + backup
-        Sleep  9:30 PM  → after summary workflow completes
+        Sleep  11:30 PM  → after summary workflow completes
     Sunday (Weekly Review):
         Wake   5:30 PM  → Review starts 5:45 PM
         Sleep  6:15 PM  → after weekly workflow completes
@@ -103,7 +103,7 @@ def _next_sleep_time():
         # Called at 9:30 PM → sleep now
         # In both cases sleep_scheduler is triggered by a timer at the right time
         eod_sleep     = datetime.combine(now.date(), time(15, 45), tzinfo=NST)
-        summary_sleep = datetime.combine(now.date(), time(21, 30), tzinfo=NST)
+        summary_sleep = datetime.combine(now.date(), time(23, 30), tzinfo=NST)
 
         if now >= summary_sleep:
             return summary_sleep   # 9:30 PM sleep
