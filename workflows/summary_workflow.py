@@ -72,6 +72,12 @@ def run(dry_run: bool = False, skip_guard: bool = False) -> int:
             return 2
 
     results = {}
+    # ── Step 0: Floorsheet (today's trades) ──────────────────────────────────
+    def _floorsheet():
+        from modules.floorsheet_scraper import run_daily
+        from datetime import date
+        run_daily(target_date=date.today())
+    results["floorsheet"] = _step("floorsheet (today)", _floorsheet, dry_run)
 
     # ── Step 1: Nepal pulse (fresh 9 PM headlines) ────────────────────────────
     def _nepal():

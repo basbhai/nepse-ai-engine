@@ -298,7 +298,7 @@ class SharehubScraper:
         self.lock = threading.Lock()
 
     def _fetch_page(self, target_date: date, page: int) -> tuple:
-        date_str = f"{target_date.year}-{target_date.month}-{target_date.day}"
+        date_str = target_date.strftime("%Y-%m-%d")
         try:
             r = self.session.get(
                 SH_BASE,
