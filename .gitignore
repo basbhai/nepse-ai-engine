@@ -5,6 +5,7 @@ nepse_env/
 venv/
 .env/
 .venv/
+wsl_venv/
 __pycache__/
 *.pyc
 *.pyo

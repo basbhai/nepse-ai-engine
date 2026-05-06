@@ -10,6 +10,7 @@ playwright
 python-dotenv
 beautifulsoup4
 lxml
+yfinance
 openai
 google-generativeai
 psycopg2-binary

@@ -23,7 +23,9 @@ log = logging.getLogger(__name__)
 # ══════════════════════════════════════════════════════════════════════════════
 
 _POLITICAL_KEYWORDS: list[tuple[str, str]] = [
-    ("bandh|strike|chakka jam",                   "CIVIL_UNREST"),
+    ("nationwide bandh|indefinite bandh|chakka jam|general strike|national strike", "CIVIL_UNREST_MAJOR"),
+    ("bandh|strike",                                                                 "CIVIL_UNREST_MAJOR"),
+    ("protest|unrest|demonstration|uprising|rally|gathering|sit-in",                 "CIVIL_UNREST_MINOR"),
     ("resign|impeach|dissolved|dissolution",       "HOUSE_DISSOLUTION"),
     ("supreme court|sc ruling|court order",        "SC_RULING"),
     ("prime minister|pm sworn|new government|cabinet formed", "GOVT_FORMATION"),
@@ -32,7 +34,6 @@ _POLITICAL_KEYWORDS: list[tuple[str, str]] = [
     ("arrested|detained|held",                     "CORRUPTION_ARREST"),
     ("china|border encroach|boundary",             "CHINA_RELATIONS"),
     ("india|blockade|trade restrict",              "INDIA_RELATIONS"),
-    ("protest|unrest|demonstration|uprising",      "CIVIL_UNREST"),
     ("election|voting|polling",                    "ELECTION"),
     ("president|vice president",                   "PRESIDENTIAL"),
     ("anti-corruption|acc|property audit",         "ANTI_CORRUPTION"),

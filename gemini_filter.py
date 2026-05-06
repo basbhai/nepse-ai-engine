@@ -606,6 +606,8 @@ def _write_log(
                 "bid_ask_ratio":   str(flag.bid_ask_ratio),
                 "dpr_proximity":   str(flag.dpr_proximity),
                 "volume_os_ratio": str(flag.volume_os_ratio),
+                "gemini_reason":   flag.gemini_reason,
+                "gemini_risk":     flag.gemini_risk,
             })
 
             rows = run_raw_sql(

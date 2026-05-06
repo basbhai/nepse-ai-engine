@@ -61,20 +61,34 @@ PATTERNS: list[dict] = [
         "notes":            "Impact highest when probe targets SOE-linked entities; weaker for minor officials",
     },
     {
-        "event_type":       "CIVIL_UNREST",
+        "event_type":       "CIVIL_UNREST_MAJOR",
         "event_category":   "POLITICAL",
         "lag_start":        "1",
         "lag_end":          "2",
-        "magnitude":        "-1.5",
+        "magnitude":        "-2.5",
         "market_regime":    "ALL",
         "status":           "ACTIVE",
         "evidence_quality": "MODERATE",
-        "confidence_basis": "3-model consensus: bandh/strike reduces broker activity on same/next trading day; "
-                            "avg -1.5 pct move; partial day bandh shows ~-0.8 pct",
-        "occurrence_count": "9",
-        "weighted_accuracy": "0.67",
-        "notes":            "Bandh effect well-documented but short-lived (1-2 days); note: bandh weight in "
-                            "nepal_pulse is separately -1 on top of this lagged signal",
+        "confidence_basis": "Nationwide bandh/chakka jam/indefinite strike shuts broker offices and halts trading; "
+                            "avg -2.5 pct impact; full-day bandh historically worse than partial",
+        "occurrence_count": "5",
+        "weighted_accuracy": "0.72",
+        "notes":            "Derived from original CIVIL_UNREST pattern; major events only. Partial-day bandh shows ~-1.5 pct.",
+    },
+    {
+        "event_type":       "CIVIL_UNREST_MINOR",
+        "event_category":   "POLITICAL",
+        "lag_start":        "1",
+        "lag_end":          "2",
+        "magnitude":        "-0.5",
+        "market_regime":    "ALL",
+        "status":           "ACTIVE",
+        "evidence_quality": "WEAK",
+        "confidence_basis": "Localised protest/demonstration/rally — limited broker disruption; "
+                            "sentiment drag only; avg -0.5 pct or less",
+        "occurrence_count": "4",
+        "weighted_accuracy": "0.55",
+        "notes":            "Derived from original CIVIL_UNREST pattern; minor events only. Promote to MODERATE if accuracy improves above 0.65 with ≥8 occurrences.",
     },
     {
         "event_type":       "ADMIN",

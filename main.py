@@ -500,6 +500,12 @@ def run_trading_loop(paper_mode: bool, dry_run: bool, skip_guard: bool) -> int:
         elif action == "WAIT":
             wait_count += 1
             log.info("%s 🟡 WAIT: %s", label, sym)
+            if not dry_run:
+                try:
+                    from helper.notifier import send_wait_signal
+                    send_wait_signal(result)
+                except Exception as e:
+                    log.warning("%s send_wait_signal failed for %s (non-fatal): %s", label, sym, e)
 
         elif action == "AVOID":
             avoid_count += 1

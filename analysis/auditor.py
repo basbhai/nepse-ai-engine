@@ -539,80 +539,158 @@ def _update_financials_kpis():
 
 def _update_market_state() -> str:
     """
-    Auto-calculate MARKET_STATE from NEPSE SMA200 + market breadth.
-    Falls back to previous day breadth if today's is missing.
+    Auto-calculate MARKET_STATE from ADX(14) on NEPSE index (index_id=58).
+    Pure Python — no external libraries.
     Writes result to settings table.
     """
     try:
-        rows = sorted(
-            [r for r in read_tab("nepse_indices")
-             if r.get("current_value") and r.get("index_id") == "58"],
-            key=lambda x: x.get("date", "")
-        )
-        if len(rows) < 30:
-            log.warning("MARKET_STATE: Not enough NEPSE history (%d rows). Skipping.", len(rows))
+        # Step 1: fetch raw OHLC from DB
+        with _conn() as cur:
+            cur.execute("""
+                SELECT date, current_value, high, low
+                FROM nepse_indices
+                WHERE index_id = '58'
+                  AND current_value IS NOT NULL AND current_value != ''
+                  AND high IS NOT NULL AND high != ''
+                  AND low  IS NOT NULL AND low  != ''
+                ORDER BY date ASC
+            """)
+            rows = [dict(r) for r in cur.fetchall()]
+
+        if len(rows) < 50:
+            log.warning("MARKET_STATE: Not enough NEPSE history (%d rows). Falling back.", len(rows))
             return get_setting("MARKET_STATE", "SIDEWAYS")
 
-        closes = []
-        for r in rows:
-            val = r.get("current_value")
-            if val is None:
-                continue
-            val_str = str(val).replace(",", "").strip()
+        def _f(v):
+            return float(str(v).replace(",", "").strip())
+
+        # Step 2: clean — remove flat rows (market closure artifacts) and inverted candles
+        clean = []
+        for i, r in enumerate(rows):
             try:
-                closes.append(float(val_str))
-            except ValueError:
-                log.warning("Skipping non-numeric NEPSE value: %s", val_str)
+                h = _f(r["high"])
+                l = _f(r["low"])
+                c = _f(r["current_value"])
+            except (ValueError, TypeError):
                 continue
+            if h < l:  # inverted candle — data error
+                continue
+            if i > 0:
+                try:
+                    ph = _f(rows[i - 1]["high"])
+                    pl = _f(rows[i - 1]["low"])
+                    pc = _f(rows[i - 1]["current_value"])
+                    if h == ph and l == pl and c == pc:
+                        continue  # flat day — market closure artifact
+                except (ValueError, TypeError):
+                    pass
+            clean.append((r["date"], h, l, c))
 
-        if not closes:
-            log.error("No valid NEPSE values after cleaning.")
+        if len(clean) < 40:
+            log.warning("MARKET_STATE: Fewer than 40 clean rows (%d). Falling back.", len(clean))
             return get_setting("MARKET_STATE", "SIDEWAYS")
 
+        highs  = [r[1] for r in clean]
+        lows   = [r[2] for r in clean]
+        closes = [r[3] for r in clean]
         nepse_today = closes[-1]
-        sma_period  = min(200, len(closes))
-        sma200      = sum(closes[-sma_period:]) / sma_period
-        pct_from_sma = ((nepse_today - sma200) / sma200) * 100
+        N = len(clean)
 
-        # Market breadth
-        adv_ratio = 0.5
-        try:
-            breadth_rows = read_tab("market_breadth", limit=2)
-            if breadth_rows:
-                br = breadth_rows[0]
-                adv = float(br.get("advancing", 0) or 0)
-                dec = float(br.get("declining", 0) or 0)
-                if adv + dec > 0:
-                    adv_ratio = adv / (adv + dec)
-        except Exception:
-            pass
+        # Step 3: compute TR, +DM, -DM (starting from bar i=1)
+        tr_raw  = []
+        pdm_raw = []
+        ndm_raw = []
+        for i in range(1, N):
+            h, l, c   = highs[i],   lows[i],   closes[i]
+            ph, pl, pc = highs[i-1], lows[i-1], closes[i-1]
 
-        if pct_from_sma >= 5 and adv_ratio >= 0.55:
-            state = "FULL_BULL"
-        elif pct_from_sma >= 0 and adv_ratio >= 0.5:
-            state = "CAUTIOUS_BULL"
-        elif pct_from_sma >= -5 and adv_ratio >= 0.4:
+            tr     = max(h - l, abs(h - pc), abs(l - pc))
+            h_move = h - ph
+            l_move = pl - l
+            pdm    = h_move if h_move > l_move and h_move > 0 else 0.0
+            ndm    = l_move if l_move > h_move and l_move > 0 else 0.0
+
+            tr_raw.append(tr)
+            pdm_raw.append(pdm)
+            ndm_raw.append(ndm)
+
+        # Step 4: Wilder smoothing, period=14
+        # Init: average of first 14 values; recursive: prev - prev/14 + raw/14
+        period = 14
+
+        def _wilder(raw):
+            n = len(raw)
+            if n < period:
+                return []
+            smoothed = [0.0] * n
+            smoothed[period - 1] = sum(raw[:period]) / period
+            for i in range(period, n):
+                smoothed[i] = smoothed[i-1] - (smoothed[i-1] / period) + (raw[i] / period)
+            return smoothed
+
+        sm_tr  = _wilder(tr_raw)
+        sm_pdm = _wilder(pdm_raw)
+        sm_ndm = _wilder(ndm_raw)
+
+        if not sm_tr:
+            return get_setting("MARKET_STATE", "SIDEWAYS")
+
+        # Step 5: compute +DI, -DI, DX for each valid smoothed bar
+        dx_raw      = []
+        pdi_series  = []
+        ndi_series  = []
+        for i in range(period - 1, len(tr_raw)):
+            str_val = sm_tr[i]
+            if str_val <= 0:
+                pdi, ndi, dx = 0.0, 0.0, 0.0
+            else:
+                pdi   = 100.0 * sm_pdm[i] / str_val
+                ndi   = 100.0 * sm_ndm[i] / str_val
+                denom = pdi + ndi
+                dx    = 100.0 * abs(pdi - ndi) / denom if denom > 0 else 0.0
+            dx_raw.append(dx)
+            pdi_series.append(pdi)
+            ndi_series.append(ndi)
+
+        # Step 6: Wilder smooth DX to get ADX
+        sm_adx = _wilder(dx_raw)
+        if not sm_adx or len(sm_adx) < period:
+            return get_setting("MARKET_STATE", "SIDEWAYS")
+
+        adx      = sm_adx[-1]
+        plus_di  = pdi_series[-1]
+        minus_di = ndi_series[-1]
+
+        # Step 7: classify
+        if adx < 25:
             state = "SIDEWAYS"
-        elif pct_from_sma >= -15:
-            state = "BEAR"
+        elif plus_di > minus_di:
+            state = "FULL_BULL" if adx >= 40 else "CAUTIOUS_BULL"
         else:
-            state = "CRISIS"
+            state = "CRISIS" if adx >= 40 else "BEAR"
 
+        # Step 8: write MARKET_STATE
         upsert_row("settings", {
             "key":          "MARKET_STATE",
             "value":        state,
-            "description":  (f"Auto: NEPSE={nepse_today:.1f} SMA{sma_period}={sma200:.1f} "
-                             f"pct={pct_from_sma:+.2f}% adv={adv_ratio:.2f}"),
+            "description":  f"Auto ADX(14): NEPSE={nepse_today:.1f} ADX={adx:.1f} +DI={plus_di:.1f} -DI={minus_di:.1f}",
             "last_updated": _today(),
             "set_by":       "auditor.py",
         }, ["key"])
 
+        # Keep NEPSE_200DMA unchanged
+        sma_period = min(200, len(closes))
+        sma200     = sum(closes[-sma_period:]) / sma_period
         upsert_row("settings", {
             "key":          "NEPSE_200DMA",
             "value":        str(round(sma200, 2)),
             "last_updated": _today(),
             "set_by":       "auditor.py",
         }, ["key"])
+
+        # Step 9: log
+        log.info("MARKET_STATE: %s | ADX=%.1f +DI=%.1f -DI=%.1f | NEPSE=%.1f",
+                 state, adx, plus_di, minus_di, nepse_today)
 
         return state
 
