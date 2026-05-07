@@ -42,7 +42,7 @@ log = logging.getLogger(__name__)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 #ORCHESTRATOR_MODEL = "deepseek/deepseek-v4-pro"
-ORCHESTRATOR_MODEL = "meta-llama/llama-3.3-70b-instruct:free"
+ORCHESTRATOR_MODEL = "baidu/cobuddy:free"
 OPENROUTER_URL     = "https://openrouter.ai/api/v1/chat/completions"
 MAX_ITERATIONS     = 10      # hard cap — prevents runaway loops
 MAX_ESCALATIONS    = 2       # cost control — enforced in Python
