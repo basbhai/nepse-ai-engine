@@ -437,6 +437,7 @@ def _enrich_position_with_entry_context(position: dict) -> dict:
                 "geo_score":    "geo_score_entry",
                 "stop_loss":    "stop_loss_planned",
                 "target":       "target_planned",
+                "lesson_applied": "lesson_ids",
             }
             for src, dst in field_map.items():
                 if not position.get(dst):

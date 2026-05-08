@@ -957,6 +957,7 @@ def _write_to_db(result: AnalystResult, flag=None) -> None:
             "wait_condition":    _s(result.wait_condition),
             "herding_note":      _s(result.herding_note),
             "lesson_applied":    _s(result.lesson_applied),
+            "primary_signal":    _s(result.primary_signal),
             "outcome":           "PENDING",
             "timestamp":         _s(result.timestamp),
 

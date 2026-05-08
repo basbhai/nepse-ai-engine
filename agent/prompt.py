@@ -23,7 +23,7 @@ from config import NST
 
 ORCHESTRATOR_SYSTEM_PROMPT = """You are the WAIT Condition Monitor for the NEPSE AI Engine.
 
-Your job: Every 10-minute trading cycle, check if any WAIT signals have had 
+Your job: Every 10-minute trading cycle, check if any WAIT signals have had
 their conditions met and escalate promising ones to Claude for a final decision.
 
 TOOLS AVAILABLE:
@@ -39,7 +39,7 @@ DECISION RULES — follow in this exact order every cycle:
 
 1. Call get_market_state() first.
    - If market_is_crisis=true → log_skip ALL symbols with reason "CRISIS" and stop.
-   - If market_is_bear=true AND geo_environment_tense=true → log_skip ALL with 
+   - If market_is_bear=true AND geo_environment_tense=true → log_skip ALL with
      reason "MARKET_ADVERSE" and stop.
    - If trading_halted=true → stop immediately, log nothing.
 
@@ -63,7 +63,7 @@ DECISION RULES — follow in this exact order every cycle:
    Choose the 2 most promising symbols if more than 2 qualify.
 
 6. For each escalation, call escalate_to_claude() with all required args.
-   Pass shadow_mode exactly as it is in AGENT_SHADOW_MODE setting 
+   Pass shadow_mode exactly as it is in AGENT_SHADOW_MODE setting
    (you will receive this in context).
 
 IMPORTANT RULES:
@@ -135,7 +135,7 @@ def build_escalation_prompt(
 
     return f"""You are a senior NEPSE quantitative analyst.
 
-A WAIT signal for {symbol} was issued earlier. The agent has detected that the 
+A WAIT signal for {symbol} was issued earlier. The agent has detected that the
 wait condition may now be met. Review the current indicators and decide:
 BUY now, STILL_WAIT, or NOW_AVOID.
 
@@ -181,3 +181,44 @@ Respond ONLY with valid JSON. No markdown fences. Example:
   "reasoning": "MACD bullish cross confirmed above signal line with volume surge.",
   "wait_condition": ""
 }}"""
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CONDITION CHECK PROMPT — cheap free LLM (pipeline only)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def build_condition_check_prompt(
+    symbol:         str,
+    wait_condition: str,
+    indicators:     dict,
+    market_state:   dict,
+) -> str:
+    """
+    ~150 tokens. Plain text → JSON only.
+    LLM responds with: {"condition_met": true/false, "reason": "one sentence"}
+    No function calling. No tools.
+    """
+    rsi        = indicators.get("rsi_14", 0.0)
+    macd_cross = indicators.get("macd_cross", "NONE")
+    bb_signal  = indicators.get("bb_signal", "NEUTRAL")
+    ema_trend  = indicators.get("ema_trend", "MIXED")
+    fresh      = indicators.get("indicators_fresh", False)
+
+    macd_bullish = indicators.get("macd_cross_just_bullish", False)
+    bb_breakout  = indicators.get("bb_breakout_up",          False)
+    vol_above    = indicators.get("volume_above_avg",         False)
+    ema_bull     = indicators.get("ema_trend_bullish",        False)
+    rsi_oversold = indicators.get("rsi_oversold",            False)
+
+    mkt = market_state.get("market_state", "SIDEWAYS")
+
+    return (
+        f"WAIT condition check for {symbol}. "
+        f'Respond ONLY with JSON: {{"condition_met": true/false, "reason": "one sentence"}}\n\n'
+        f"WAIT CONDITION: {wait_condition}\n\n"
+        f"CURRENT ({symbol}) — data_fresh={fresh} | market={mkt}\n"
+        f"  RSI={rsi:.1f}  MACD_cross={macd_cross}  BB={bb_signal}  EMA={ema_trend}\n"
+        f"  Flags: macd_bullish={macd_bullish}  bb_breakout={bb_breakout}  "
+        f"vol_above={vol_above}  ema_bull={ema_bull}  rsi_oversold={rsi_oversold}\n\n"
+        f"Is the WAIT condition met? No markdown. JSON only."
+    )

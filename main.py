@@ -295,8 +295,13 @@ def _run_agent(label: str) -> None:
     linear pipeline found candidates this cycle.
     """
     try:
-        from agent import run_wait_monitor
-        summary = run_wait_monitor()
+        from sheets import get_setting
+        if get_setting("AGENT_USE_PIPELINE", "false").lower() == "true":
+            from agent import run_wait_pipeline
+            summary = run_wait_pipeline()
+        else:
+            from agent import run_wait_monitor
+            summary = run_wait_monitor()
         log.info(
             "%s Agent WAIT monitor: ran=%s reason=%s escalations=%d elapsed=%dms",
             label, summary.get("ran"), summary.get("reason"),
