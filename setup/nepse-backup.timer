@@ -2,8 +2,8 @@
 Description=NEPSE Backup Sync Timer — every 15 min during trading hours + EOD
 
 [Timer]
-# Every 15 min Mon-Fri during trading hours (05:00-09:15 UTC = 10:45-14:45 NST)
-OnCalendar=Mon-Fri 05/1:00:00
+# Every 15 min Mon-Fri during trading hours (05:15-09:15 UTC = 11:00 AM-3:00 PM NST)
+OnCalendar=Mon-Fri 05:15:00
 OnCalendar=Mon-Fri 05/1:15:00
 OnCalendar=Mon-Fri 05/1:30:00
 OnCalendar=Mon-Fri 05/1:45:00

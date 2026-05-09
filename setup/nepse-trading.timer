@@ -1,12 +1,12 @@
 [Unit]
-Description=NEPSE AI — Trading Loop Timer (every 6 min, 10:45 AM–3:00 PM NST)
+Description=NEPSE AI — Trading Loop Timer (every 6 min, 11:00 AM–3:00 PM NST)
 
 [Timer]
-# Market hours: 10:45 AM–3:00 PM NST = 05:00–09:15 UTC
+# Market hours: 11:00 AM–3:00 PM NST = 05:15–09:15 UTC
 # Run every 15 minutes within that window.
 # calendar_guard inside main.py will exit cleanly outside market hours —
-# so it's safe to run this timer slightly wider (05:00–09:18 UTC).
-OnCalendar=Mon,Tue,Wed,Thu, Fri 05..09:15/15 UTC
+# so it's safe to run this timer slightly wider (05:15–09:18 UTC).
+OnCalendar=Mon,Tue,Wed,Thu,Fri 05:15..09:15/15 UTC
 
 Persistent=false
 AccuracySec=10s

@@ -7,19 +7,18 @@ UPDATED: April 2026 — added 9 PM NST summary wake
 
 Schedule (NST):
     Monday–Friday (Trading):
-        Wake  10:00 AM  → morning workflow starts 10:30 AM
+        Wake  10:45 AM  → morning workflow starts 10:45 AM
         Sleep  3:45 PM  → after EOD workflow completes
         Wake   9:00 PM  → nepal_pulse + summarizer + backup
-        Sleep  11:30 PM  → after summary workflow completes
+        Sleep  9:00 PM  → summary_workflow suspends itself directly
     Sunday (Weekly Review):
         Wake   5:30 PM  → Review starts 5:45 PM
         Sleep  6:15 PM  → after weekly workflow completes
 
 Wake sequence logic (Mon-Fri):
     If current time < 3:45 PM  → next wake = 9 PM today
-    If current time >= 3:45 PM and < 9:30 PM → next wake = 10 AM tomorrow
-    sleep_scheduler is called by nepse-sleep.timer at 3:45 PM
-    and by nepse-summary.timer at 9:30 PM — each time it sets the
+    If current time >= 3:45 PM and < 9:30 PM → next wake = 10:45 AM tomorrow
+    sleep_scheduler is called at end of summary_workflow — sets
     correct next RTC alarm before suspending.
 ─────────────────────────────────────────────────────────────────────────────
 """
@@ -63,7 +62,7 @@ def _next_wake_time():
 
     Mon-Fri logic:
       - If called at 3:45 PM  → next wake = 9:00 PM same day (summary run)
-      - If called at 9:30 PM  → next wake = 10:00 AM next trading day
+      - If called at 9:00 PM  → next wake = 10:45 AM next trading day
     Sunday logic:
       - After weekly review   → next wake = 10:00 AM Monday
     """
@@ -80,7 +79,7 @@ def _next_wake_time():
                 return summary_wake
 
             # 10 AM morning wake
-            morning_wake = datetime.combine(check_date, time(10, 0), tzinfo=NST)
+            morning_wake = datetime.combine(check_date, time(10, 45), tzinfo=NST)
             if morning_wake > now:
                 return morning_wake
 
@@ -100,14 +99,8 @@ def _next_sleep_time():
 
     if wd in TRADING_DAYS:
         # Called at 3:45 PM → sleep now
-        # Called at 9:30 PM → sleep now
-        # In both cases sleep_scheduler is triggered by a timer at the right time
-        eod_sleep     = datetime.combine(now.date(), time(15, 45), tzinfo=NST)
-        summary_sleep = datetime.combine(now.date(), time(23, 30), tzinfo=NST)
-
-        if now >= summary_sleep:
-            return summary_sleep   # 9:30 PM sleep
-        return eod_sleep           # 3:45 PM sleep
+        eod_sleep = datetime.combine(now.date(), time(15, 45), tzinfo=NST)
+        return eod_sleep
 
     # Sunday: sleep after weekly review
     if wd == 6:

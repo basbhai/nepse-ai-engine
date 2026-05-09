@@ -2,7 +2,8 @@
 Description=NEPSE AI — Git Pull Timer
 
 [Timer]
-OnCalendar=Mon,Tue,Wed,Thu,Fri 04:25:00 UTC
+# 10:40 AM NST = 04:55 UTC — 20 min before trading opens
+OnCalendar=Mon,Tue,Wed,Thu,Fri 04:55:00 UTC
 Persistent=false
 AccuracySec=60s
 
