@@ -44,7 +44,7 @@ DATABASE_URL = (
 MAX_RETRIES  = 3
 RETRY_DELAY  = 5     # seconds base
 POOL_MIN     = 1
-POOL_MAX     = 5     # Neon free allows 20
+POOL_MAX     = int(os.getenv("DB_POOL_MAX", "12"))  # Neon free allows 20
 
 # ─────────────────────────────────────────
 # CONNECTION POOL (lazy, thread-safe)
