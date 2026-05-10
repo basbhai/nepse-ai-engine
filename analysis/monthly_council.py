@@ -463,7 +463,21 @@ def _council_call(
     Always logs the full raw response for debugging regardless of parse outcome.
     """
     # Free models don't support web search tool — force off
+# Free models don't support web search tool — force off
     effective_search = False if COUNCIL_USE_FREE_STACK else use_search
+
+    # Provider routing — cheapest provider per model family
+    _PROVIDER_MAP = {
+        "anthropic/claude-haiku-4.5":   {"order": ["Anthropic"],      "allow_fallbacks": False},
+        "anthropic/claude-sonnet-4.5":  {"order": ["Anthropic 2"],    "allow_fallbacks": False},
+        "anthropic/claude-opus-4.6":    {"order": ["Anthropic"],      "allow_fallbacks": False},
+        "anthropic/claude-opus-4.7":    {"order": ["Amazon Bedrock"], "allow_fallbacks": False},
+        "openai/gpt-5.4-nano":          {"order": ["OpenAI"],         "allow_fallbacks": False},
+        "openai/gpt-5.4":              {"order": ["OpenAI"],         "allow_fallbacks": False},
+        "deepseek/deepseek-v4-pro":     {"order": ["DeepSeek"],       "allow_fallbacks": False},
+    }
+    provider_routing = _PROVIDER_MAP.get(model)
+    extra_body = {"provider": provider_routing} if provider_routing else None
 
     raw = _call(
         model,
@@ -471,9 +485,9 @@ def _council_call(
         max_tokens,
         temperature,
         context,
+        extra_body=extra_body,
         use_search=effective_search,
     )
-
     # ── Always log raw response ───────────────────────────────────────────────
     if raw:
         log.info("[%s] RAW RESPONSE (%d chars):\n%s", context, len(raw), raw)
@@ -566,11 +580,11 @@ _DISCUSSION_LABELS = [
 
 # ── Production model sequence ─────────────────────────────────────────────────
 _PROD_DISCUSSION_MODELS = [
-    (_PROD_GROK_MODEL,     "grok_4.20",   "stage_1_grok",          True),
-    (_PROD_GPT_MODEL,      "gpt_5.4",     "stage_2_gpt",           True),
+    (_PROD_GROK_MODEL,     "grok_4.20",   "stage_1_grok",          False),
+    (_PROD_GPT_MODEL,      "gpt_5.4",     "stage_2_gpt",           False),
     (_PROD_DEEPSEEK_MODEL, "deepseek_v4", "stage_3_deepseek",      False),
-    (_PROD_GEMINI_MODEL,   "gemini_3.1",  "stage_4_gemini_devil",  True),
-    (_PROD_SONNET_MODEL,   "sonnet_4.5",  "stage_5_sonnet",        True),
+    (_PROD_GEMINI_MODEL,   "gemini_3.1",  "stage_4_gemini_devil",  False),
+    (_PROD_SONNET_MODEL,   "sonnet_4.5",  "stage_5_sonnet",        False),
 ]
 
 
