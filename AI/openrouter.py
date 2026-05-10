@@ -539,4 +539,5 @@ def ask_deepseek_review(
         max_tokens  = max_tokens,
         temperature = temperature,
         context     = context,
+        extra_body  = {"provider": {"order": ["DeepSeek", "NovitaAI"], "allow_fallbacks": False}},
     )
