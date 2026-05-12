@@ -741,7 +741,7 @@ def run_gemini_filter(
             "You return only valid JSON — no markdown, no fences, no explanation."
         ),
         context    = "gemini_filter",
-        use_search = True,
+        use_search = False,
     )
 
     if gemini_result is None:
@@ -891,7 +891,7 @@ if __name__ == "__main__":
                 "You return only valid JSON — no markdown, no fences, no explanation."
             ),
             context    = "gemini_filter",
-            use_search = True,
+            use_search = False,
         )
         if gemini_result is None:
             print("  ⚠️  Gemini unavailable — no fallback, exiting")
