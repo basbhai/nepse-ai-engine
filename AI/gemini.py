@@ -164,7 +164,7 @@ def _openrouter_fallback(
             max_tokens  = 10000,
             temperature = temperature,
             context     = f"{context}_openrouter_fallback",
-            use_search = True,
+            use_search = False,
         )
     except Exception as e:
         log.error("[%s] OpenRouter fallback also failed: %s", context, e)
