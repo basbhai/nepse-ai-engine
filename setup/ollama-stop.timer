@@ -1,0 +1,11 @@
+[Unit]
+Description=Stop Ollama after NEPSE market close
+
+[Timer]
+# Market close 15:00 NST = 09:15 UTC — stop 15 min after close.
+OnCalendar=Mon,Tue,Wed,Thu,Fri 09:30:00 UTC
+Persistent=false
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

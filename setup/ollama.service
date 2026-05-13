@@ -1,0 +1,16 @@
+[Unit]
+Description=Ollama local inference server
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+ExecStart=ollama serve
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ollama
+
+[Install]
+WantedBy=default.target

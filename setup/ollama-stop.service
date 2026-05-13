@@ -1,0 +1,7 @@
+[Unit]
+Description=Stop Ollama after NEPSE market close
+
+[Service]
+Type=oneshot
+ExecStart=pkill -x ollama
+RemainAfterExit=no

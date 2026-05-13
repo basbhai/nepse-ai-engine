@@ -1,0 +1,12 @@
+[Unit]
+Description=Start Ollama before NEPSE market open
+
+[Timer]
+# Market hours: 11:00 AM–3:00 PM NST = 05:15–09:15 UTC
+# Start 30 min early so the model is warm before first trade cycle.
+OnCalendar=Mon,Tue,Wed,Thu,Fri 04:45:00 UTC
+Persistent=false
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target
