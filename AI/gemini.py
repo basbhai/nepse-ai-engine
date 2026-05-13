@@ -7,8 +7,8 @@ Strategy:
   1. Try Google SDK with 3 rotating API keys (free quota)
      - Retry 5 times rotating keys: key1 → key2 → key3 → key1 → key2
      - Jitter 4-15s between retries
-  2. If all 5 fail → fallback to OpenRouter paid Gemini
-  3. Telegram alert to admin only if OpenRouter also fails
+  2. If all 5 fail → fallback to Playwright DeepSeek (free, no API cost)
+  3. Telegram alert to admin only if Playwright also fails
 
 All modules import from here:
     from AI.gemini import ask_gemini_json, ask_gemini_text
@@ -30,7 +30,7 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL            = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 OPENROUTER_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "google/gemini-2.5-flash")
 
 MAX_RETRIES = 5
@@ -39,7 +39,7 @@ JITTER_MAX  = 15
 
 # 3 rotating API keys — key1 used as fallback for GEMINI_API_KEY backwards compat
 _GEMINI_KEYS = [
-    os.getenv("GEMINI_API_KEY_1") ,
+    os.getenv("GEMINI_API_KEY_1"),
     os.getenv("GEMINI_API_KEY_2", ""),
     os.getenv("GEMINI_API_KEY_3", ""),
 ]
@@ -47,7 +47,7 @@ _GEMINI_KEYS = [
 # Retries rotate across keys: attempt 0→key0, 1→key1, 2→key2, 3→key0, 4→key1
 def _get_key(attempt: int) -> str:
     """Rotate across available keys. Skip empty keys."""
-    available = [k for k in _GEMINI_KEYS if k.strip()]
+    available = [k for k in _GEMINI_KEYS if k and k.strip()]
     if not available:
         return ""
     return available[attempt % len(available)]
@@ -72,15 +72,15 @@ def _is_retryable(exc: Exception) -> bool:
 # Telegram admin alert
 # ---------------------------------------------------------------------------
 def _alert_admin(context: str, last_error: str) -> None:
-    """Alert admin only when BOTH Gemini SDK and OpenRouter fallback fail."""
+    """Alert admin only when BOTH Gemini SDK and Playwright fallback fail."""
     try:
         import requests
-        token   = os.getenv("TELEGRAM_ERROR_BOT", "") 
+        token   = os.getenv("TELEGRAM_ERROR_BOT", "")
         chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
         if not token or not chat_id:
             return
         text = (
-            f"🔴 *Gemini — ALL KEYS + OPENROUTER FAILED*\n"
+            f"🔴 *Gemini — ALL KEYS + PLAYWRIGHT FALLBACK FAILED*\n"
             f"Context: `{context}`\n"
             f"Last error: `{last_error[:200]}`\n"
             f"Model: `{GEMINI_MODEL}`"
@@ -135,39 +135,29 @@ def _sdk_call(
 
 
 # ---------------------------------------------------------------------------
-# OpenRouter paid fallback
+# Playwright DeepSeek fallback
 # ---------------------------------------------------------------------------
-def _openrouter_fallback(
+def _playwright_fallback(
     prompt: str,
     system: Optional[str],
-    response_mime_type: str,
-    temperature: float,
     context: str,
-    use_search: bool = False,
 ) -> Optional[str]:
     """
-    Fallback to OpenRouter paid Gemini when all SDK keys fail.
-    Uses same _call() from openrouter.py — retry logic already inside.
+    Fallback to Playwright DeepSeek browser automation when all Gemini SDK keys fail.
+    Free — no API cost. Returns raw text or None.
+
+    Note: ask_deepseek_text() ignores temperature (browser UI has no temp control).
+    System prompt is passed through and prepended by the Playwright driver.
     """
     try:
-        from AI.openrouter import _call
-        messages = []
-        if system:
-            messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": prompt})
-
-        log.warning("[%s] All Gemini SDK keys failed — falling back to OpenRouter paid", context)
-
-        return _call(
-            model       = OPENROUTER_GEMINI_MODEL,
-            messages    = messages,
-            max_tokens  = 10000,
-            temperature = temperature,
-            context     = f"{context}_openrouter_fallback",
-            use_search = False,
+        from AI.deepseek import ask_deepseek_text
+        log.warning(
+            "[%s] All Gemini SDK keys failed — falling back to Playwright DeepSeek",
+            context,
         )
+        return ask_deepseek_text(prompt, system=system, context=context)
     except Exception as e:
-        log.error("[%s] OpenRouter fallback also failed: %s", context, e)
+        log.error("[%s] Playwright DeepSeek fallback failed: %s", context, e)
         return None
 
 
@@ -197,8 +187,8 @@ def _gemini_with_retry(
 ) -> Optional[str]:
     """
     Try Google SDK 5 times rotating across 3 keys.
-    On total failure → OpenRouter paid fallback.
-    On OpenRouter failure → Telegram alert + return None.
+    On total failure → Playwright DeepSeek fallback (free, no API cost).
+    On Playwright failure → Telegram alert + return None.
 
     Key rotation:
         attempt 0 → GEMINI_API_KEY_1
@@ -207,17 +197,18 @@ def _gemini_with_retry(
         attempt 3 → GEMINI_API_KEY_1
         attempt 4 → GEMINI_API_KEY_2
     """
-    available_keys = [k for k in _GEMINI_KEYS if k.strip()]
+    available_keys = [k for k in _GEMINI_KEYS if k and k.strip()]
     if not available_keys:
         log.error("[%s] No Gemini API keys configured", context)
-        return _openrouter_fallback(
-            prompt, system, response_mime_type, temperature, context
-        )
+        raw = _playwright_fallback(prompt, system, context)
+        if raw is None:
+            _alert_admin(context, "No Gemini API keys configured")
+        return raw
 
     last_error = ""
     for attempt in range(1, MAX_RETRIES + 1):
-        api_key  = _get_key(attempt - 1)
-        key_num  = (attempt - 1) % len(available_keys) + 1
+        api_key = _get_key(attempt - 1)
+        key_num = (attempt - 1) % len(available_keys) + 1
 
         try:
             log.info(
@@ -253,13 +244,11 @@ def _gemini_with_retry(
                 if attempt < MAX_RETRIES:
                     continue
 
-    # All SDK attempts failed — try OpenRouter paid Gemini as fallback
-    raw = _openrouter_fallback(
-        prompt, system, response_mime_type, temperature, context, use_search
-    )
+    # All SDK attempts failed — try Playwright DeepSeek (free fallback)
+    raw = _playwright_fallback(prompt, system, context)
 
     if raw is None:
-        # Both SDK and OpenRouter failed — alert admin
+        # Both SDK and Playwright failed — alert admin
         _alert_admin(context, last_error)
 
     return raw
@@ -281,7 +270,7 @@ def ask_gemini_json(
 
     Internally:
       1. Tries Google SDK × 5 (rotating 3 keys)
-      2. Falls back to OpenRouter paid Gemini (skipped when use_search=True)
+      2. Falls back to Playwright DeepSeek (free — no API cost)
       3. Alerts admin only if both fail
 
     Usage:
@@ -304,7 +293,7 @@ def ask_gemini_json(
         return json.loads(raw)
     except json.JSONDecodeError as exc:
         log.error(
-            "[%s] Gemini returned invalid JSON: %s | raw: %s",
+            "[%s] JSON parse failed: %s | raw: %s",
             context, exc, raw[:300],
         )
         return None
@@ -322,7 +311,7 @@ def ask_gemini_text(
 
     Internally:
       1. Tries Google SDK × 5 (rotating 3 keys)
-      2. Falls back to OpenRouter paid Gemini (skipped when use_search=True)
+      2. Falls back to Playwright DeepSeek (free — no API cost)
       3. Alerts admin only if both fail
 
     Usage:
