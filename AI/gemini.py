@@ -148,6 +148,11 @@ def _playwright_fallback(
 
     Note: ask_deepseek_text() ignores temperature (browser UI has no temp control).
     System prompt is passed through and prepended by the Playwright driver.
+
+    ask_deepseek_text() returns Optional[dict] (already parsed internally).
+    We re-serialize to str so _gemini_with_retry() stays str-typed throughout,
+    and ask_gemini_json()'s existing _strip_fences() + json.loads() chain works unchanged.
+    ask_gemini_text() callers get a JSON string — acceptable for text use cases.
     """
     try:
         from AI.deepseek import ask_deepseek_text
@@ -155,7 +160,11 @@ def _playwright_fallback(
             "[%s] All Gemini SDK keys failed — falling back to Playwright DeepSeek",
             context,
         )
-        return ask_deepseek_text(prompt, system=system, context=context)
+        result = ask_deepseek_text(prompt, system=system, context=context)
+        if result is None:
+            return None
+        # result is a dict — serialize back to string for uniform pipeline
+        return json.dumps(result) if isinstance(result, dict) else str(result)
     except Exception as e:
         log.error("[%s] Playwright DeepSeek fallback failed: %s", context, e)
         return None
