@@ -5,7 +5,7 @@
 # Run ONCE after cloning the repo and filling in .env
 #
 # Usage:
-#   cd /opt/nepse-engine
+#   cd ~/nepse-engine
 #   cp setup/.env.example .env
 #   nano .env                    ← fill in all secrets
 #   bash setup/install.sh
@@ -52,7 +52,7 @@ if [ ! -f ".env" ]; then
 fi
 ok ".env found"
 
-# ── Get current user ─────────────────────────────────────────────────────────
+# ── Get current user ──────────────────────────────────────────────────────────
 NEPSE_USER="$(whoami)"
 info "Installing for user: $NEPSE_USER"
 info "Project directory:   $PROJECT_DIR"
@@ -97,17 +97,35 @@ step "4/9  Installing systemd services"
 SYSTEMD_DIR="$HOME/.config/systemd/user"
 mkdir -p "$SYSTEMD_DIR"
 
-# Service files use %i for user — replace with actual username in service copies
-for svc in nepse-bot nepse-morning nepse-trading nepse-eod nepse-weekly nepse-sleep; do
-    # Replace %i with actual user in service file before installing
-    sed "s|%i|$NEPSE_USER|g; s|/opt/nepse-engine|$PROJECT_DIR|g" \
-        "setup/${svc}.service" > "$SYSTEMD_DIR/${svc}.service"
-    ok "Installed $svc.service"
+# Services that use %i (username) and /opt/nepse-engine path — substitute both
+for svc in nepse-bot nepse-morning nepse-trading nepse-eod nepse-weekly nepse-sleep nepse-backup nepse-monitor; do
+    if [ -f "setup/${svc}.service" ]; then
+        sed "s|%i|$NEPSE_USER|g; s|/opt/nepse-engine|$PROJECT_DIR|g" \
+            "setup/${svc}.service" > "$SYSTEMD_DIR/${svc}.service"
+        ok "Installed $svc.service"
+    else
+        warn "setup/${svc}.service not found — skipping"
+    fi
 done
 
-for tmr in nepse-morning nepse-trading nepse-eod nepse-weekly nepse-sleep; do
-    cp "setup/${tmr}.timer" "$SYSTEMD_DIR/${tmr}.timer"
-    ok "Installed $tmr.timer"
+# Services that do NOT use %i — copy as-is
+for svc in ollama ollama-stop; do
+    if [ -f "setup/${svc}.service" ]; then
+        cp "setup/${svc}.service" "$SYSTEMD_DIR/${svc}.service"
+        ok "Installed $svc.service"
+    else
+        warn "setup/${svc}.service not found — skipping"
+    fi
+done
+
+# All timers — copy as-is
+for tmr in nepse-morning nepse-trading nepse-eod nepse-weekly nepse-sleep nepse-backup nepse-gitpull nepse-summary nepse-monitor ollama ollama-stop; do
+    if [ -f "setup/${tmr}.timer" ]; then
+        cp "setup/${tmr}.timer" "$SYSTEMD_DIR/${tmr}.timer"
+        ok "Installed $tmr.timer"
+    else
+        warn "setup/${tmr}.timer not found — skipping"
+    fi
 done
 
 # Reload systemd user daemon
@@ -115,28 +133,29 @@ systemctl --user daemon-reload
 ok "systemd daemon reloaded"
 
 # ── Step 5: Enable and start timers ──────────────────────────────────────────
-step "5/9  Enabling systemd timers"
+step "5/9  Enabling systemd timers and services"
 
-systemctl --user enable nepse-morning.timer
-systemctl --user enable nepse-trading.timer
-systemctl --user enable nepse-eod.timer
-systemctl --user enable nepse-weekly.timer
-systemctl --user enable nepse-sleep.timer
+# Enable all timers
+for tmr in nepse-morning nepse-trading nepse-eod nepse-weekly nepse-sleep nepse-backup nepse-gitpull nepse-summary nepse-monitor ollama ollama-stop; do
+    systemctl --user enable ${tmr}.timer 2>/dev/null && ok "Enabled $tmr.timer" || warn "$tmr.timer not found — skipping"
+done
+
+# Enable persistent services (always-on)
 systemctl --user enable nepse-bot.service
+systemctl --user enable nepse-monitor.service
 
-# Start timers now (they'll fire at the next scheduled time)
-systemctl --user start nepse-morning.timer
-systemctl --user start nepse-trading.timer
-systemctl --user start nepse-eod.timer
-systemctl --user start nepse-weekly.timer
-systemctl --user start nepse-sleep.timer
+# Start all timers (they fire at their next scheduled time)
+for tmr in nepse-morning nepse-trading nepse-eod nepse-weekly nepse-sleep nepse-backup nepse-gitpull nepse-summary nepse-monitor ollama ollama-stop; do
+    systemctl --user start ${tmr}.timer 2>/dev/null && ok "Started $tmr.timer" || warn "$tmr.timer start skipped"
+done
 
-# Start Telegram bot immediately
+# Start persistent services immediately
 systemctl --user start nepse-bot.service
+ok "Started nepse-bot.service"
 
 ok "All timers enabled and started"
 
-# Enable lingering so services run even when you're not logged in
+# Enable lingering so services run even when not logged in
 sudo loginctl enable-linger "$NEPSE_USER"
 ok "Linger enabled for $NEPSE_USER (services run without login)"
 
@@ -152,11 +171,11 @@ else
     ok "Sudoers rule already exists"
 fi
 
-# ── Step 7: DB migrations ────────────────────────────────────────────────────
+# ── Step 7: DB migrations ─────────────────────────────────────────────────────
 step "7/9  Running database migrations"
 python -m db.migrations && ok "DB migrations complete" || warn "DB migrations failed — check DATABASE_URL in .env"
 
-# ── Step 8: Seed settings ────────────────────────────────────────────────────
+# ── Step 8: Seed settings ─────────────────────────────────────────────────────
 step "8/9  Seeding default settings"
 python -c "
 from db.migrations import seed_settings
@@ -179,7 +198,7 @@ echo ""
 echo -e "${BOLD}System schedule:${RESET}"
 echo "  10:20 AM NST  → Machine wakes (set by rtcwake)"
 echo "  10:30 AM NST  → Morning workflow (history, indicators, briefing)"
-echo "  10:45 AM NST  → Trading loop starts (every 6 min)"
+echo "  10:45 AM NST  → Trading loop starts (every 10 min)"
 echo "   3:00 PM NST  → Market closes"
 echo "   3:15 PM NST  → EOD workflow (auditor)"
 echo "   3:45 PM NST  → Machine sleeps"
@@ -190,11 +209,13 @@ echo "  View trading logs:    journalctl --user -u nepse-trading -f"
 echo "  View morning logs:    journalctl --user -u nepse-morning -f"
 echo "  View EOD logs:        journalctl --user -u nepse-eod -f"
 echo "  View Telegram bot:    journalctl --user -u nepse-bot -f"
+echo "  View all NEPSE:       journalctl --user -f | grep nepse"
 echo "  Timer status:         systemctl --user list-timers"
 echo "  Test trading now:     python main.py --dry-run --skip-guard"
-echo "  Go LIVE:              edit setup/nepse-trading.service → change -paper to -live"
-echo "                        then: systemctl --user daemon-reload"
-echo "                              systemctl --user restart nepse-trading.timer"
+echo "  Go LIVE:              edit ~/.config/systemd/user/nepse-trading.service"
+echo "                        change -paper to -live, then:"
+echo "                        systemctl --user daemon-reload"
+echo "                        systemctl --user restart nepse-trading.timer"
 echo ""
 echo -e "${YELLOW}⚠️  Default mode is PAPER TRADING. To go live, see README.md.${RESET}"
 echo ""
