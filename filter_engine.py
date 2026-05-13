@@ -244,6 +244,14 @@ class FilterCandidate:
     dpr_proximity:    float = 0.0
     volume_os_ratio:  float = 0.0
 
+    # Momentum direction (from 7-day indicator history)
+    momentum_status:  str   = "NEUTRAL"  # FALLING_KNIFE|OVERSOLD_WATCH|EARLY_REVERSAL|CONFIRMED_REVERSAL|NEUTRAL
+    rsi_slope_3d:     float = 0.0        # positive = RSI improving
+    macd_hist_slope:  float = 0.0        # positive = histogram improving
+    bb_pct_b_slope:   float = 0.0        # positive = moving away from lower band
+    bounce_failed:    bool  = False      # True = dead-cat bounce pattern
+    reversal_days:    int   = 0          # consecutive days RSI rising
+
     timestamp: str = field(default_factory=lambda:
                     datetime.now(tz=NST).strftime("%Y-%m-%d %H:%M:%S"))
 
@@ -384,6 +392,144 @@ def _load_context() -> dict:
     return ctx
 
 
+def _load_recent_indicators(symbols: list[str], today: str, lookback: int = 7) -> dict[str, list[dict]]:
+    """
+    Load last `lookback` trading days of indicator rows per symbol.
+    Single batch SQL query — never called per-symbol.
+
+    Returns dict[symbol -> list[dict]], rows newest-first.
+    Empty list for symbols with no history.
+    """
+    if not symbols:
+        return {}
+    try:
+        from sheets import run_raw_sql
+        placeholders = ",".join(["%s"] * len(symbols))
+        rows = run_raw_sql(
+            f"""
+            SELECT symbol, date, rsi_14, macd_histogram, bb_pct_b
+            FROM indicators
+            WHERE symbol IN ({placeholders})
+              AND date < %s
+            ORDER BY symbol ASC, date DESC
+            """,
+            tuple(symbols) + (today,),
+        )
+        result: dict[str, list[dict]] = {}
+        for r in (rows or []):
+            sym = r.get("symbol", "").upper()
+            if sym not in result:
+                result[sym] = []
+            if len(result[sym]) < lookback:
+                result[sym].append(r)
+        return result
+    except Exception as exc:
+        logger.warning("_load_recent_indicators failed: %s", exc)
+        return {}
+
+
+def _compute_momentum(recent_rows: list[dict]) -> dict:
+    """
+    Compute momentum direction from last 7 days of indicator history.
+    recent_rows: list of dicts, newest first, from _load_recent_indicators().
+
+    Returns dict with keys:
+      momentum_status : str   — classification
+      rsi_slope_3d    : float — positive = improving
+      macd_hist_slope : float — positive = improving
+      bb_pct_b_slope  : float — positive = moving away from lower band
+      bounce_failed   : bool
+      reversal_days   : int   — consecutive days RSI has been rising
+    """
+    default = {
+        "momentum_status": "NEUTRAL",
+        "rsi_slope_3d":    0.0,
+        "macd_hist_slope": 0.0,
+        "bb_pct_b_slope":  0.0,
+        "bounce_failed":   False,
+        "reversal_days":   0,
+    }
+
+    if not recent_rows or len(recent_rows) < 2:
+        return default
+
+    def _f(row: dict, key: str) -> float:
+        try:
+            v = row.get(key)
+            return float(v) if v not in (None, "", "None") else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+
+    # Extract values newest-first: index 0 = yesterday, 1 = day before, etc.
+    rsi_vals  = [_f(r, "rsi_14")        for r in recent_rows[:5]]
+    hist_vals = [_f(r, "macd_histogram") for r in recent_rows[:5]]
+    pctb_vals = [_f(r, "bb_pct_b")      for r in recent_rows[:5]]
+
+    # Slopes: positive = improving (newest - oldest of the 3-day window)
+    # rsi_vals[0] = yesterday (most recent history), rsi_vals[2] = 3 days ago
+    rsi_slope_3d    = rsi_vals[0]  - rsi_vals[min(2, len(rsi_vals)-1)]
+    macd_hist_slope = hist_vals[0] - hist_vals[min(2, len(hist_vals)-1)]
+    bb_pct_b_slope  = pctb_vals[0] - pctb_vals[min(2, len(pctb_vals)-1)]
+
+    # Consecutive reversal days — how many days in a row RSI has been rising
+    reversal_days = 0
+    for i in range(len(rsi_vals) - 1):
+        if rsi_vals[i] > rsi_vals[i + 1]:   # newer > older = rising
+            reversal_days += 1
+        else:
+            break
+
+    # Bounce failure: RSI was <20, bounced up, then fell back below previous low
+    bounce_failed = False
+    if len(rsi_vals) >= 3:
+        rsi_2d_ago    = rsi_vals[2]   # oldest of the 3
+        rsi_1d_ago    = rsi_vals[1]   # middle
+        rsi_yesterday = rsi_vals[0]   # most recent history
+        if (
+            rsi_2d_ago < 20
+            and rsi_1d_ago > rsi_2d_ago      # bounced
+            and rsi_yesterday < rsi_1d_ago   # failed
+            and rsi_yesterday < 22           # back in danger zone
+        ):
+            bounce_failed = True
+
+    # Classification — based on yesterday's RSI (rsi_vals[0])
+    rsi_yesterday = rsi_vals[0] if rsi_vals else 50.0
+
+    if bounce_failed:
+        status = "FALLING_KNIFE"
+    elif rsi_yesterday < 30 and rsi_slope_3d < 0:
+        status = "FALLING_KNIFE"
+    elif rsi_yesterday < 30 and rsi_slope_3d >= 0 and rsi_slope_3d < 2:
+        status = "OVERSOLD_WATCH"
+    elif (
+        rsi_yesterday >= 28 and rsi_yesterday < 38
+        and rsi_slope_3d >= 2
+        and macd_hist_slope > 0
+        and reversal_days >= 2
+    ):
+        status = "EARLY_REVERSAL"
+    elif (
+        rsi_yesterday >= 30
+        and rsi_slope_3d > 3
+        and macd_hist_slope > 0
+        and bb_pct_b_slope > 0
+        and reversal_days >= 3
+    ):
+        status = "CONFIRMED_REVERSAL"
+    else:
+        status = "NEUTRAL"
+
+    return {
+        "momentum_status": status,
+        "rsi_slope_3d":    round(rsi_slope_3d, 3),
+        "macd_hist_slope": round(macd_hist_slope, 6),
+        "bb_pct_b_slope":  round(bb_pct_b_slope, 4),
+        "bounce_failed":   bounce_failed,
+        "reversal_days":   reversal_days,
+    }
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 2 — HARD GATES
 # ══════════════════════════════════════════════════════════════════════════════
@@ -438,10 +584,19 @@ def _check_symbol_gates(
 
     # RSI alone is not a buy signal in NEPSE (paper: -4.81% standalone)
     if rsi < 30:
-        macd_cross = str(ind.get("macd_cross", "NONE"))
-        bb_signal  = str(ind.get("bb_signal", "NEUTRAL"))
-        if macd_cross != "BULLISH" and bb_signal not in ("LOWER_TOUCH", "SQUEEZE"):
-            return False, f"RSI={rsi:.1f} oversold but no MACD/BB confirmation"
+        momentum_status = ctx.get("_sym_momentum", {}).get("momentum_status", "NEUTRAL")
+        bounce_failed   = ctx.get("_sym_momentum", {}).get("bounce_failed",   False)
+
+        if bounce_failed:
+            return False, f"RSI={rsi:.1f} BOUNCE_FAILED — dead-cat trap"
+        if momentum_status == "FALLING_KNIFE":
+            return False, f"RSI={rsi:.1f} FALLING_KNIFE — still declining"
+        if momentum_status not in ("EARLY_REVERSAL", "CONFIRMED_REVERSAL", "OVERSOLD_WATCH"):
+            # No improvement detected — apply original MACD/BB gate
+            macd_cross = str(ind.get("macd_cross", "NONE"))
+            bb_signal  = str(ind.get("bb_signal", "NEUTRAL"))
+            if macd_cross != "BULLISH" and bb_signal not in ("LOWER_TOUCH", "SQUEEZE"):
+                return False, f"RSI={rsi:.1f} OVERSOLD_NO_MOMENTUM — no direction improvement"
 
     return True, ""
 
@@ -469,16 +624,25 @@ def _score_macd(ind: dict) -> float:
         return max(20.0 + (hist * 5), 0.0)
 
 
-def _score_bollinger(ind: dict) -> float:
+def _score_bollinger(ind: dict, momentum_status: str = "NEUTRAL") -> float:
     """
     Weight 0.25. PF=12.19 — best quality signal in NEPSE.
-    Optimal hold: 130 days.
+    Momentum-aware: LOWER_TOUCH score depends on direction, not just position.
     """
     signal = str(ind.get("bb_signal", "NEUTRAL"))
     pct_b  = float(ind.get("bb_pct_b", 0.5) or 0.5)
 
     if signal == "LOWER_TOUCH":
-        return 100.0
+        if momentum_status == "CONFIRMED_REVERSAL":
+            return 90.0   # strong — confirmed multi-day improvement
+        elif momentum_status == "EARLY_REVERSAL":
+            return 70.0   # promising — but needs more confirmation
+        elif momentum_status == "OVERSOLD_WATCH":
+            return 45.0   # caution — improving but weak
+        elif momentum_status == "FALLING_KNIFE":
+            return 15.0   # dangerous — still falling into lower band
+        else:
+            return 35.0   # unknown direction — was 100, now conservative
     elif signal == "SQUEEZE":
         return 75.0
     elif signal == "NEUTRAL":
@@ -561,14 +725,14 @@ def _score_rsi(ind: dict) -> float:
         return 50.0     # deeply oversold (needs MACD/BB — checked at gate)
 
 
-def _compute_indicator_score(ind: dict, sector: str) -> tuple[float, str, int]:
+def _compute_indicator_score(ind: dict, sector: str, momentum_status: str = "NEUTRAL") -> tuple[float, str, int]:
     """
     Weighted composite indicator score (0–100).
     Returns (score, primary_signal, suggested_hold_days).
     """
     scores = {
         "macd":       _score_macd(ind)            * INDICATOR_WEIGHTS["macd"],
-        "bollinger":  _score_bollinger(ind)        * INDICATOR_WEIGHTS["bollinger"],
+        "bollinger":  _score_bollinger(ind, momentum_status) * INDICATOR_WEIGHTS["bollinger"],
         "sma":        _score_sma(ind)              * INDICATOR_WEIGHTS["sma"],
         "stochastic": _score_stochastic_proxy(ind) * INDICATOR_WEIGHTS["stochastic"],
         "rsi":        _score_rsi(ind)              * INDICATOR_WEIGHTS["rsi"],
@@ -1159,6 +1323,15 @@ def run_filter(
         logger.warning("No indicators for %s — run indicators.py first", date)
         return []
 
+    # ── Momentum history (7-day batch load) ───────────────────────────────────
+    valid_syms = [
+        s.upper() for s in market_data
+        if str(s).replace("-", "").replace("_", "").isalpha()
+        and indicators_map.get(s.upper())
+    ]
+    recent_map = _load_recent_indicators(valid_syms, date, lookback=7)
+    logger.info("Momentum history loaded: %d symbols", len(recent_map))
+
     # ── Candle signals ────────────────────────────────────────────────────────
     valid_symbols = [
         s.upper() for s in market_data
@@ -1207,6 +1380,10 @@ def run_filter(
         volume_val = float(getattr(price_row, "volume", 0) or 0)
         volume_os_ratio = round((volume_val / os_shares * 100), 4) if os_shares > 0 else 0.0
         logger.debug("VOS: %s vol=%.0f os=%.0f ratio=%.3f%%", sym, volume_val, os_shares, volume_os_ratio)
+
+        # Compute momentum for this symbol and inject into ctx temporarily
+        momentum = _compute_momentum(recent_map.get(sym, []))
+        ctx["_sym_momentum"] = momentum   # consumed by _check_symbol_gates
 
         sym_ok, sym_reason = _check_symbol_gates(sym, ind, price_row, ctx)
         if not sym_ok:
@@ -1269,7 +1446,7 @@ def run_filter(
             continue
 
         sector    = sector_map.get(sym) or str(ind.get("sector", "others") or "others")
-        ind_score, primary, hold_days = _compute_indicator_score(ind, sector)
+        ind_score, primary, hold_days = _compute_indicator_score(ind, sector, momentum["momentum_status"])
         sect_mult = _get_sector_multiplier(sector, ctx)
 
         ltp        = float(getattr(price_row, "ltp", 0)        or getattr(price_row, "close", 0) or 0)
@@ -1361,7 +1538,16 @@ def run_filter(
             bid_ask_ratio   = float(getattr(price_row, "bid_ask_ratio",  0) or 0),
             dpr_proximity   = float(getattr(price_row, "dpr_proximity",  0) or 0),
             volume_os_ratio = volume_os_ratio,
+
+            momentum_status  = momentum["momentum_status"],
+            rsi_slope_3d     = momentum["rsi_slope_3d"],
+            macd_hist_slope  = momentum["macd_hist_slope"],
+            bb_pct_b_slope   = momentum["bb_pct_b_slope"],
+            bounce_failed    = momentum["bounce_failed"],
+            reversal_days    = momentum["reversal_days"],
         ))
+
+    ctx.pop("_sym_momentum", None)
 
     # ── Rank and trim ─────────────────────────────────────────────────────────
     candidates.sort(key=lambda c: c.composite_score, reverse=True)
@@ -1395,6 +1581,11 @@ def format_candidate_for_gemini(c: FilterCandidate) -> str:
     """
     candle = f"{c.best_candle}(T{c.candle_tier},{c.candle_conf}%)" if c.best_candle else "none"
     cstar  = "Y" if c.cstar_signal else "N"
+    momentum_str = f" | momentum={c.momentum_status}"
+    if c.bounce_failed:
+        momentum_str += " BOUNCE_FAILED"
+    elif c.reversal_days > 0:
+        momentum_str += f" rev_days={c.reversal_days}"
     return (
         f"SYM:{c.symbol} SEC:{c.sector} LTP:{c.ltp:.2f} CHG:{c.change_pct:+.2f}% "
         f"VOL:{c.volume:,} SCORE:{c.composite_score:.1f} TECH:{c.tech_score} "
@@ -1402,7 +1593,7 @@ def format_candidate_for_gemini(c: FilterCandidate) -> str:
         f"BB:{c.bb_signal}[{c.bb_pct_b:.2f}] EMA:{c.ema_trend} "
         f"OBV:{c.obv_trend} ATR%:{c.atr_pct:.1f} CONF:{c.conf_score:.0f} "
         f"CANDLE:{candle} CSTAR:{cstar} HOLD:{c.suggested_hold}d SIG:{c.primary_signal}"
-    )
+    ) + momentum_str
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -21,6 +21,12 @@
 //   DROPPED: news_sentiment (no writer/reader existed)
 //   REMOVED: market_log.dual_audit, market_log.gpt_verdict (legacy GPT dual-verdict architecture)
 //   REMOVED: nepal_pulse.ccd_ratio, .crr, .slr, .trade_deficit_npr (redundant with nrb_monthly)
+//
+// Updated: May 13, 2026
+//   ADDED: market_log — 6 momentum/reversal columns (momentum_status, rsi_slope_3d,
+//          macd_hist_slope, bb_pct_b_slope, bounce_failed, reversal_days)
+//   FIXED: daily_context_log headline columns (SQL type annotation corrected)
+//   FIXED: nrb_monthly closing brace typo
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PRICE & MARKET DATA
@@ -188,9 +194,20 @@ model market_log {
   headlines_economy      Text   // 1-2 economic/macro headlines
   headlines_stock        Text   // 1-2 stock market specific headlines
 
+  // ── Momentum / Reversal context — added May 13, 2026
+  // Computed by filter_engine._compute_momentum() from 7-day indicator history.
+  // Written by claude_analyst._write_to_db(). Read by Learning Hub for review.
+  momentum_status  Text   // FALLING_KNIFE | OVERSOLD_WATCH | EARLY_REVERSAL | CONFIRMED_REVERSAL | NEUTRAL
+  rsi_slope_3d     Text   // RSI direction over last 3 days — positive = improving
+  macd_hist_slope  Text   // MACD histogram slope over last 3 days — positive = improving
+  bb_pct_b_slope   Text   // BB %B slope — positive = recovering from lower band
+  bounce_failed    Text   // "true" | "false" — dead-cat bounce pattern detected
+  reversal_days    Text   // consecutive days RSI has been improving (integer as text)
+
   @@index([symbol])
   @@index([date])
   @@index([outcome])
+  @@index([momentum_status])
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -331,9 +348,10 @@ model nepal_pulse {
   source               Text
   timestamp            Text
 
-  headlines_politics  Text
-  headlines_economy   Text
-  headlines_stock     Text
+  headlines_politics   Text
+  headlines_economy    Text
+  headlines_stock      Text
+
   @@index([date])
 }
 
@@ -381,8 +399,8 @@ model nrb_monthly {
   // ── Balance of Payments ───────────────────────────────────────────────────
   bop_overall_balance_usd_m           Text
   bop_current_account_usd_m           Text
-  bop_capital_account_usd_m           Text   // NEW
-  bop_trade_deficit_usd_m             Text   // NEW
+  bop_capital_account_usd_m           Text
+  bop_trade_deficit_usd_m             Text
   bop_status                          Text   // SURPLUS | DEFICIT
   bop_trend                           Text   // IMPROVING | DETERIORATING | STABLE
   bop_impact_on_nepse                 Text   // one sentence NEPSE liquidity implication
@@ -398,7 +416,7 @@ model nrb_monthly {
   key_risks                           Text   // max 3 bullets
 
   @@index([fiscal_year, month_number])
-}s
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FUNDAMENTALS
@@ -938,20 +956,20 @@ model daily_context_log {
   wait_count           Text             // count of WAIT signals
   avoid_count          Text             // count of AVOID signals
 
-  gate_miss_count        Text    // how many symbols blocked today
-  gate_top_category      Text    // CONF_SCORE | TECH_SCORE | RSI_OVERBOUGHT etc
-  gate_false_block_pct   Text    // rolling 30d false block rate at summary time
-  signals_avg_confidence Text    // avg Claude confidence across all signals today
+  gate_miss_count        Text           // how many symbols blocked today
+  gate_top_category      Text           // CONF_SCORE | TECH_SCORE | RSI_OVERBOUGHT etc
+  gate_false_block_pct   Text           // rolling 30d false block rate at summary time
+  signals_avg_confidence Text           // avg Claude confidence across all signals today
+
+  // ── Headlines
+  headlines_political  Text
+  headlines_economy    Text
+  headlines_nepse      Text
 
   // ── Metadata
   source               Text  @default("gemini_nightly")
   backfilled           Text  @default("false")  // true if generated retroactively
   created_at           Text
-
-  // ---headilines
-   headlines_political TEXT
-   headlines_economy   TEXT
-    headlines_nepse     TEXT
 
   @@index([date])
 }
@@ -1126,28 +1144,26 @@ model paper_trade_log {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Gate Missed details
+// GATE MISS TRACKING
 // ─────────────────────────────────────────────────────────────────────────────
 
-
 model gate_misses {
-  id                     Serial
-  date                   Text!
-  symbol                 Text!
-  sector                 Text
-  gate_reason            Text      // raw reason string: "CONF=42<50"
-  gate_category          Text      // normalized: CONF_SCORE | TECH_SCORE | etc
-  price_at_block         Text
-  market_state           Text
-  tech_score             Text
-  conf_score             Text
-  volume_os_ratio        Text      // today_volume / outstanding_shares %
+  id                       Serial
+  date                     Text!
+  symbol                   Text!
+  sector                   Text
+  gate_reason              Text      // raw reason string: "CONF=42<50"
+  gate_category            Text      // normalized: CONF_SCORE | TECH_SCORE | etc
+  price_at_block           Text
+  market_state             Text
+  tech_score               Text
+  conf_score               Text
+  volume_os_ratio          Text      // today_volume / outstanding_shares %
   composite_score_would_be Text
-  tracking_days          Text  @default("0")
-  outcome                Text      // NULL until stamped: FALSE_BLOCK | CORRECT_BLOCK | NEUTRAL
-  outcome_return_pct     Text
-  outcome_stamped_at     Text
-
+  tracking_days            Text  @default("0")
+  outcome                  Text      // NULL until stamped: FALSE_BLOCK | CORRECT_BLOCK | NEUTRAL
+  outcome_return_pct       Text
+  outcome_stamped_at       Text
 
   @@unique([symbol, date])
   @@index([date])
@@ -1169,7 +1185,6 @@ model gate_proposals {
   decided_at        Text
   applied_at        Text
 
-
   @@index([review_week])
   @@index([status])
 }
@@ -1189,7 +1204,6 @@ model claude_audit {
   overall_accuracy   Text
   macro_accuracy     Text
   audit_summary      Text
-
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1256,36 +1270,36 @@ model floorsheet_signals {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model atrad_market_watch {
-  id           Serial
-  date         Text!
-  time         Text!    // HH:MM:SS — lasttradedtime from ATrad
-  symbol       Text!
-  ltp          Text     // tradeprice — last traded price
-  open         Text     // openingprice
-  high         Text     // highpx
-  low          Text     // lowpx
-  vwap         Text     // exchange-computed VWAP
-  avg_price    Text     // avgprice — simple average
-  bid_price    Text     // best bid price
-  bid_qty      Text     // best bid quantity — buy pressure
-  ask_price    Text     // best ask price
-  ask_qty      Text     // best ask quantity — sell pressure
-  volume       Text     // totvolume
-  turnover     Text     // totturnover
-  total_trades Text     // tottrades
-  net_change   Text     // netchange
-  pct_change   Text     // perchange
-  low_dpr      Text     // lower circuit breaker limit
-  high_dpr     Text     // upper circuit breaker limit
-  prev_dpr_low Text     // popdprlow — yesterday's lower DPR
-  prev_dpr_high Text    // popdprhigh — yesterday's upper DPR
-  max_al_qty   Text     // maxalqty — max allowable quantity
+  id            Serial
+  date          Text!
+  time          Text!    // HH:MM:SS — lasttradedtime from ATrad
+  symbol        Text!
+  ltp           Text     // tradeprice — last traded price
+  open          Text     // openingprice
+  high          Text     // highpx
+  low           Text     // lowpx
+  vwap          Text     // exchange-computed VWAP
+  avg_price     Text     // avgprice — simple average
+  bid_price     Text     // best bid price
+  bid_qty       Text     // best bid quantity — buy pressure
+  ask_price     Text     // best ask price
+  ask_qty       Text     // best ask quantity — sell pressure
+  volume        Text     // totvolume
+  turnover      Text     // totturnover
+  total_trades  Text     // tottrades
+  net_change    Text     // netchange
+  pct_change    Text     // perchange
+  low_dpr       Text     // lower circuit breaker limit
+  high_dpr      Text     // upper circuit breaker limit
+  prev_dpr_low  Text     // popdprlow — yesterday's lower DPR
+  prev_dpr_high Text     // popdprhigh — yesterday's upper DPR
+  max_al_qty    Text     // maxalqty — max allowable quantity
   prev_close    Text     // closingprice — previous day close for gap computation
 
   // Derived signals — computed at write time
-  vwap_dev     Text     // (ltp - vwap) / vwap — deviation from fair value
-  bid_ask_ratio Text    // bid_qty / (bid_qty + ask_qty) — demand pressure 0 to 1
-  dpr_proximity Text    // (ltp - low_dpr) / (high_dpr - low_dpr) — position in range
+  vwap_dev      Text     // (ltp - vwap) / vwap — deviation from fair value
+  bid_ask_ratio Text     // bid_qty / (bid_qty + ask_qty) — demand pressure 0 to 1
+  dpr_proximity Text     // (ltp - low_dpr) / (high_dpr - low_dpr) — position in range
 
   @@unique([date, time, symbol])
   @@index([date, symbol])
@@ -1460,5 +1474,3 @@ model agent_trace {
   @@index([tool])
   @@index([decision])
 }
-
-

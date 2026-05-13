@@ -691,6 +691,33 @@ def _build_prompt(
         f"\n{_event_ctx}\n" if _event_ctx else ""
     )
 
+    # Build momentum block for prompt
+    _momentum_status  = str(getattr(flag, "momentum_status",  "NEUTRAL"))
+    _rsi_slope_3d     = float(getattr(flag, "rsi_slope_3d",   0.0) or 0.0)
+    _macd_hist_slope  = float(getattr(flag, "macd_hist_slope", 0.0) or 0.0)
+    _bb_pct_b_slope   = float(getattr(flag, "bb_pct_b_slope",  0.0) or 0.0)
+    _bounce_failed    = bool(getattr(flag, "bounce_failed",    False))
+    _reversal_days    = int(getattr(flag, "reversal_days",     0)   or 0)
+    _momentum_dir     = "↑ IMPROVING" if _rsi_slope_3d > 0 else "↓ DECLINING"
+    momentum_block = (
+        "\n═══════════════════════════════════════════════\n"
+        "7-DAY MOMENTUM TREND (pre-computed by Python)\n"
+        "═══════════════════════════════════════════════\n"
+        f"Momentum Status:   {_momentum_status}\n"
+        f"RSI Direction:     {_momentum_dir}  (slope={_rsi_slope_3d:+.2f} over 3 days)\n"
+        f"MACD Hist Slope:   {_macd_hist_slope:+.6f}  ({'improving' if _macd_hist_slope > 0 else 'worsening'})\n"
+        f"BB %B Slope:       {_bb_pct_b_slope:+.4f}  ({'recovering' if _bb_pct_b_slope > 0 else 'pressing lower band'})\n"
+        f"Bounce Failed:     {'YES — dead-cat trap detected' if _bounce_failed else 'No'}\n"
+        f"Consecutive Days RSI Rising: {_reversal_days}\n"
+        "\nMOMENTUM RULES — apply strictly:\n"
+        "  FALLING_KNIFE     → Strong signal to AVOID. Price still declining despite oversold reading.\n"
+        "  OVERSOLD_WATCH    → WAIT only. RSI barely improving — no confirmation yet.\n"
+        "  EARLY_REVERSAL    → WAIT is valid. BUY only if MACD cross also confirms.\n"
+        "  CONFIRMED_REVERSAL → BUY candidate. Multi-day improvement with volume.\n"
+        "  NEUTRAL           → Standard scoring applies. Momentum not a factor.\n"
+        "  bounce_failed=YES → AVOID regardless of other indicators. Dead-cat trap.\n"
+    )
+
     return f"""You are a senior NEPSE quantitative analyst with deep knowledge of Nepal market research.
 Analyze this specific stock and produce a precise trading recommendation.
 
@@ -777,6 +804,7 @@ SITUATIONAL CONTEXT
 Trading Day:     {day_context}
 Herding Check:   {herding_alert}
 {event_ctx_section}
+{momentum_block}
 ==============================================
 LEARNING HUB LESSONS (most relevant first)
 ==============================================
@@ -924,6 +952,12 @@ def _write_to_db(result: AnalystResult, flag=None) -> None:
             fund_adj        = _s(flag.fundamental_adj)
             geo_score       = _s(flag.geo_score)
             nepal_score     = _s(flag.nepal_score)
+            momentum_status = str(getattr(flag, "momentum_status",  "NEUTRAL") or "NEUTRAL")
+            rsi_slope_3d    = str(getattr(flag, "rsi_slope_3d",     0.0)       or "0")
+            macd_hist_slope = str(getattr(flag, "macd_hist_slope",  0.0)       or "0")
+            bb_pct_b_slope  = str(getattr(flag, "bb_pct_b_slope",   0.0)       or "0")
+            bounce_failed   = str(getattr(flag, "bounce_failed",     False)     or "false").lower()
+            reversal_days   = str(getattr(flag, "reversal_days",     0)         or "0")
         else:
             rsi_14 = _s(result.rsi_14)
             macd_cross = macd_histogram = ema_trend = ""
@@ -935,6 +969,10 @@ def _write_to_db(result: AnalystResult, flag=None) -> None:
             resistance = _s(result.resistance_level)
             volume = change_pct = fund_adj = ""
             geo_score = nepal_score = ""
+            momentum_status = "NEUTRAL"
+            rsi_slope_3d = macd_hist_slope = bb_pct_b_slope = "0"
+            bounce_failed = "false"
+            reversal_days = "0"
 
         columns = {
             # Identity
@@ -1000,6 +1038,14 @@ def _write_to_db(result: AnalystResult, flag=None) -> None:
             "headlines_politics": _s(result.headlines_politics),
             "headlines_economy":  _s(result.headlines_economy),
             "headlines_stock":    _s(result.headlines_stock),
+
+            # Momentum direction (pre-computed by filter_engine)
+            "momentum_status":  momentum_status,
+            "rsi_slope_3d":     rsi_slope_3d,
+            "macd_hist_slope":  macd_hist_slope,
+            "bb_pct_b_slope":   bb_pct_b_slope,
+            "bounce_failed":    bounce_failed,
+            "reversal_days":    reversal_days,
 
             # Eval fields -- empty now, recommendation_tracker fills later
             "eval_date":             "",
