@@ -595,7 +595,7 @@ tr.row-pending td { background: rgba(245,158,11,.04); }
 <!-- ═══════════════════════ SCRIPTS ══════════════════════════ -->
 <script>
 /* ── Constants ───────────────────────────────────────────────────── */
-const API = 'http://localhost:8766';
+const API = `http://${window.location.hostname}:8766`;
 const chartInstances = {};
 
 /* ── Utils ───────────────────────────────────────────────────────── */
@@ -1183,7 +1183,7 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ═══════════════════════════════════════════════════════════
    NRB ENTRY  (prefixed nrb*)
 ═══════════════════════════════════════════════════════════ */
-const NRB_API = 'http://localhost:8765';
+const NRB_API = `http://${window.location.hostname}:8765`;
 
 const NRB_FIELD_GROUPS = [
   { label:'Monetary Policy', fields:[
