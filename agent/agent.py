@@ -26,7 +26,6 @@ Architecture rules:
 
 import json
 import logging
-import os
 import time
 from datetime import datetime
 from typing import Optional
@@ -42,8 +41,8 @@ log = logging.getLogger(__name__)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 #ORCHESTRATOR_MODEL = "deepseek/deepseek-v4-pro"
-ORCHESTRATOR_MODEL = "openai/gpt-oss-120b:free"
-OPENROUTER_URL     = "https://openrouter.ai/api/v1/chat/completions"
+ORCHESTRATOR_MODEL = "qwen2.5:7b"
+OPENROUTER_URL     = "http://localhost:11434/v1/chat/completions"
 MAX_ITERATIONS     = 10      # hard cap — prevents runaway loops
 MAX_ESCALATIONS    = 2       # cost control — enforced in Python
 TIMEOUT_SECONDS    = 60      # hard timeout for entire cycle
@@ -63,17 +62,7 @@ def _call_orchestrator(messages: list, context: str = "agent") -> Optional[dict]
     tool_use blocks and returns only text. For function calling we need
     the raw tool_calls array from the response.
     """
-    api_key = os.getenv("OPENROUTER_API_KEY", "")
-    if not api_key:
-        log.error("[agent] OPENROUTER_API_KEY not set")
-        return None
-
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type":  "application/json",
-        "HTTP-Referer":  "https://github.com/basbhai/nepse-ai-engine",
-        "X-Title":       "NEPSE AI Engine",
-    }
+    headers = {"Content-Type": "application/json"}
 
     payload = {
         "model":       ORCHESTRATOR_MODEL,
