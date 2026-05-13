@@ -181,6 +181,14 @@ class GeminiFlag:
     dpr_proximity:    float      = 0.0
     volume_os_ratio:  float      = 0.0
 
+    # ── Momentum passthrough from FilterCandidate ────────────────────────────
+    momentum_status:  str   = "NEUTRAL"
+    rsi_slope_3d:     float = 0.0
+    macd_hist_slope:  float = 0.0
+    bb_pct_b_slope:   float = 0.0
+    bounce_failed:    bool  = False
+    reversal_days:    int   = 0
+
     timestamp: str = field(default_factory=lambda:
                     datetime.now(tz=NST).strftime("%Y-%m-%d %H:%M:%S"))
 
@@ -539,6 +547,13 @@ def _assemble_flags(
             bid_ask_ratio   = float(getattr(c, "bid_ask_ratio",   0.0) or 0.0),
             dpr_proximity   = float(getattr(c, "dpr_proximity",   0.0) or 0.0),
             volume_os_ratio = float(getattr(c, "volume_os_ratio", 0.0) or 0.0),
+
+            momentum_status  = getattr(c, "momentum_status",  "NEUTRAL") or "NEUTRAL",
+            rsi_slope_3d     = float(getattr(c, "rsi_slope_3d",   0.0) or 0.0),
+            macd_hist_slope  = float(getattr(c, "macd_hist_slope", 0.0) or 0.0),
+            bb_pct_b_slope   = float(getattr(c, "bb_pct_b_slope",  0.0) or 0.0),
+            bounce_failed    = bool(getattr(c, "bounce_failed",  False)),
+            reversal_days    = int(getattr(c, "reversal_days",   0)   or 0),
         ))
 
     return flags
