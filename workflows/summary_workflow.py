@@ -1,25 +1,37 @@
 """
 workflows/summary_workflow.py — NEPSE AI Engine
 ─────────────────────────────────────────────────────────────────────────────
-Nightly summary sequence. Runs at 9:00 PM NST after machine wakes from
-3:45 PM suspend.
+Unified EOD + nightly summary sequence. Runs at 9:00 PM NST.
+Called by systemd timer: nepse-summary.timer
+
+Previously two separate workflows:
+  - eod_workflow.py (3:15 PM) — RETIRED, moved to archives/
+  - summary_workflow.py (9:00 PM) — this file, now absorbs EOD steps
+
+Why merged at 9 PM (not 3:15 PM):
+  - Floorsheet data is complete by 9 PM (settlement confirmed)
+  - Evening news cycle complete → better headlines for daily_context_log
+  - Broker flow data stable (no intraday noise)
+  - One fewer wake/sleep cycle — machine sleeps at ~3:05 PM, wakes 9 PM
 
 Sequence:
-    1. calendar_guard          → exit if today was not a trading day
-    2. nepal_pulse             → fresh EOD headlines (not 3 PM stale news)
-    3. daily_context_summarizer→ collapse intraday data to one clean row
-    4. backup_sync             → sync updated tables to Neon
-    5. sleep_scheduler         → set RTC alarm for 10 AM, suspend machine
-
-Why separate from eod_workflow:
-    EOD runs at 3:15 PM with market data fresh but news stale.
-    Summary runs at 9 PM with evening news cycle complete — better
-    headlines for daily_context_log which GPT reads every Sunday.
+    1.  calendar_guard              → exit if today was not a trading day
+    2.  nepse_indices               → scrape latest index values (backfill 5d)
+    3.  recommendation_tracker      → stamp WAIT/AVOID outcomes
+    4.  auditor                     → close trades, causal attribution, KPIs
+    5.  gate_miss_tracker           → stamp FALSE_BLOCK/CORRECT_BLOCK
+    6.  floorsheet                  → today's full floorsheet scrape
+    7.  broker_flow_scraper         → smart money accumulation/distribution
+    8.  nepal_pulse                 → fresh 9 PM headlines
+    9.  daily_context_summarizer    → collapse intraday data to one clean row
+    10. backup_sync                 → sync updated tables local → Neon
+    11. sleep_scheduler             → set RTC alarm 10:45 AM, suspend
 
 ─────────────────────────────────────────────────────────────────────────────
 Run:
     python -m workflows.summary_workflow
     python -m workflows.summary_workflow --dry-run
+    python -m workflows.summary_workflow --skip-guard
 """
 
 import argparse
@@ -40,7 +52,7 @@ log = logging.getLogger(__name__)
 NST = timezone(timedelta(hours=5, minutes=45))
 
 
-def _step(name: str, fn, dry_run: bool, *args, **kwargs):
+def _step(name: str, fn, dry_run: bool, *args, **kwargs) -> bool:
     log.info("── %s ...", name)
     if dry_run:
         log.info("   [DRY-RUN] skipped")
@@ -61,6 +73,7 @@ def run(dry_run: bool = False, skip_guard: bool = False) -> int:
     log.info("NEPSE SUMMARY WORKFLOW — %s NST", now.strftime("%Y-%m-%d %H:%M:%S"))
     log.info("=" * 65)
 
+    # ── Calendar guard ────────────────────────────────────────────────────────
     if not skip_guard:
         try:
             from calendar_guard import is_trading_day, today_nst
@@ -71,15 +84,64 @@ def run(dry_run: bool = False, skip_guard: bool = False) -> int:
             log.error("calendar_guard failed: %s — aborting", e)
             return 2
 
+    # ── Detect paper/live mode ────────────────────────────────────────────────
+    paper_mode = True
+    try:
+        from sheets import get_setting
+        paper_mode = get_setting("PAPER_MODE", "true").lower() == "true"
+    except Exception:
+        pass
+    log.info("Mode: %s", "PAPER" if paper_mode else "LIVE")
+
     results = {}
-    # ── Step 0: Floorsheet (today's trades) ──────────────────────────────────
+
+    # ── Step 1: NEPSE indices ─────────────────────────────────────────────────
+    def _nepse_indices():
+        from modules.sharehub_scraper import run as run_indices
+        from datetime import date
+        from_date = (datetime.now() - timedelta(days=5)).date()
+        run_indices(from_date=from_date, dry_run=False)
+    results["nepse_indices"] = _step("nepse_indices", _nepse_indices, dry_run)
+
+    # ── Step 2: Recommendation tracker ───────────────────────────────────────
+    def _rec_tracker():
+        from analysis.recommendation_tracker import run as run_tracker
+        run_tracker(dry_run=False)
+    results["rec_tracker"] = _step("recommendation_tracker", _rec_tracker, dry_run)
+
+    # ── Step 3: Auditor ───────────────────────────────────────────────────────
+    def _auditor():
+        from analysis.auditor import run_eod_audit, run_paper_audit
+        if paper_mode:
+            run_paper_audit(dry_run=False)
+        else:
+            run_eod_audit(dry_run=False)
+    results["auditor"] = _step(
+        f"auditor ({'paper' if paper_mode else 'live'})", _auditor, dry_run
+    )
+
+    # ── Step 4: Gate miss tracker ─────────────────────────────────────────────
+    def _gate_tracker():
+        from analysis.gate_miss_tracker import run_eod
+        run_eod(dry_run=False)
+    results["gate_tracker"] = _step("gate_miss_tracker", _gate_tracker, dry_run)
+
+    # ── Step 5: Floorsheet ────────────────────────────────────────────────────
     def _floorsheet():
         from modules.floorsheet_scraper import run_daily
         from datetime import date
         run_daily(target_date=date.today())
     results["floorsheet"] = _step("floorsheet (today)", _floorsheet, dry_run)
 
-    # ── Step 1: Nepal pulse (fresh 9 PM headlines) ────────────────────────────
+    # ── Step 6: Broker flow (smart money) ────────────────────────────────────
+    def _broker_flow():
+        from modules.broker_flow_scraper import run as run_broker_flow
+        run_broker_flow(dry_run=False)
+    results["broker_flow"] = _step(
+        "broker_flow_scraper (accumulation/distribution)", _broker_flow, dry_run
+    )
+
+    # ── Step 7: Nepal pulse (fresh 9 PM headlines) ────────────────────────────
     def _nepal():
         from modules.nepal_pulse import run as run_pulse
         run_pulse()
@@ -87,32 +149,29 @@ def run(dry_run: bool = False, skip_guard: bool = False) -> int:
         "nepal_pulse (9 PM fresh headlines)", _nepal, dry_run
     )
 
-    # ── Step 2: Daily context summarizer ─────────────────────────────────────
+    # ── Step 8: Daily context summarizer ─────────────────────────────────────
     def _summarizer():
         from analysis.daily_context_summarizer import run as run_summarizer
         run_summarizer()
-    results["summarizer"] = _step(
-        "daily_context_summarizer", _summarizer, dry_run
-    )
+    results["summarizer"] = _step("daily_context_summarizer", _summarizer, dry_run)
 
-    # ── Step 3: Backup sync ───────────────────────────────────────────────────
+    # ── Step 9: Backup sync ───────────────────────────────────────────────────
     def _backup():
         from analysis.backup_sync import run as run_backup
         run_backup()
-    results["backup"] = _step(
-        "backup_sync (local → Neon)", _backup, dry_run
-    )
+    results["backup"] = _step("backup_sync (local → Neon)", _backup, dry_run)
 
-    # ── Summary ───────────────────────────────────────────────────────────────
+    # ── Summary log ───────────────────────────────────────────────────────────
     passed = sum(1 for v in results.values() if v)
     failed = sum(1 for v in results.values() if not v)
     log.info("─" * 65)
     log.info("Summary workflow complete — %d/%d steps OK", passed, passed + failed)
     if failed:
-        log.warning("Failed steps: %s", ", ".join(k for k, v in results.items() if not v))
+        log.warning("Failed steps: %s",
+                    ", ".join(k for k, v in results.items() if not v))
 
-    # ── Step 4: Sleep (always — even if steps failed) ─────────────────────────
-    log.info("── sleep_scheduler (set RTC 10 AM, suspend) ...")
+    # ── Step 10: Sleep (always runs — even if steps failed) ───────────────────
+    log.info("── sleep_scheduler (set RTC 10:45 AM, suspend) ...")
     if not dry_run:
         try:
             from setup.sleep_scheduler import _schedule_wake, _suspend_now, _next_wake_time
@@ -132,7 +191,7 @@ def run(dry_run: bool = False, skip_guard: bool = False) -> int:
 if __name__ == "__main__":
     from log_config import attach_file_handler
     attach_file_handler(__name__)
-    parser = argparse.ArgumentParser(description="NEPSE nightly summary workflow")
+    parser = argparse.ArgumentParser(description="NEPSE unified EOD + summary workflow")
     parser.add_argument("--dry-run",    action="store_true")
     parser.add_argument("--skip-guard", action="store_true")
     args = parser.parse_args()

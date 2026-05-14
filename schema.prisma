@@ -1474,3 +1474,118 @@ model agent_trace {
   @@index([tool])
   @@index([decision])
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BROKER FLOW (daily accumulation / distribution per symbol)
+// Populated by modules/broker_flow_scraper.py at 9 PM NST.
+// No backfill — forward only.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model broker_flow {
+  id     Serial
+  date   Text!
+  symbol Text!
+  name   Text
+
+  // ── 1D accumulation ───────────────────────────────────────────────────────
+  acc_broker_count_1d   Text
+  acc_amount_1d         Text
+  acc_qty_1d            Text
+  acc_top_broker_1d     Text
+  acc_top_broker_pct_1d Text
+
+  // ── 1D distribution ───────────────────────────────────────────────────────
+  dist_broker_count_1d   Text
+  dist_amount_1d         Text
+  dist_qty_1d            Text
+  dist_top_broker_1d     Text
+  dist_top_broker_pct_1d Text
+
+  // ── Net flow 1D ───────────────────────────────────────────────────────────
+  net_flow_1d  Text   // acc_amount_1d - dist_amount_1d (NPR)
+  flow_bias_1d Text   // ACCUMULATION | DISTRIBUTION | NEUTRAL
+
+  // ── 1W accumulation ───────────────────────────────────────────────────────
+  acc_broker_count_1w   Text
+  acc_amount_1w         Text
+  acc_qty_1w            Text
+  acc_top_broker_1w     Text
+  acc_top_broker_pct_1w Text
+
+  // ── 1W distribution (placeholder — not fetched to save API calls) ─────────
+  dist_broker_count_1w   Text
+  dist_amount_1w         Text
+  dist_qty_1w            Text
+  dist_top_broker_1w     Text
+  dist_top_broker_pct_1w Text
+
+  // ── Net flow 1W ───────────────────────────────────────────────────────────
+  net_flow_1w  Text
+  flow_bias_1w Text
+
+  // ── Raw broker lists (JSON strings) ──────────────────────────────────────
+  acc_brokers_1d_json  Text   // [{broker, amount, qty, acc_pct, avg_rate}, ...]
+  dist_brokers_1d_json Text
+  acc_brokers_1w_json  Text
+
+  created_at Text
+
+  @@unique([symbol, date])
+  @@index([date])
+  @@index([symbol])
+  @@index([flow_bias_1d])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BROKER HOLDINGS (aggressive/concentrated holdings snapshot)
+// Source: broker-aggressive-holdings?EquityOnly=true (current snapshot)
+// ~58 symbols returned — pre-filtered by Sharehub to high-concentration only.
+// One row per symbol per date. Populated alongside broker_flow at 9 PM NST.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model broker_holdings {
+  id     Serial
+  date   Text!
+  symbol Text!
+  name   Text
+
+  // ── Holdings metrics ──────────────────────────────────────────────────────
+  total_involved_brokers   Text   // total brokers that traded this symbol
+  top3_holding_pct         Text   // % of total qty held by top 3 brokers
+  total_qty                Text   // total quantity traded
+  hold_qty                 Text   // quantity still held (not sold)
+  hold_pct                 Text   // hold_qty / total_qty * 100
+  public_trade_pct         Text   // % that leaked to public (lower = stealthier)
+  stealth_score            Text   // top3_holding_pct * (1 - public_trade_pct/100)
+
+  // ── Price context ─────────────────────────────────────────────────────────
+  ltp            Text
+  change         Text
+  change_pct     Text
+
+  // ── Top 3 brokers ─────────────────────────────────────────────────────────
+  top_broker_1_name    Text
+  top_broker_1_code    Text
+  top_broker_1_hold    Text   // holdQuantity
+  top_broker_1_pct     Text   // holdingPercentage
+
+  top_broker_2_name    Text
+  top_broker_2_code    Text
+  top_broker_2_hold    Text
+  top_broker_2_pct     Text
+
+  top_broker_3_name    Text
+  top_broker_3_code    Text
+  top_broker_3_hold    Text
+  top_broker_3_pct     Text
+
+  // ── Full top brokers JSON (for email detail) ──────────────────────────────
+  top_brokers_json Text   // [{id, code, name, totalBuyQuantity, holdQuantity, holdingPercentage}]
+
+  created_at Text
+
+  @@unique([symbol, date])
+  @@index([date])
+  @@index([symbol])
+  @@index([stealth_score])
+}

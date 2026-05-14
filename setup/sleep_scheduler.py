@@ -3,37 +3,30 @@
 setup/sleep_scheduler.py — NEPSE AI Engine
 ─────────────────────────────────────────────────────────────────────────────
 Manages machine wake/sleep schedule for NEPSE trading hours.
-UPDATED: April 2026 — added 9 PM NST summary wake
 
-Schedule (NST):
-    Monday–Friday (Trading):
-        Wake  10:45 AM  → morning workflow starts 10:45 AM
-        Sleep  3:45 PM  → after EOD workflow completes
-        Wake   9:00 PM  → nepal_pulse + summarizer + backup
-        Sleep  9:00 PM  → summary_workflow suspends itself directly
-    Sunday (Weekly Review):
-        Wake   5:30 PM  → Review starts 5:45 PM
-        Sleep  6:15 PM  → after weekly workflow completes
+Schedule (NST) — Mon–Fri:
+    Wake  10:45 AM  → morning workflow + trading loop
+    Sleep  3:05 PM  → trading loop exits ~3:00 PM, nepse-sleep fires at 3:05
+    Wake   9:00 PM  → summary_workflow (EOD + broker flow + summarizer)
+    Sleep  9:30 PM  → summary_workflow suspends machine directly
 
-Wake sequence logic (Mon-Fri):
-    If current time < 3:45 PM  → next wake = 9 PM today
-    If current time >= 3:45 PM and < 9:30 PM → next wake = 10:45 AM tomorrow
-    sleep_scheduler is called at end of summary_workflow — sets
-    correct next RTC alarm before suspending.
+Sunday (Weekly Review):
+    Wake   5:30 PM  → Review starts 5:45 PM
+    Sleep  6:15 PM  → after weekly workflow completes
+
+Wake sequence logic (Mon–Fri):
+    Called at end of summary_workflow → always sets next 10:45 AM wake.
+    Called by nepse-sleep.timer at 3:05 PM → sets 9:00 PM wake today.
+
 ─────────────────────────────────────────────────────────────────────────────
 """
 
-import os
-import sys
 import logging
-import argparse
+import os
 import subprocess
-from datetime import datetime, timedelta, time
+import sys
+from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
-
-# ─────────────────────────────────────────────────────────────────────────────
-# CONFIGURATION
-# ─────────────────────────────────────────────────────────────────────────────
 
 logging.basicConfig(
     level=logging.INFO,
@@ -41,151 +34,186 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-NST = ZoneInfo("Asia/Kathmandu")
+NST          = ZoneInfo("Asia/Kathmandu")
+TRADING_DAYS = frozenset({0, 1, 2, 3, 4})   # Mon–Fri
 
-# NEPSE 2026: Monday(0) through Friday(4)
-TRADING_DAYS = frozenset({0, 1, 2, 3, 4})
+# Key times (NST)
+WAKE_MORNING  = time(10, 45)   # trading starts
+WAKE_SUMMARY  = time(21,  0)   # 9:00 PM — summary workflow
+SLEEP_AFTER_EOD = time( 3,  5) # 3:05 PM — after market closes
 
 
-def _now_nst():
-    """Returns current time in Nepal Standard Time."""
+def _now_nst() -> datetime:
     return datetime.now(NST)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CALCULATION LOGIC
+# WAKE TIME CALCULATION
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _next_wake_time():
-    """
-    Calculates the next hardware RTC wake time.
+def _next_trading_day(from_dt: datetime) -> datetime:
+    """Return the next Mon–Fri date at WAKE_MORNING from a given datetime."""
+    candidate = from_dt.date() + timedelta(days=1)
+    while candidate.weekday() not in TRADING_DAYS:
+        candidate += timedelta(days=1)
+    return datetime(
+        candidate.year, candidate.month, candidate.day,
+        WAKE_MORNING.hour, WAKE_MORNING.minute,
+        tzinfo=NST,
+    )
 
-    Mon-Fri logic:
-      - If called at 3:45 PM  → next wake = 9:00 PM same day (summary run)
-      - If called at 9:00 PM  → next wake = 10:45 AM next trading day
-    Sunday logic:
-      - After weekly review   → next wake = 10:00 AM Monday
+
+def _next_wake_time() -> datetime:
+    """
+    Determine the next RTC wake time from current NST time.
+
+    Logic:
+      If called at 3:05 PM (after market close, before 9 PM)
+        → wake at 9:00 PM tonight
+      If called at 9:00–9:30 PM (end of summary_workflow)
+        → wake at 10:45 AM next trading day
+      Any other time → conservative: next trading day 10:45 AM
     """
     now = _now_nst()
+    current_time = now.time()
 
-    for i in range(0, 8):
-        check_date = (now + timedelta(days=i)).date()
-        wd = datetime.combine(check_date, time(0), tzinfo=NST).weekday()
+    # Between market close (3:05 PM) and summary start (9:00 PM)
+    # → need to wake at 9 PM tonight
+    if time(15, 5) <= current_time < time(21, 0):
+        wake = datetime(
+            now.year, now.month, now.day,
+            WAKE_SUMMARY.hour, WAKE_SUMMARY.minute,
+            tzinfo=NST,
+        )
+        log.info("Next wake: 9:00 PM tonight (%s)", wake.strftime("%Y-%m-%d %H:%M NST"))
+        return wake
 
-        if wd in TRADING_DAYS:
-            # 9 PM summary wake — only offer if we haven't passed it yet
-            summary_wake = datetime.combine(check_date, time(21, 0), tzinfo=NST)
-            if summary_wake > now:
-                return summary_wake
+    # After 9 PM (summary workflow ending) → next trading day 10:45 AM
+    if current_time >= time(21, 0):
+        wake = _next_trading_day(now)
+        log.info("Next wake: %s (next trading day)", wake.strftime("%Y-%m-%d %H:%M NST"))
+        return wake
 
-            # 10 AM morning wake
-            morning_wake = datetime.combine(check_date, time(10, 45), tzinfo=NST)
-            if morning_wake > now:
-                return morning_wake
-
-        # Sunday review wake
-        if wd == 6:
-            wake = datetime.combine(check_date, time(17, 30), tzinfo=NST)
-            if wake > now:
-                return wake
-
-    return now + timedelta(days=1)
-
-
-def _next_sleep_time():
-    """Determines when the machine should suspend today."""
-    now = _now_nst()
-    wd  = now.weekday()
-
-    if wd in TRADING_DAYS:
-        # Called at 3:45 PM → sleep now
-        eod_sleep = datetime.combine(now.date(), time(15, 45), tzinfo=NST)
-        return eod_sleep
-
-    # Sunday: sleep after weekly review
-    if wd == 6:
-        return datetime.combine(now.date(), time(18, 15), tzinfo=NST)
-
-    # Saturday: sleep immediately
-    return now
+    # Before 3:05 PM (shouldn't happen normally — conservative fallback)
+    wake = _next_trading_day(now)
+    log.info("Next wake (fallback): %s", wake.strftime("%Y-%m-%d %H:%M NST"))
+    return wake
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SYSTEM ACTIONS
+# RTC WAKE SCHEDULING
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _schedule_wake(wake_dt, dry_run=False):
-    """Sets the hardware RTC alarm via rtcwake command."""
-    utc_ts = int(wake_dt.timestamp())
-    cmd    = ["sudo", "rtcwake", "-m", "no", "-t", str(utc_ts)]
+def _schedule_wake(wake_dt: datetime) -> bool:
+    """
+    Set RTC hardware alarm using rtcwake.
+    wake_dt must be timezone-aware (NST).
+    Returns True on success.
+    """
+    # Convert NST → UTC for rtcwake
+    wake_utc = wake_dt.astimezone(ZoneInfo("UTC"))
+    wake_ts  = int(wake_utc.timestamp())
 
-    log.info("Scheduling RTC wake for %s NST...", wake_dt.strftime("%Y-%m-%d %H:%M"))
-
-    if dry_run:
-        log.info("[DRY-RUN] Would run: %s", " ".join(cmd))
-        return True
+    log.info(
+        "Setting RTC alarm: %s NST (%s UTC)",
+        wake_dt.strftime("%Y-%m-%d %H:%M"),
+        wake_utc.strftime("%Y-%m-%d %H:%M"),
+    )
 
     try:
-        subprocess.run(cmd, check=True)
-        return True
+        # --mode no: set alarm without suspending (we suspend separately)
+        result = subprocess.run(
+            ["sudo", "rtcwake", "--mode", "no", "--time", str(wake_ts)],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode == 0:
+            log.info("RTC alarm set successfully")
+            return True
+        else:
+            log.error("rtcwake failed: %s", result.stderr.strip())
+            return False
+    except FileNotFoundError:
+        log.warning("rtcwake not found — skipping (dev environment?)")
+        return False
+    except subprocess.TimeoutExpired:
+        log.error("rtcwake timed out")
+        return False
     except Exception as e:
-        log.error("Failed to set RTC wake: %s", e)
+        log.error("_schedule_wake error: %s", e)
         return False
 
 
-def _suspend_now(dry_run=False):
-    """Issues the system command to suspend the machine to RAM."""
-    cmd = ["sudo", "systemctl", "suspend"]
-
-    if dry_run:
-        log.info("[DRY-RUN] Would run: %s", " ".join(cmd))
-        return True
-
+def _suspend_now() -> None:
+    """
+    Suspend machine to RAM (s2ram).
+    Called at end of summary_workflow after RTC alarm is set.
+    """
+    log.info("Suspending machine (s2ram)...")
     try:
-        subprocess.run(cmd, check=True)
-        return True
+        subprocess.run(
+            ["sudo", "systemctl", "suspend"],
+            timeout=10,
+        )
     except Exception as e:
         log.error("Suspend failed: %s", e)
-        return False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CLI INTERFACE
+# CONVENIENCE: SLEEP AFTER MARKET CLOSE (called by nepse-sleep.timer at 3:05 PM)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def main():
-    parser = argparse.ArgumentParser(description="NEPSE AI Machine Power Scheduler")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Perform a trial run without scheduling or suspending")
-    parser.add_argument("--status",  action="store_true",
-                        help="Display the calculated schedule and exit")
-    args = parser.parse_args()
+def sleep_after_market_close() -> None:
+    """
+    Called by nepse-sleep.timer at 3:05 PM NST.
+    Sets RTC wake for 9:00 PM tonight, then suspends.
+    """
+    now  = _now_nst()
+    wake = datetime(
+        now.year, now.month, now.day,
+        WAKE_SUMMARY.hour, WAKE_SUMMARY.minute,
+        tzinfo=NST,
+    )
+    log.info("Market closed — sleeping until 9:00 PM NST")
+    ok = _schedule_wake(wake)
+    if ok:
+        _suspend_now()
+    else:
+        log.error("RTC alarm failed — NOT suspending (safety)")
 
-    now        = _now_nst()
-    next_wake  = _next_wake_time()
-    sleep_time = _next_sleep_time()
 
-    if args.status:
-        print("-" * 45)
-        print(f"CURRENT TIME: {now.strftime('%Y-%m-%d %H:%M:%S NST')}")
-        print(f"SLEEP TODAY:  {sleep_time.strftime('%H:%M:%S NST')}")
-        print(f"NEXT WAKE:    {next_wake.strftime('%Y-%m-%d %H:%M:%S NST')}")
-        print("-" * 45)
-        return
-
-    # 1. Always schedule next wake first
-    if _schedule_wake(next_wake, args.dry_run):
-        # 2. Suspend if at or past the sleep window
-        if now >= sleep_time:
-            log.info("Sleep window reached. Suspending...")
-            _suspend_now(args.dry_run)
-        else:
-            diff_mins = int((sleep_time - now).total_seconds() / 60)
-            log.info(
-                "Target sleep is at %s NST. Staying awake for %d more min.",
-                sleep_time.strftime("%H:%M"), diff_mins,
-            )
-
+# ─────────────────────────────────────────────────────────────────────────────
+# CLI
+# ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="NEPSE Sleep Scheduler")
+    parser.add_argument(
+        "action",
+        nargs="?",
+        default="auto",
+        choices=["auto", "after-market", "status"],
+        help=(
+            "auto         → compute next wake + set RTC (default)\n"
+            "after-market → set 9 PM wake + suspend now\n"
+            "status       → show next computed wake time, no action"
+        ),
+    )
+    args = parser.parse_args()
+
+    if args.action == "after-market":
+        sleep_after_market_close()
+
+    elif args.action == "status":
+        wake = _next_wake_time()
+        print(f"Next wake: {wake.strftime('%Y-%m-%d %H:%M NST')}")
+
+    else:  # auto
+        wake = _next_wake_time()
+        ok   = _schedule_wake(wake)
+        if ok:
+            print(f"RTC alarm set for {wake.strftime('%Y-%m-%d %H:%M NST')}")
+        else:
+            print("RTC alarm failed — check sudo permissions")
+            sys.exit(1)
