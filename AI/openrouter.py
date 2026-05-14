@@ -436,8 +436,8 @@ def ask_free(
     from openai import OpenAI
 
     FREE_MODEL_CHAIN = [
-        "google/gemma-4-26b-a4b-it:free",
-        "openai/gpt-oss-120b:free",
+       
+        "openai/gpt-oss-20b:free",
         "minimax/minimax-m2.5:free",
     ]
 
