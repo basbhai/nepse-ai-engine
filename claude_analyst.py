@@ -227,10 +227,26 @@ def _load_macro_context() -> dict:
             "period":               row.get("period",                    "?"),
             "fd_rate":              get_setting("FD_RATE_PCT",            "8.5"),
             "fd_signal":            get_setting("FD_SCORE_SIGNAL",        "NEUTRAL"),
+            "deposit_rate_pct":                     row.get("deposit_rate_pct",                    "?"),
+            "interbank_rate_pct":                   row.get("interbank_rate_pct",                  "?"),
+            "tbill_91d_rate_pct":                   row.get("tbill_91d_rate_pct",                  "?"),
+            "npl_ratio_pct":                        row.get("npl_ratio_pct",                       "?"),
+            "m2_growth_yoy_pct":                    row.get("m2_growth_yoy_pct",                   "?"),
+            "private_sector_credit_growth_yoy_pct": row.get("private_sector_credit_growth_yoy_pct","?"),
+            "bop_impact_on_nepse":                  row.get("bop_impact_on_nepse",                 "?"),
+            "usd_npr_rate":                         row.get("usd_npr_rate",                        "?"),
+            "remittance_total_billion_npr":         row.get("remittance_total_billion_npr",        "?"),
         }
     except Exception as exc:
         logger.warning("_load_macro_context failed: %s", exc)
-        return {}
+        return {
+            "policy_rate": "", "nrb_rate_decision": "", "inflation_pct": "",
+            "remittance_yoy_pct": "", "forex_reserve_months": "", "lending_rate": "",
+            "period": "", "fd_rate": "", "fd_signal": "",
+            "deposit_rate_pct": "", "interbank_rate_pct": "", "tbill_91d_rate_pct": "",
+            "npl_ratio_pct": "", "m2_growth_yoy_pct": "", "private_sector_credit_growth_yoy_pct": "",
+            "bop_impact_on_nepse": "", "usd_npr_rate": "", "remittance_total_billion_npr": "",
+        }
 
 
 def _load_lessons(symbol: str, sector: str, limit: int = 6) -> list[str]:

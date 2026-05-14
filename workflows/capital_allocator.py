@@ -252,6 +252,7 @@ def _build_prompt(
     lessons:       list[str],
     total_capital: float,
     fd_rate:       float,
+    tbill_rate:    float,
 ) -> str:
     """
     Build the full wealth management prompt for Claude.
@@ -303,6 +304,7 @@ Inflation:         {macro.get('Inflation_Pct', 'Unknown')}%
 Remittance YoY:    {macro.get('Remittance_YoY_Pct', 'Unknown')}%
 Forex Reserve:     {macro.get('Forex_Reserve_Months', 'Unknown')} months import cover
 FD Rate (1yr):     {fd_rate}%
+T-bill 91d rate: {tbill_rate}% (risk-free benchmark)
 
 ═══════════════════════════════════════════════
 YOUR PORTFOLIO
@@ -512,6 +514,7 @@ def run() -> Optional[dict]:
     lessons      = _get_recent_lessons(5)
     total_capital = float(get_setting("CAPITAL_TOTAL_NPR", "100000"))
     fd_rate       = float(get_setting("FD_RATE_PCT", "8.5"))
+    tbill_rate    = float(macro.get("tbill_91d_rate_pct") or 2.61)
 
     log.info(
         "Context: Market=%s | NEPSE=%s 200DMA | Geo=%s | Nepal=%s | WinRate=%.0f%%",
@@ -525,7 +528,7 @@ def run() -> Optional[dict]:
     # ── Build prompt and ask Claude ───────────────────────────────────────────
     prompt = _build_prompt(
         portfolio, market_state, nepse, geo, nepal,
-        macro, confidence, lessons, total_capital, fd_rate
+        macro, confidence, lessons, total_capital, fd_rate, tbill_rate
     )
 
     result = _ask_claude(prompt)

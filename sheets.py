@@ -860,10 +860,52 @@ def get_macro_data() -> dict[str, str]:
                 "BOP_Status":          row.get("bop_status", ""),
                 "Overall_Sentiment":   row.get("overall_sentiment", ""),
                 "Forward_Guidance":    row.get("forward_guidance", ""),
+                "lending_rate_pct":                     row.get("lending_rate_pct",                    ""),
+                "deposit_rate_pct":                     row.get("deposit_rate_pct",                    ""),
+                "interbank_rate_pct":                   row.get("interbank_rate_pct",                  ""),
+                "tbill_91d_rate_pct":                   row.get("tbill_91d_rate_pct",                  ""),
+                "npl_ratio_pct":                        row.get("npl_ratio_pct",                       ""),
+                "m2_growth_yoy_pct":                    row.get("m2_growth_yoy_pct",                   ""),
+                "private_sector_credit_growth_yoy_pct": row.get("private_sector_credit_growth_yoy_pct",""),
+                "bop_impact_on_nepse":                  row.get("bop_impact_on_nepse",                 ""),
+                "usd_npr_rate":                         row.get("usd_npr_rate",                        ""),
+                "remittance_total_billion_npr":         row.get("remittance_total_billion_npr",        ""),
+                "nepse_index_value":                    row.get("nepse_index_value",                   ""),
             }
     except Exception as e:
         log.error("get_macro_data failed: %s", e)
         return {}
+
+
+def _validate_nrb_fields() -> dict:
+    """
+    Validate which NRB fields are populated in the latest nrb_monthly row.
+    Returns a summary dict for logging/debugging.
+    No API calls — pure DB read.
+    """
+    NEW_FIELDS = [
+        "lending_rate_pct", "deposit_rate_pct", "interbank_rate_pct",
+        "tbill_91d_rate_pct", "npl_ratio_pct", "m2_growth_yoy_pct",
+        "private_sector_credit_growth_yoy_pct", "bop_impact_on_nepse",
+        "usd_npr_rate", "remittance_total_billion_npr", "nepse_index_value",
+    ]
+    try:
+        with _db() as cur:
+            cur.execute("SELECT * FROM nrb_monthly ORDER BY id DESC LIMIT 1")
+            row = cur.fetchone()
+        if not row:
+            return {"status": "NO_DATA", "period": None, "populated": [], "missing": NEW_FIELDS}
+        populated = [f for f in NEW_FIELDS if row.get(f) not in (None, "", "None")]
+        missing   = [f for f in NEW_FIELDS if row.get(f)     in (None, "", "None")]
+        return {
+            "status":    "OK" if populated else "ALL_MISSING",
+            "period":    row.get("period"),
+            "populated": populated,
+            "missing":   missing,
+            "count":     f"{len(populated)}/{len(NEW_FIELDS)}",
+        }
+    except Exception as e:
+        return {"status": "ERROR", "error": str(e)}
 
 
 def upsert_macro(indicator: str, value: str, source: str = "", unit: str = "") -> bool:

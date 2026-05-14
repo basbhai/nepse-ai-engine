@@ -664,6 +664,17 @@ def _compute_nepal_score(manual: dict, scraped: dict, macro: dict) -> tuple[int,
         score += lagged_adj
         events.append(f"LAG_ADJ: {lagged_adj:+.1f}")
 
+    # Interbank rate — low = surplus liquidity = positive for NEPSE
+    try:
+        interbank = float(macro.get("interbank_rate_pct") or 0)
+        if interbank > 0:
+            if interbank <= 3.0:
+                score += 1    # surplus liquidity
+            elif interbank >= 7.0:
+                score -= 1    # tight liquidity
+    except Exception:
+        pass
+
     # Clamp to range
     score = max(-5, min(5, int(round(score))))
 
