@@ -360,15 +360,21 @@ def _cr(amount: float) -> str:
 
 
 def _top_flow_by_broker_count(records: list[dict], bias: str, n: int = TOP_N) -> list[dict]:
-    filtered = [r for r in records if r["flow_bias_1d"] == bias]
-    key = "acc_broker_count_1d" if bias == "ACCUMULATION" else "dist_broker_count_1d"
-    return sorted(filtered, key=lambda r: int(r[key]), reverse=True)[:n]
+    if bias == "ACCUMULATION":
+        filtered = [r for r in records if float(r["acc_amount_1d"]) > 0]
+        return sorted(filtered, key=lambda r: int(r["acc_broker_count_1d"]), reverse=True)[:n]
+    else:
+        filtered = [r for r in records if float(r["dist_amount_1d"]) > 0]
+        return sorted(filtered, key=lambda r: int(r["dist_broker_count_1d"]), reverse=True)[:n]
 
 
 def _top_flow_by_volume(records: list[dict], bias: str, n: int = TOP_N) -> list[dict]:
-    filtered = [r for r in records if r["flow_bias_1d"] == bias]
-    key = "acc_amount_1d" if bias == "ACCUMULATION" else "dist_amount_1d"
-    return sorted(filtered, key=lambda r: float(r[key]), reverse=True)[:n]
+    if bias == "ACCUMULATION":
+        filtered = [r for r in records if float(r["acc_amount_1d"]) > 0]
+        return sorted(filtered, key=lambda r: float(r["acc_amount_1d"]), reverse=True)[:n]
+    else:
+        filtered = [r for r in records if float(r["dist_amount_1d"]) > 0]
+        return sorted(filtered, key=lambda r: float(r["dist_amount_1d"]), reverse=True)[:n]
 
 
 def _top_holdings_by_stealth(records: list[dict], n: int = TOP_N) -> list[dict]:
