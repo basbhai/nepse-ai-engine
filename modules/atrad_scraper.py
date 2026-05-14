@@ -41,7 +41,7 @@ def _get_headers() -> dict:
 
 
 def _parse(r: requests.Response) -> dict:
-    text = r.text
+    text = r.text.strip()
     text = (text
             .replace("true",  "True")
             .replace("false", "False")
