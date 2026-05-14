@@ -642,6 +642,8 @@ def compute_indicators(
     today_high   = float(price_row.high  or price_row.ltp   or 0)
     today_low    = float(price_row.low   or price_row.ltp   or 0)
     today_vol    = float(price_row.volume or 0)
+    if today_vol == 0 and hist_volumes:
+        today_vol = hist_volumes[-1]  # market not open yet — use yesterday's volume from price_history
 
     closes  = hist_closes  + [today_close]
     highs   = hist_highs   + [today_high]   if hist_highs  else [today_high]
@@ -816,7 +818,7 @@ def run() -> None:
                     high=highs[-1] if highs else closes[-1],
                     low=lows[-1]   if lows  else closes[-1],
                     prev_close=closes[-2] if len(closes) > 1 else closes[-1],
-                    volume=10000,
+                    volume=hist_volumes[-1] if hist_volumes else 0,
                 )
     logger.info("Prices: %d symbols", len(market_data))
 
@@ -915,7 +917,7 @@ if __name__ == "__main__":
                         high=highs[-1] if highs else closes[-1],
                         low=lows[-1]   if lows  else closes[-1],
                         prev_close=closes[-2] if len(closes) > 1 else closes[-1],
-                        volume=10000,
+                        volume=hist_volumes[-1] if hist_volumes else 0,
                     )
         print(f"  âœ… {len(market_data)} symbols")
     except Exception as e:
