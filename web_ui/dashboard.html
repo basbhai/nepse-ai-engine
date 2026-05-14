@@ -1,773 +1,1898 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>NEPSE AI Engine</title>
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
-<script src="https://cdn.tailwindcss.com"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<style>
-/* ═══════════════════════════════════════════════════════════
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NEPSE AI Engine</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap"
+    rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    /* ═══════════════════════════════════════════════════════════
    DESIGN TOKENS
 ═══════════════════════════════════════════════════════════ */
-:root {
-  --bg:        #0d0d0d;
-  --bg2:       #111111;
-  --bg3:       #171717;
-  --bg4:       #1e1e1e;
-  --border:    #252525;
-  --green:     #00d97e;
-  --amber:     #f59e0b;
-  --red:       #ef4444;
-  --blue:      #60a5fa;
-  --purple:    #a78bfa;
-  --text:      #d4d4d4;
-  --muted:     #6b7280;
-  --sidebar-w: 220px;
-  --bnav-h:    58px;
-}
+    :root {
+      --bg: #0d0d0d;
+      --bg2: #111111;
+      --bg3: #171717;
+      --bg4: #1e1e1e;
+      --border: #252525;
+      --green: #00d97e;
+      --amber: #f59e0b;
+      --red: #ef4444;
+      --blue: #60a5fa;
+      --purple: #a78bfa;
+      --text: #d4d4d4;
+      --muted: #6b7280;
+      --sidebar-w: 220px;
+      --bnav-h: 58px;
+    }
 
-/* ═══════════════════════════════════════════════════════════
+    /* ═══════════════════════════════════════════════════════════
    RESET
 ═══════════════════════════════════════════════════════════ */
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-html { scroll-behavior: smooth; overflow-x: hidden; }
-body {
-  background: var(--bg);
-  color: var(--text);
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  font-size: 13px;
-  line-height: 1.6;
-  overflow-x: hidden;
-}
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
 
-/* ═══════════════════════════════════════════════════════════
+    html {
+      scroll-behavior: smooth;
+      overflow-x: hidden;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      font-size: 13px;
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    /* ═══════════════════════════════════════════════════════════
    SIDEBAR  (hidden on mobile)
 ═══════════════════════════════════════════════════════════ */
-#sidebar {
-  position: fixed; top: 0; left: 0;
-  width: var(--sidebar-w); height: 100vh;
-  background: var(--bg2);
-  border-right: 1px solid var(--border);
-  display: flex; flex-direction: column;
-  z-index: 200; overflow-y: auto;
-}
-#sidebar .logo { padding: 20px 16px 14px; border-bottom: 1px solid var(--border); }
-#sidebar .logo h1 { font-size: 13px; font-weight: 700; color: var(--green); letter-spacing: .05em; text-transform: uppercase; }
-#sidebar .logo p  { font-size: 10px; color: var(--muted); margin-top: 2px; }
-#sidebar nav { flex: 1; padding: 10px 0; }
-#sidebar nav a {
-  display: block; padding: 9px 16px;
-  color: var(--muted); text-decoration: none;
-  font-size: 12px; font-weight: 500;
-  border-left: 2px solid transparent;
-  transition: color .15s, background .15s;
-}
-#sidebar nav a:hover, #sidebar nav a.active {
-  color: var(--green); background: rgba(0,217,126,.05);
-  border-left-color: var(--green);
-}
-#sidebar nav .divider { height: 1px; background: var(--border); margin: 6px 16px; }
-#sidebar .refresh-info { padding: 12px 16px; font-size: 10px; color: var(--muted); border-top: 1px solid var(--border); }
-#sidebar .refresh-info span { color: var(--green); }
+    #sidebar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: var(--sidebar-w);
+      height: 100vh;
+      background: var(--bg2);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      z-index: 200;
+      overflow-y: auto;
+    }
 
-/* ═══════════════════════════════════════════════════════════
+    #sidebar .logo {
+      padding: 20px 16px 14px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    #sidebar .logo h1 {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--green);
+      letter-spacing: .05em;
+      text-transform: uppercase;
+    }
+
+    #sidebar .logo p {
+      font-size: 10px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+
+    #sidebar nav {
+      flex: 1;
+      padding: 10px 0;
+    }
+
+    #sidebar nav a {
+      display: block;
+      padding: 9px 16px;
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 12px;
+      font-weight: 500;
+      border-left: 2px solid transparent;
+      transition: color .15s, background .15s;
+    }
+
+    #sidebar nav a:hover,
+    #sidebar nav a.active {
+      color: var(--green);
+      background: rgba(0, 217, 126, .05);
+      border-left-color: var(--green);
+    }
+
+    #sidebar nav .divider {
+      height: 1px;
+      background: var(--border);
+      margin: 6px 16px;
+    }
+
+    #sidebar .refresh-info {
+      padding: 12px 16px;
+      font-size: 10px;
+      color: var(--muted);
+      border-top: 1px solid var(--border);
+    }
+
+    #sidebar .refresh-info span {
+      color: var(--green);
+    }
+
+    /* ═══════════════════════════════════════════════════════════
    MAIN CONTENT
 ═══════════════════════════════════════════════════════════ */
-#main { margin-left: var(--sidebar-w); padding: 24px 24px 60px; min-width: 0; }
+    #main {
+      margin-left: var(--sidebar-w);
+      padding: 24px 24px 60px;
+      min-width: 0;
+    }
 
-/* ═══════════════════════════════════════════════════════════
+    /* ═══════════════════════════════════════════════════════════
    BOTTOM NAV  (mobile only — hidden on ≥768px)
 ═══════════════════════════════════════════════════════════ */
-#bottom-nav {
-  display: none;
-  position: fixed; bottom: 0; left: 0; right: 0;
-  height: var(--bnav-h);
-  background: var(--bg2);
-  border-top: 1px solid var(--border);
-  z-index: 200;
-  overflow-x: auto;
-  overflow-y: hidden;
-  -webkit-overflow-scrolling: touch;
-}
-#bottom-nav .bnav-inner {
-  display: flex; height: 100%;
-  min-width: 100%; width: max-content;
-}
-#bottom-nav a {
-  flex: 1; min-width: 52px;
-  display: flex; flex-direction: column;
-  align-items: center; justify-content: center;
-  gap: 3px;
-  color: var(--muted); text-decoration: none;
-  font-size: 9px; font-weight: 500;
-  text-transform: uppercase; letter-spacing: .04em;
-  border-top: 2px solid transparent;
-  transition: color .15s, border-color .15s;
-  padding: 6px 4px;
-  min-height: 44px;
-}
-#bottom-nav a .bico { font-size: 15px; line-height: 1; }
-#bottom-nav a:hover, #bottom-nav a.active {
-  color: var(--green); border-top-color: var(--green);
-  background: rgba(0,217,126,.04);
-}
+    #bottom-nav {
+      display: none;
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: var(--bnav-h);
+      background: var(--bg2);
+      border-top: 1px solid var(--border);
+      z-index: 200;
+      overflow-x: auto;
+      overflow-y: hidden;
+      -webkit-overflow-scrolling: touch;
+    }
 
-/* ═══════════════════════════════════════════════════════════
+    #bottom-nav .bnav-inner {
+      display: flex;
+      height: 100%;
+      min-width: 100%;
+      width: max-content;
+    }
+
+    #bottom-nav a {
+      flex: 1;
+      min-width: 52px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 9px;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      border-top: 2px solid transparent;
+      transition: color .15s, border-color .15s;
+      padding: 6px 4px;
+      min-height: 44px;
+    }
+
+    #bottom-nav a .bico {
+      font-size: 15px;
+      line-height: 1;
+    }
+
+    #bottom-nav a:hover,
+    #bottom-nav a.active {
+      color: var(--green);
+      border-top-color: var(--green);
+      background: rgba(0, 217, 126, .04);
+    }
+
+    /* ═══════════════════════════════════════════════════════════
    SECTIONS
 ═══════════════════════════════════════════════════════════ */
-.section { margin-bottom: 52px; }
-.section-header {
-  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  margin-bottom: 18px; padding-bottom: 10px;
-  border-bottom: 1px solid var(--border);
-}
-.section-header h2 { font-size: 14px; font-weight: 700; color: var(--green); text-transform: uppercase; letter-spacing: .08em; }
-.section-header .tag { font-size: 10px; padding: 2px 8px; background: rgba(0,217,126,.1); border: 1px solid rgba(0,217,126,.3); color: var(--green); border-radius: 4px; }
+    .section {
+      margin-bottom: 52px;
+    }
 
-/* ═══════════════════════════════════════════════════════════
+    .section-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 18px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .section-header h2 {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--green);
+      text-transform: uppercase;
+      letter-spacing: .08em;
+    }
+
+    .section-header .tag {
+      font-size: 10px;
+      padding: 2px 8px;
+      background: rgba(0, 217, 126, .1);
+      border: 1px solid rgba(0, 217, 126, .3);
+      color: var(--green);
+      border-radius: 4px;
+    }
+
+    /* ═══════════════════════════════════════════════════════════
    RESPONSIVE GRIDS
 ═══════════════════════════════════════════════════════════ */
-/* g4: 1→2→4 cols (stat cards, 4 items) */
-.g4 { display: grid; gap: 10px; grid-template-columns: repeat(2,1fr); }
-/* g5: 2→3→5 cols (trade stats, 5 items) */
-.g5 { display: grid; gap: 8px;  grid-template-columns: repeat(2,1fr); }
-/* g3: 1→2→3 cols (portfolio summary) */
-.g3 { display: grid; gap: 10px; grid-template-columns: 1fr; }
-/* g2: 1→2 cols (charts, checklist) */
-.g2 { display: grid; gap: 14px; grid-template-columns: 1fr; }
-/* g2s: always 2-col for small equal pairs */
-.g2s { display: grid; gap: 10px; grid-template-columns: 1fr 1fr; }
+    /* g4: 1→2→4 cols (stat cards, 4 items) */
+    .g4 {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(2, 1fr);
+    }
 
-@media (min-width: 640px) {
-  .g3  { grid-template-columns: repeat(2,1fr); }
-  .g2  { grid-template-columns: repeat(2,1fr); }
-}
-@media (min-width: 1024px) {
-  .g4  { grid-template-columns: repeat(4,1fr); gap: 12px; }
-  .g5  { grid-template-columns: repeat(5,1fr); gap: 10px; }
-  .g3  { grid-template-columns: repeat(3,1fr); gap: 12px; }
-}
+    /* g5: 2→3→5 cols (trade stats, 5 items) */
+    .g5 {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: repeat(2, 1fr);
+    }
 
-/* ═══════════════════════════════════════════════════════════
+    /* g3: 1→2→3 cols (portfolio summary) */
+    .g3 {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: 1fr;
+    }
+
+    /* g2: 1→2 cols (charts, checklist) */
+    .g2 {
+      display: grid;
+      gap: 14px;
+      grid-template-columns: 1fr;
+    }
+
+    /* g2s: always 2-col for small equal pairs */
+    .g2s {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: 1fr 1fr;
+    }
+
+    @media (min-width: 640px) {
+      .g3 {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      .g2 {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
+
+    @media (min-width: 1024px) {
+      .g4 {
+        grid-template-columns: repeat(4, 1fr);
+        gap: 12px;
+      }
+
+      .g5 {
+        grid-template-columns: repeat(5, 1fr);
+        gap: 10px;
+      }
+
+      .g3 {
+        grid-template-columns: repeat(3, 1fr);
+        gap: 12px;
+      }
+    }
+
+    /* ═══════════════════════════════════════════════════════════
    CARDS
 ═══════════════════════════════════════════════════════════ */
-.card { background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 14px; }
-.stat-card { text-align: center; }
-.stat-card .label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
-.stat-card .value { font-size: 20px; font-weight: 700; margin-top: 4px; color: var(--green); }
-.stat-card .sub   { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    .card {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 14px;
+    }
 
-/* ═══════════════════════════════════════════════════════════
+    .stat-card {
+      text-align: center;
+    }
+
+    .stat-card .label {
+      font-size: 10px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .06em;
+    }
+
+    .stat-card .value {
+      font-size: 20px;
+      font-weight: 700;
+      margin-top: 4px;
+      color: var(--green);
+    }
+
+    .stat-card .sub {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+
+    /* ═══════════════════════════════════════════════════════════
    TABLES
 ═══════════════════════════════════════════════════════════ */
-.tbl-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-table { width: 100%; border-collapse: collapse; min-width: 480px; }
-th { text-align: left; padding: 8px 10px; font-size: 10px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; border-bottom: 1px solid var(--border); white-space: nowrap; }
-td { padding: 8px 10px; font-size: 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
-tr:last-child td { border-bottom: none; }
-tr:hover td { background: rgba(255,255,255,.02); }
-tr.row-win     td { background: rgba(0,217,126,.04); }
-tr.row-loss    td { background: rgba(239,68,68,.04); }
-tr.row-wait    td { background: rgba(96,165,250,.04); }
-tr.row-pending td { background: rgba(245,158,11,.04); }
+    .tbl-wrap {
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
 
-/* ═══════════════════════════════════════════════════════════
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 480px;
+    }
+
+    th {
+      text-align: left;
+      padding: 8px 10px;
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+
+    td {
+      padding: 8px 10px;
+      font-size: 12px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+
+    tr:last-child td {
+      border-bottom: none;
+    }
+
+    tr:hover td {
+      background: rgba(255, 255, 255, .02);
+    }
+
+    tr.row-win td {
+      background: rgba(0, 217, 126, .04);
+    }
+
+    tr.row-loss td {
+      background: rgba(239, 68, 68, .04);
+    }
+
+    tr.row-wait td {
+      background: rgba(96, 165, 250, .04);
+    }
+
+    tr.row-pending td {
+      background: rgba(245, 158, 11, .04);
+    }
+
+    /* ═══════════════════════════════════════════════════════════
    BADGES
 ═══════════════════════════════════════════════════════════ */
-.badge { display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; }
-.badge-green  { background: rgba(0,217,126,.15);  color: var(--green);  border: 1px solid rgba(0,217,126,.3); }
-.badge-red    { background: rgba(239,68,68,.15);   color: var(--red);    border: 1px solid rgba(239,68,68,.3); }
-.badge-amber  { background: rgba(245,158,11,.15);  color: var(--amber);  border: 1px solid rgba(245,158,11,.3); }
-.badge-blue   { background: rgba(96,165,250,.15);  color: var(--blue);   border: 1px solid rgba(96,165,250,.3); }
-.badge-purple { background: rgba(167,139,250,.15); color: var(--purple); border: 1px solid rgba(167,139,250,.3); }
-.badge-grey   { background: rgba(107,114,128,.15); color: var(--muted);  border: 1px solid rgba(107,114,128,.3); }
+    .badge {
+      display: inline-block;
+      padding: 2px 7px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      white-space: nowrap;
+    }
 
-/* ═══════════════════════════════════════════════════════════
+    .badge-green {
+      background: rgba(0, 217, 126, .15);
+      color: var(--green);
+      border: 1px solid rgba(0, 217, 126, .3);
+    }
+
+    .badge-red {
+      background: rgba(239, 68, 68, .15);
+      color: var(--red);
+      border: 1px solid rgba(239, 68, 68, .3);
+    }
+
+    .badge-amber {
+      background: rgba(245, 158, 11, .15);
+      color: var(--amber);
+      border: 1px solid rgba(245, 158, 11, .3);
+    }
+
+    .badge-blue {
+      background: rgba(96, 165, 250, .15);
+      color: var(--blue);
+      border: 1px solid rgba(96, 165, 250, .3);
+    }
+
+    .badge-purple {
+      background: rgba(167, 139, 250, .15);
+      color: var(--purple);
+      border: 1px solid rgba(167, 139, 250, .3);
+    }
+
+    .badge-grey {
+      background: rgba(107, 114, 128, .15);
+      color: var(--muted);
+      border: 1px solid rgba(107, 114, 128, .3);
+    }
+
+    /* ═══════════════════════════════════════════════════════════
    CHARTS
 ═══════════════════════════════════════════════════════════ */
-.chart-box { background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 14px; }
-.chart-box .chart-title { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 10px; }
-.chart-box canvas { max-width: 100%; }
+    .chart-box {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 14px;
+    }
 
-/* ═══════════════════════════════════════════════════════════
+    .chart-box .chart-title {
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      margin-bottom: 10px;
+    }
+
+    .chart-box canvas {
+      max-width: 100%;
+    }
+
+    /* ═══════════════════════════════════════════════════════════
    SPINNER / ERROR
 ═══════════════════════════════════════════════════════════ */
-.spinner { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; padding: 20px 0; }
-.spinner::before { content: ''; width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--green); border-radius: 50%; animation: spin .7s linear infinite; flex-shrink: 0; }
-@keyframes spin { to { transform: rotate(360deg); } }
-.error-box { background: rgba(239,68,68,.08); border: 1px solid rgba(239,68,68,.3); border-radius: 6px; padding: 12px 16px; color: var(--red); font-size: 12px; }
+    .spinner {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      padding: 20px 0;
+    }
 
-/* ═══════════════════════════════════════════════════════════
+    .spinner::before {
+      content: '';
+      width: 14px;
+      height: 14px;
+      border: 2px solid var(--border);
+      border-top-color: var(--green);
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      flex-shrink: 0;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    .error-box {
+      background: rgba(239, 68, 68, .08);
+      border: 1px solid rgba(239, 68, 68, .3);
+      border-radius: 6px;
+      padding: 12px 16px;
+      color: var(--red);
+      font-size: 12px;
+    }
+
+    /* ═══════════════════════════════════════════════════════════
    FILTER BAR
 ═══════════════════════════════════════════════════════════ */
-.filter-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
-.filter-bar select, .filter-bar input {
-  background: var(--bg3); border: 1px solid var(--border);
-  color: var(--text); padding: 8px 10px;
-  border-radius: 4px; font-family: inherit; font-size: 12px; outline: none;
-  min-height: 36px;
-}
-.filter-bar select:focus, .filter-bar input:focus { border-color: var(--green); }
-.filter-bar button { min-height: 36px; }
+    .filter-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
 
-/* ═══════════════════════════════════════════════════════════
+    .filter-bar select,
+    .filter-bar input {
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 8px 10px;
+      border-radius: 4px;
+      font-family: inherit;
+      font-size: 12px;
+      outline: none;
+      min-height: 36px;
+    }
+
+    .filter-bar select:focus,
+    .filter-bar input:focus {
+      border-color: var(--green);
+    }
+
+    .filter-bar button {
+      min-height: 36px;
+    }
+
+    /* ═══════════════════════════════════════════════════════════
    EXPANDABLE ROWS
 ═══════════════════════════════════════════════════════════ */
-.expand-row td { background: var(--bg3) !important; padding: 12px 14px; }
-.expand-pre { white-space: pre-wrap; word-break: break-word; font-size: 11px; color: var(--text); max-height: 240px; overflow-y: auto; }
-.expand-inner { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.clickable-row { cursor: pointer; }
-.clickable-row td { min-height: 44px; }
-.clickable-row:hover td { background: rgba(0,217,126,.03) !important; }
+    .expand-row td {
+      background: var(--bg3) !important;
+      padding: 12px 14px;
+    }
 
-/* ═══════════════════════════════════════════════════════════
+    .expand-pre {
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 11px;
+      color: var(--text);
+      max-height: 240px;
+      overflow-y: auto;
+    }
+
+    .expand-inner {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .clickable-row {
+      cursor: pointer;
+    }
+
+    .clickable-row td {
+      min-height: 44px;
+    }
+
+    .clickable-row:hover td {
+      background: rgba(0, 217, 126, .03) !important;
+    }
+
+    /* ═══════════════════════════════════════════════════════════
    ACCORDION
 ═══════════════════════════════════════════════════════════ */
-.accordion-header { background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; padding: 12px 16px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; transition: background .15s; min-height: 44px; }
-.accordion-header:hover { background: var(--bg4); }
-.accordion-header h3 { font-size: 13px; font-weight: 600; }
-.accordion-body { background: var(--bg2); border: 1px solid var(--border); border-top: none; border-radius: 0 0 6px 6px; padding: 14px; margin-bottom: 10px; }
-.accordion-body.hidden { display: none; }
+    .accordion-header {
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 12px 16px;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 4px;
+      transition: background .15s;
+      min-height: 44px;
+    }
 
-/* ═══════════════════════════════════════════════════════════
+    .accordion-header:hover {
+      background: var(--bg4);
+    }
+
+    .accordion-header h3 {
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .accordion-body {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-top: none;
+      border-radius: 0 0 6px 6px;
+      padding: 14px;
+      margin-bottom: 10px;
+    }
+
+    .accordion-body.hidden {
+      display: none;
+    }
+
+    /* ═══════════════════════════════════════════════════════════
    TABS
 ═══════════════════════════════════════════════════════════ */
-.tab-bar { display: flex; gap: 2px; margin-bottom: 12px; border-bottom: 1px solid var(--border); overflow-x: auto; }
-.tab-btn { padding: 8px 14px; font-size: 11px; font-weight: 500; color: var(--muted); cursor: pointer; border: none; background: transparent; font-family: inherit; border-bottom: 2px solid transparent; transition: color .15s; white-space: nowrap; min-height: 36px; }
-.tab-btn.active { color: var(--green); border-bottom-color: var(--green); }
-.tab-pane { display: none; }
-.tab-pane.active { display: block; }
+    .tab-bar {
+      display: flex;
+      gap: 2px;
+      margin-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+      overflow-x: auto;
+    }
 
-/* ═══════════════════════════════════════════════════════════
+    .tab-btn {
+      padding: 8px 14px;
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--muted);
+      cursor: pointer;
+      border: none;
+      background: transparent;
+      font-family: inherit;
+      border-bottom: 2px solid transparent;
+      transition: color .15s;
+      white-space: nowrap;
+      min-height: 36px;
+    }
+
+    .tab-btn.active {
+      color: var(--green);
+      border-bottom-color: var(--green);
+    }
+
+    .tab-pane {
+      display: none;
+    }
+
+    .tab-pane.active {
+      display: block;
+    }
+
+    /* ═══════════════════════════════════════════════════════════
    CONFIDENCE BAR / LESSON / SPLIT
 ═══════════════════════════════════════════════════════════ */
-.conf-bar-wrap { display: flex; align-items: center; gap: 8px; }
-.conf-bar { flex: 1; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
-.conf-bar-fill { height: 100%; border-radius: 3px; background: var(--green); transition: width .3s; }
-.lesson-card { background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; padding: 14px; margin-bottom: 10px; }
-.lesson-card.conf-high   { border-left: 3px solid var(--green); }
-.lesson-card.conf-medium { border-left: 3px solid var(--amber); }
-.lesson-card.conf-low    { border-left: 3px solid var(--muted); }
-.split-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 4px; background: rgba(245,158,11,.15); border: 1px solid rgba(245,158,11,.4); color: var(--amber); font-size: 10px; font-weight: 700; }
+    .conf-bar-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
 
-/* ═══════════════════════════════════════════════════════════
+    .conf-bar {
+      flex: 1;
+      height: 6px;
+      background: var(--border);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .conf-bar-fill {
+      height: 100%;
+      border-radius: 3px;
+      background: var(--green);
+      transition: width .3s;
+    }
+
+    .lesson-card {
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 14px;
+      margin-bottom: 10px;
+    }
+
+    .lesson-card.conf-high {
+      border-left: 3px solid var(--green);
+    }
+
+    .lesson-card.conf-medium {
+      border-left: 3px solid var(--amber);
+    }
+
+    .lesson-card.conf-low {
+      border-left: 3px solid var(--muted);
+    }
+
+    .split-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 8px;
+      border-radius: 4px;
+      background: rgba(245, 158, 11, .15);
+      border: 1px solid rgba(245, 158, 11, .4);
+      color: var(--amber);
+      font-size: 10px;
+      font-weight: 700;
+    }
+
+    /* ═══════════════════════════════════════════════════════════
    PNL COLORS
 ═══════════════════════════════════════════════════════════ */
-.pnl-pos { color: var(--green); }
-.pnl-neg { color: var(--red); }
+    .pnl-pos {
+      color: var(--green);
+    }
 
-/* ═══════════════════════════════════════════════════════════
+    .pnl-neg {
+      color: var(--red);
+    }
+
+    /* ═══════════════════════════════════════════════════════════
    SCROLLBAR
 ═══════════════════════════════════════════════════════════ */
-::-webkit-scrollbar { width: 5px; height: 5px; }
-::-webkit-scrollbar-track { background: var(--bg2); }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #3a3a3a; }
+    ::-webkit-scrollbar {
+      width: 5px;
+      height: 5px;
+    }
 
-/* ═══════════════════════════════════════════════════════════
+    ::-webkit-scrollbar-track {
+      background: var(--bg2);
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 3px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: #3a3a3a;
+    }
+
+    /* ═══════════════════════════════════════════════════════════
    NRB ENTRY STYLES  (dark-themed, matches dashboard)
 ═══════════════════════════════════════════════════════════ */
-.nrb-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-.nrb-panel { background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; display: flex; flex-direction: column; overflow: hidden; }
-.nrb-panel-hdr { padding: 10px 16px; border-bottom: 1px solid var(--border); font-size: 10px; letter-spacing: .12em; color: var(--muted); text-transform: uppercase; display: flex; align-items: center; gap: 8px; }
-.nrb-panel-hdr::before { content:''; display:inline-block; width:3px; height:12px; background:var(--green); border-radius: 2px; }
-.nrb-period-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
-.nrb-field-grp { display: flex; flex-direction: column; gap: 4px; }
-.nrb-label { font-size: 10px; letter-spacing: .08em; color: var(--muted); text-transform: uppercase; }
-.nrb-select, .nrb-input, .nrb-textarea {
-  background: var(--bg3); border: 1px solid var(--border);
-  color: var(--text); font-family: inherit; font-size: 12px;
-  padding: 7px 10px; border-radius: 4px; outline: none; width: 100%;
-  transition: border-color .15s;
-}
-.nrb-select:focus, .nrb-input:focus, .nrb-textarea:focus { border-color: var(--green); }
-.nrb-select option { background: var(--bg3); }
-.nrb-period-preview { grid-column: 1/-1; display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--bg3); border: 1px solid var(--border); border-radius: 4px; flex-wrap: wrap; }
-.nrb-preview-label { color: var(--muted); font-size: 11px; }
-.nrb-preview-val   { color: var(--green); font-size: 13px; font-weight: 600; }
-.nrb-existing-badge { display: none; padding: 2px 8px; background: rgba(245,158,11,.12); border: 1px solid rgba(245,158,11,.3); color: var(--amber); font-size: 10px; border-radius: 4px; }
-.nrb-json-section { flex: 1; display: flex; flex-direction: column; }
-.nrb-json-toolbar { padding: 8px 14px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.nrb-json-toolbar span { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .1em; }
-.nrb-textarea {
-  flex: 1; resize: vertical; min-height: 180px; max-height: 340px;
-  border: none; border-radius: 0; padding: 14px 16px;
-  font-size: 11px; line-height: 1.7; color: var(--muted);
-  background: var(--bg3);
-}
-.nrb-textarea:focus { border-color: transparent; outline: none; }
-.nrb-json-error { padding: 8px 14px; font-size: 11px; color: var(--red); border-top: 1px solid var(--border); display: none; }
-.nrb-btn {
-  font-family: inherit; font-size: 11px; letter-spacing: .06em;
-  text-transform: uppercase; padding: 7px 14px; border-radius: 4px;
-  border: 1px solid; cursor: pointer; transition: all .15s;
-  min-height: 34px;
-}
-.nrb-btn-green  { background: transparent; border-color: var(--green); color: var(--green); }
-.nrb-btn-green:hover  { background: rgba(0,217,126,.1); }
-.nrb-btn-amber  { background: transparent; border-color: var(--amber); color: var(--amber); }
-.nrb-btn-amber:hover  { background: rgba(245,158,11,.1); }
-.nrb-btn-dim    { background: transparent; border-color: var(--border); color: var(--muted); }
-.nrb-btn-dim:hover    { border-color: var(--muted); color: var(--text); }
-.nrb-btn-big    { font-size: 12px; padding: 10px 22px; min-height: 42px; }
-.nrb-btn:disabled { opacity: .35; cursor: not-allowed; }
-.nrb-stats-bar { padding: 8px 16px; border-bottom: 1px solid var(--border); display: flex; gap: 16px; background: var(--bg3); flex-wrap: wrap; }
-.nrb-stat-item { display: flex; align-items: center; gap: 5px; font-size: 11px; }
-.nrb-stat-label { color: var(--muted); }
-.nrb-stat-val { font-weight: 600; }
-.nrb-fields-wrap { flex: 1; overflow-y: auto; max-height: 460px; }
-.nrb-field-section { border-bottom: 1px solid var(--border); }
-.nrb-section-hdr { padding: 7px 14px; font-size: 10px; letter-spacing: .1em; color: var(--muted); text-transform: uppercase; background: var(--bg3); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 6px; position: sticky; top: 0; z-index: 5; }
-.nrb-section-count { margin-left: auto; font-size: 10px; }
-.nrb-section-filled { color: var(--green); }
-.nrb-field-row { display: grid; grid-template-columns: 180px 1fr 58px; align-items: center; border-bottom: 1px solid var(--border); transition: background .1s; }
-.nrb-field-row:hover { background: var(--bg3); }
-.nrb-field-row:last-child { border-bottom: none; }
-.nrb-field-name { padding: 7px 12px; font-size: 11px; color: var(--muted); border-right: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.nrb-field-input-wrap { padding: 4px 8px; }
-.nrb-field-input {
-  background: transparent; border: 1px solid transparent;
-  color: var(--text); font-size: 12px; padding: 4px 6px;
-  border-radius: 3px; width: 100%; font-family: inherit;
-}
-.nrb-field-input:focus { border-color: var(--green); background: var(--bg3); outline: none; }
-.nrb-field-input.is-null { color: var(--red); border-color: rgba(239,68,68,.2); background: rgba(239,68,68,.05); }
-.nrb-field-status { padding: 7px 8px; font-size: 10px; text-align: center; border-left: 1px solid var(--border); color: var(--muted); }
-.nrb-field-status.ok       { color: var(--green); }
-.nrb-field-status.null     { color: var(--red); }
-.nrb-field-status.modified { color: var(--amber); }
-.nrb-bottom-bar { border-top: 1px solid var(--border); padding: 10px 14px; display: flex; align-items: center; gap: 10px; background: var(--bg); flex-wrap: wrap; }
-.nrb-status-banner { flex: 1; font-size: 12px; padding: 8px 12px; border-radius: 4px; display: none; align-items: center; gap: 8px; min-width: 160px; }
-.nrb-status-banner.success { display:flex; background:rgba(0,217,126,.1);  border:1px solid rgba(0,217,126,.3);  color:var(--green); }
-.nrb-status-banner.error   { display:flex; background:rgba(239,68,68,.1);  border:1px solid rgba(239,68,68,.3);  color:var(--red); }
-.nrb-status-banner.loading { display:flex; background:rgba(96,165,250,.1); border:1px solid rgba(96,165,250,.3); color:var(--blue); }
-.nrb-empty { padding: 32px 16px; color: var(--muted); text-align: center; font-size: 12px; }
-.nrb-inline-spin { display:inline-block; width:10px; height:10px; border:1px solid currentColor; border-top-color:transparent; border-radius:50%; animation:spin .6s linear infinite; }
-.api-dot { width:8px; height:8px; border-radius:50%; background:var(--muted); display:inline-block; flex-shrink:0; }
-.api-dot.online  { background:var(--green); box-shadow:0 0 6px var(--green); }
-.api-dot.offline { background:var(--red); }
+    .nrb-layout {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
 
-/* ═══════════════════════════════════════════════════════════
+    .nrb-panel {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .nrb-panel-hdr {
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border);
+      font-size: 10px;
+      letter-spacing: .12em;
+      color: var(--muted);
+      text-transform: uppercase;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .nrb-panel-hdr::before {
+      content: '';
+      display: inline-block;
+      width: 3px;
+      height: 12px;
+      background: var(--green);
+      border-radius: 2px;
+    }
+
+    .nrb-period-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 10px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .nrb-field-grp {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .nrb-label {
+      font-size: 10px;
+      letter-spacing: .08em;
+      color: var(--muted);
+      text-transform: uppercase;
+    }
+
+    .nrb-select,
+    .nrb-input,
+    .nrb-textarea {
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 12px;
+      padding: 7px 10px;
+      border-radius: 4px;
+      outline: none;
+      width: 100%;
+      transition: border-color .15s;
+    }
+
+    .nrb-select:focus,
+    .nrb-input:focus,
+    .nrb-textarea:focus {
+      border-color: var(--green);
+    }
+
+    .nrb-select option {
+      background: var(--bg3);
+    }
+
+    .nrb-period-preview {
+      grid-column: 1/-1;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      flex-wrap: wrap;
+    }
+
+    .nrb-preview-label {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .nrb-preview-val {
+      color: var(--green);
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .nrb-existing-badge {
+      display: none;
+      padding: 2px 8px;
+      background: rgba(245, 158, 11, .12);
+      border: 1px solid rgba(245, 158, 11, .3);
+      color: var(--amber);
+      font-size: 10px;
+      border-radius: 4px;
+    }
+
+    .nrb-json-section {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .nrb-json-toolbar {
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .nrb-json-toolbar span {
+      color: var(--muted);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: .1em;
+    }
+
+    .nrb-textarea {
+      flex: 1;
+      resize: vertical;
+      min-height: 180px;
+      max-height: 340px;
+      border: none;
+      border-radius: 0;
+      padding: 14px 16px;
+      font-size: 11px;
+      line-height: 1.7;
+      color: var(--muted);
+      background: var(--bg3);
+    }
+
+    .nrb-textarea:focus {
+      border-color: transparent;
+      outline: none;
+    }
+
+    .nrb-json-error {
+      padding: 8px 14px;
+      font-size: 11px;
+      color: var(--red);
+      border-top: 1px solid var(--border);
+      display: none;
+    }
+
+    .nrb-btn {
+      font-family: inherit;
+      font-size: 11px;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      padding: 7px 14px;
+      border-radius: 4px;
+      border: 1px solid;
+      cursor: pointer;
+      transition: all .15s;
+      min-height: 34px;
+    }
+
+    .nrb-btn-green {
+      background: transparent;
+      border-color: var(--green);
+      color: var(--green);
+    }
+
+    .nrb-btn-green:hover {
+      background: rgba(0, 217, 126, .1);
+    }
+
+    .nrb-btn-amber {
+      background: transparent;
+      border-color: var(--amber);
+      color: var(--amber);
+    }
+
+    .nrb-btn-amber:hover {
+      background: rgba(245, 158, 11, .1);
+    }
+
+    .nrb-btn-dim {
+      background: transparent;
+      border-color: var(--border);
+      color: var(--muted);
+    }
+
+    .nrb-btn-dim:hover {
+      border-color: var(--muted);
+      color: var(--text);
+    }
+
+    .nrb-btn-big {
+      font-size: 12px;
+      padding: 10px 22px;
+      min-height: 42px;
+    }
+
+    .nrb-btn:disabled {
+      opacity: .35;
+      cursor: not-allowed;
+    }
+
+    .nrb-stats-bar {
+      padding: 8px 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      gap: 16px;
+      background: var(--bg3);
+      flex-wrap: wrap;
+    }
+
+    .nrb-stat-item {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+    }
+
+    .nrb-stat-label {
+      color: var(--muted);
+    }
+
+    .nrb-stat-val {
+      font-weight: 600;
+    }
+
+    .nrb-fields-wrap {
+      flex: 1;
+      overflow-y: auto;
+      max-height: 460px;
+    }
+
+    .nrb-field-section {
+      border-bottom: 1px solid var(--border);
+    }
+
+    .nrb-section-hdr {
+      padding: 7px 14px;
+      font-size: 10px;
+      letter-spacing: .1em;
+      color: var(--muted);
+      text-transform: uppercase;
+      background: var(--bg3);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      position: sticky;
+      top: 0;
+      z-index: 5;
+    }
+
+    .nrb-section-count {
+      margin-left: auto;
+      font-size: 10px;
+    }
+
+    .nrb-section-filled {
+      color: var(--green);
+    }
+
+    .nrb-field-row {
+      display: grid;
+      grid-template-columns: 180px 1fr 58px;
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+      transition: background .1s;
+    }
+
+    .nrb-field-row:hover {
+      background: var(--bg3);
+    }
+
+    .nrb-field-row:last-child {
+      border-bottom: none;
+    }
+
+    .nrb-field-name {
+      padding: 7px 12px;
+      font-size: 11px;
+      color: var(--muted);
+      border-right: 1px solid var(--border);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .nrb-field-input-wrap {
+      padding: 4px 8px;
+    }
+
+    .nrb-field-input {
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--text);
+      font-size: 12px;
+      padding: 4px 6px;
+      border-radius: 3px;
+      width: 100%;
+      font-family: inherit;
+    }
+
+    .nrb-field-input:focus {
+      border-color: var(--green);
+      background: var(--bg3);
+      outline: none;
+    }
+
+    .nrb-field-input.is-null {
+      color: var(--red);
+      border-color: rgba(239, 68, 68, .2);
+      background: rgba(239, 68, 68, .05);
+    }
+
+    .nrb-field-status {
+      padding: 7px 8px;
+      font-size: 10px;
+      text-align: center;
+      border-left: 1px solid var(--border);
+      color: var(--muted);
+    }
+
+    .nrb-field-status.ok {
+      color: var(--green);
+    }
+
+    .nrb-field-status.null {
+      color: var(--red);
+    }
+
+    .nrb-field-status.modified {
+      color: var(--amber);
+    }
+
+    .nrb-bottom-bar {
+      border-top: 1px solid var(--border);
+      padding: 10px 14px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--bg);
+      flex-wrap: wrap;
+    }
+
+    .nrb-status-banner {
+      flex: 1;
+      font-size: 12px;
+      padding: 8px 12px;
+      border-radius: 4px;
+      display: none;
+      align-items: center;
+      gap: 8px;
+      min-width: 160px;
+    }
+
+    .nrb-status-banner.success {
+      display: flex;
+      background: rgba(0, 217, 126, .1);
+      border: 1px solid rgba(0, 217, 126, .3);
+      color: var(--green);
+    }
+
+    .nrb-status-banner.error {
+      display: flex;
+      background: rgba(239, 68, 68, .1);
+      border: 1px solid rgba(239, 68, 68, .3);
+      color: var(--red);
+    }
+
+    .nrb-status-banner.loading {
+      display: flex;
+      background: rgba(96, 165, 250, .1);
+      border: 1px solid rgba(96, 165, 250, .3);
+      color: var(--blue);
+    }
+
+    .nrb-empty {
+      padding: 32px 16px;
+      color: var(--muted);
+      text-align: center;
+      font-size: 12px;
+    }
+
+    .nrb-inline-spin {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border: 1px solid currentColor;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin .6s linear infinite;
+    }
+
+    .api-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--muted);
+      display: inline-block;
+      flex-shrink: 0;
+    }
+
+    .api-dot.online {
+      background: var(--green);
+      box-shadow: 0 0 6px var(--green);
+    }
+
+    .api-dot.offline {
+      background: var(--red);
+    }
+
+    /* ═══════════════════════════════════════════════════════════
    MOBILE  < 768px
 ═══════════════════════════════════════════════════════════ */
-@media (max-width: 767px) {
-  #sidebar     { display: none; }
-  #bottom-nav  { display: flex; }
-  #main        { margin-left: 0; padding: 14px 12px calc(var(--bnav-h) + 20px); }
+    @media (max-width: 767px) {
+      #sidebar {
+        display: none;
+      }
 
-  body         { font-size: 12px; }
-  th           { font-size: 9px;  padding: 7px 8px; }
-  td           { font-size: 11px; padding: 9px 8px; }
-  .clickable-row td { padding-top: 11px; padding-bottom: 11px; }
+      #bottom-nav {
+        display: flex;
+      }
 
-  .section { margin-bottom: 36px; }
-  .section-header h2 { font-size: 13px; }
+      #main {
+        margin-left: 0;
+        padding: 14px 12px calc(var(--bnav-h) + 20px);
+      }
 
-  .stat-card .value { font-size: 17px; }
-  .stat-card .label { font-size: 9px; }
+      body {
+        font-size: 12px;
+      }
 
-  /* expand panel: single column */
-  .expand-inner { grid-template-columns: 1fr; }
+      th {
+        font-size: 9px;
+        padding: 7px 8px;
+      }
 
-  /* filter bar: full-width inputs */
-  .filter-bar select, .filter-bar input { width: 100%; flex: 1 1 120px; }
+      td {
+        font-size: 11px;
+        padding: 9px 8px;
+      }
 
-  /* accordion touch target already 44px via min-height */
+      .clickable-row td {
+        padding-top: 11px;
+        padding-bottom: 11px;
+      }
 
-  /* NRB: stack panels */
-  .nrb-layout         { grid-template-columns: 1fr; }
-  .nrb-period-grid    { grid-template-columns: 1fr 1fr; }
-  .nrb-field-row      { grid-template-columns: 110px 1fr 44px; }
-  .nrb-field-name     { font-size: 10px; padding: 7px 8px; }
-  .nrb-field-input    { font-size: 11px; }
-  .nrb-fields-wrap    { max-height: 360px; }
-}
+      .section {
+        margin-bottom: 36px;
+      }
 
-/* ═══════════════════════════════════════════════════════════
+      .section-header h2 {
+        font-size: 13px;
+      }
+
+      .stat-card .value {
+        font-size: 17px;
+      }
+
+      .stat-card .label {
+        font-size: 9px;
+      }
+
+      /* expand panel: single column */
+      .expand-inner {
+        grid-template-columns: 1fr;
+      }
+
+      /* filter bar: full-width inputs */
+      .filter-bar select,
+      .filter-bar input {
+        width: 100%;
+        flex: 1 1 120px;
+      }
+
+      /* accordion touch target already 44px via min-height */
+
+      /* NRB: stack panels */
+      .nrb-layout {
+        grid-template-columns: 1fr;
+      }
+
+      .nrb-period-grid {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .nrb-field-row {
+        grid-template-columns: 110px 1fr 44px;
+      }
+
+      .nrb-field-name {
+        font-size: 10px;
+        padding: 7px 8px;
+      }
+
+      .nrb-field-input {
+        font-size: 11px;
+      }
+
+      .nrb-fields-wrap {
+        max-height: 360px;
+      }
+    }
+
+    /* ═══════════════════════════════════════════════════════════
    TABLET  768px – 1024px
 ═══════════════════════════════════════════════════════════ */
-@media (min-width: 768px) and (max-width: 1023px) {
-  :root { --sidebar-w: 190px; }
-  #main { padding: 20px 20px 50px; }
-}
+    @media (min-width: 768px) and (max-width: 1023px) {
+      :root {
+        --sidebar-w: 190px;
+      }
 
-/* ═══════════════════════════════════════════════════════════
+      #main {
+        padding: 20px 20px 50px;
+      }
+    }
+
+    /* ═══════════════════════════════════════════════════════════
    SAFE NO-OVERFLOW GUARD
 ═══════════════════════════════════════════════════════════ */
-#main, .section { max-width: 100%; overflow-x: hidden; }
-.card, .chart-box, .lesson-card { max-width: 100%; }
+    #main,
+    .section {
+      max-width: 100%;
+      overflow-x: hidden;
+    }
 
-/* ═══════════════════════════════════════════════════════════
+    .card,
+    .chart-box,
+    .lesson-card {
+      max-width: 100%;
+    }
+
+    /* ═══════════════════════════════════════════════════════════
    REPORTER
 ═══════════════════════════════════════════════════════════ */
-.rpt-layout { display: grid; grid-template-columns: 260px 1fr; gap: 14px; align-items: start; }
-.rpt-panel { background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
-.rpt-panel-hdr { padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 10px; letter-spacing: .1em; color: var(--muted); text-transform: uppercase; display: flex; align-items: center; justify-content: space-between; min-height: 40px; }
-.rpt-panel-hdr > span { color: var(--text); font-size: 11px; letter-spacing: 0; text-transform: none; }
-.rpt-query-list { max-height: 60vh; overflow-y: auto; }
-.rpt-query-item { padding: 10px 14px; border-bottom: 1px solid var(--border); cursor: pointer; transition: background .12s; border-left: 2px solid transparent; }
-.rpt-query-item:last-child { border-bottom: none; }
-.rpt-query-item:hover { background: var(--bg3); }
-.rpt-query-item.active { background: rgba(0,217,126,.06); border-left-color: var(--green); }
-.rpt-query-name { font-size: 12px; font-weight: 600; color: var(--text); }
-.rpt-query-desc { font-size: 10px; color: var(--muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.rpt-empty { padding: 24px 14px; color: var(--muted); font-size: 11px; text-align: center; }
-.rpt-btn { font-family: inherit; font-size: 11px; letter-spacing: .05em; text-transform: uppercase; padding: 5px 11px; border-radius: 4px; border: 1px solid; cursor: pointer; transition: all .15s; min-height: 30px; white-space: nowrap; }
-.rpt-btn-green { background: transparent; border-color: var(--green); color: var(--green); }
-.rpt-btn-green:hover { background: rgba(0,217,126,.1); }
-.rpt-btn-blue  { background: transparent; border-color: var(--blue);  color: var(--blue);  }
-.rpt-btn-blue:hover  { background: rgba(96,165,250,.1); }
-.rpt-btn-amber { background: transparent; border-color: var(--amber); color: var(--amber); }
-.rpt-btn-amber:hover { background: rgba(245,158,11,.1); }
-.rpt-btn-dim   { background: transparent; border-color: var(--border); color: var(--muted); }
-.rpt-btn-dim:hover   { border-color: var(--muted); color: var(--text); }
-.rpt-btn:disabled { opacity: .35; cursor: not-allowed; }
-.rpt-textarea { width: 100%; background: var(--bg3); border: 1px solid var(--border); color: var(--text); font-family: 'JetBrains Mono', monospace; font-size: 12px; padding: 10px 12px; border-radius: 4px; resize: vertical; outline: none; line-height: 1.7; }
-.rpt-textarea:focus { border-color: var(--green); }
-.rpt-input, .rpt-select { background: var(--bg3); border: 1px solid var(--border); color: var(--text); font-family: inherit; font-size: 12px; padding: 6px 10px; border-radius: 4px; outline: none; min-height: 34px; width: 100%; }
-.rpt-input:focus, .rpt-select:focus { border-color: var(--green); }
-.rpt-select option { background: var(--bg3); }
-.rpt-param-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
-.rpt-param-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 4px; }
-.rpt-save-box { background: var(--bg3); border: 1px solid var(--border); border-radius: 4px; padding: 12px 14px; }
-.rpt-warn { background: rgba(245,158,11,.1); border: 1px solid rgba(245,158,11,.3); color: var(--amber); font-size: 11px; padding: 6px 12px; border-radius: 4px; margin-bottom: 8px; }
-@media (max-width: 767px) { .rpt-layout { grid-template-columns: 1fr; } .rpt-query-list { max-height: 200px; } }
-</style>
+    .rpt-layout {
+      display: grid;
+      grid-template-columns: 260px 1fr;
+      gap: 14px;
+      align-items: start;
+    }
+
+    .rpt-panel {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .rpt-panel-hdr {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      font-size: 10px;
+      letter-spacing: .1em;
+      color: var(--muted);
+      text-transform: uppercase;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 40px;
+    }
+
+    .rpt-panel-hdr>span {
+      color: var(--text);
+      font-size: 11px;
+      letter-spacing: 0;
+      text-transform: none;
+    }
+
+    .rpt-query-list {
+      max-height: 60vh;
+      overflow-y: auto;
+    }
+
+    .rpt-query-item {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      transition: background .12s;
+      border-left: 2px solid transparent;
+    }
+
+    .rpt-query-item:last-child {
+      border-bottom: none;
+    }
+
+    .rpt-query-item:hover {
+      background: var(--bg3);
+    }
+
+    .rpt-query-item.active {
+      background: rgba(0, 217, 126, .06);
+      border-left-color: var(--green);
+    }
+
+    .rpt-query-name {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .rpt-query-desc {
+      font-size: 10px;
+      color: var(--muted);
+      margin-top: 2px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .rpt-empty {
+      padding: 24px 14px;
+      color: var(--muted);
+      font-size: 11px;
+      text-align: center;
+    }
+
+    .rpt-btn {
+      font-family: inherit;
+      font-size: 11px;
+      letter-spacing: .05em;
+      text-transform: uppercase;
+      padding: 5px 11px;
+      border-radius: 4px;
+      border: 1px solid;
+      cursor: pointer;
+      transition: all .15s;
+      min-height: 30px;
+      white-space: nowrap;
+    }
+
+    .rpt-btn-green {
+      background: transparent;
+      border-color: var(--green);
+      color: var(--green);
+    }
+
+    .rpt-btn-green:hover {
+      background: rgba(0, 217, 126, .1);
+    }
+
+    .rpt-btn-blue {
+      background: transparent;
+      border-color: var(--blue);
+      color: var(--blue);
+    }
+
+    .rpt-btn-blue:hover {
+      background: rgba(96, 165, 250, .1);
+    }
+
+    .rpt-btn-amber {
+      background: transparent;
+      border-color: var(--amber);
+      color: var(--amber);
+    }
+
+    .rpt-btn-amber:hover {
+      background: rgba(245, 158, 11, .1);
+    }
+
+    .rpt-btn-dim {
+      background: transparent;
+      border-color: var(--border);
+      color: var(--muted);
+    }
+
+    .rpt-btn-dim:hover {
+      border-color: var(--muted);
+      color: var(--text);
+    }
+
+    .rpt-btn:disabled {
+      opacity: .35;
+      cursor: not-allowed;
+    }
+
+    .rpt-textarea {
+      width: 100%;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      padding: 10px 12px;
+      border-radius: 4px;
+      resize: vertical;
+      outline: none;
+      line-height: 1.7;
+    }
+
+    .rpt-textarea:focus {
+      border-color: var(--green);
+    }
+
+    .rpt-input,
+    .rpt-select {
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 12px;
+      padding: 6px 10px;
+      border-radius: 4px;
+      outline: none;
+      min-height: 34px;
+      width: 100%;
+    }
+
+    .rpt-input:focus,
+    .rpt-select:focus {
+      border-color: var(--green);
+    }
+
+    .rpt-select option {
+      background: var(--bg3);
+    }
+
+    .rpt-param-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+      gap: 10px;
+    }
+
+    .rpt-param-label {
+      font-size: 10px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      margin-bottom: 4px;
+    }
+
+    .rpt-save-box {
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 12px 14px;
+    }
+
+    .rpt-warn {
+      background: rgba(245, 158, 11, .1);
+      border: 1px solid rgba(245, 158, 11, .3);
+      color: var(--amber);
+      font-size: 11px;
+      padding: 6px 12px;
+      border-radius: 4px;
+      margin-bottom: 8px;
+    }
+
+    @media (max-width: 767px) {
+      .rpt-layout {
+        grid-template-columns: 1fr;
+      }
+
+      .rpt-query-list {
+        max-height: 200px;
+      }
+    }
+  </style>
 </head>
+
 <body>
 
-<!-- ═══════════════════════ SIDEBAR ═══════════════════════════ -->
-<div id="sidebar">
-  <div class="logo">
-    <h1>&#9670; NEPSE AI</h1>
-    <p>Engine Dashboard</p>
+  <!-- ═══════════════════════ SIDEBAR ═══════════════════════════ -->
+  <div id="sidebar">
+    <div class="logo">
+      <h1>&#9670; NEPSE AI</h1>
+      <p>Engine Dashboard</p>
+    </div>
+    <nav>
+      <a href="#s-dashboard" class="active">&#9632; Dashboard</a>
+      <a href="#s-marketlog">&#9632; Market Log</a>
+      <a href="#s-learning">&#9632; Learning Hub</a>
+      <a href="#s-audit">&#9632; Weekly Audit</a>
+      <a href="#s-council">&#9632; Monthly Council</a>
+      <a href="#s-trades">&#9632; Trade Journal</a>
+      <a href="#s-portfolio">&#9632; Portfolio</a>
+      <div class="divider"></div>
+      <a href="#s-nrb">&#9632; NRB Entry</a>
+      <a href="#s-reporter">&#9632; Query</a>
+    </nav>
+    <div class="refresh-info">
+      Auto-refresh: <span>5 min</span><br />
+      Last: <span id="last-refresh">—</span>
+    </div>
   </div>
-  <nav>
-    <a href="#s-dashboard" class="active">&#9632; Dashboard</a>
-    <a href="#s-marketlog">&#9632; Market Log</a>
-    <a href="#s-learning">&#9632; Learning Hub</a>
-    <a href="#s-audit">&#9632; Weekly Audit</a>
-    <a href="#s-council">&#9632; Monthly Council</a>
-    <a href="#s-trades">&#9632; Trade Journal</a>
-    <a href="#s-portfolio">&#9632; Portfolio</a>
-    <div class="divider"></div>
-    <a href="#s-nrb">&#9632; NRB Entry</a>
-    <a href="#s-reporter">&#9632; Query</a>
+
+  <!-- ═══════════════════════ MAIN ══════════════════════════════ -->
+  <div id="main">
+
+    <!-- 1. Dashboard -->
+    <div class="section" id="s-dashboard">
+      <div class="section-header">
+        <h2>Dashboard</h2><span class="tag">LIVE</span>
+      </div>
+      <div id="dash-content">
+        <div class="spinner">Loading summary…</div>
+      </div>
+    </div>
+
+    <!-- 2. Market Log -->
+    <div class="section" id="s-marketlog">
+      <div class="section-header">
+        <h2>Market Log</h2><span id="ml-count" class="tag">—</span>
+      </div>
+      <div class="filter-bar">
+        <select id="ml-action">
+          <option value="">Action: ALL</option>
+          <option>BUY</option>
+          <option>WAIT</option>
+          <option>AVOID</option>
+        </select>
+        <select id="ml-outcome">
+          <option value="">Outcome: ALL</option>
+          <option>WIN</option>
+          <option>LOSS</option>
+          <option>PENDING</option>
+          <option>CORRECT</option>
+          <option>WRONG</option>
+        </select>
+        <input id="ml-sector" type="text" placeholder="Sector…" style="width:110px" />
+        <input id="ml-date-from" type="date" title="From" />
+        <input id="ml-date-to" type="date" title="To" />
+        <button onclick="renderMarketLog()"
+          style="background:var(--bg4);border:1px solid var(--border);color:var(--green);padding:7px 14px;border-radius:4px;font-family:inherit;font-size:12px;cursor:pointer;min-height:36px;">Filter</button>
+      </div>
+      <div id="ml-content">
+        <div class="spinner">Loading market log…</div>
+      </div>
+    </div>
+
+    <!-- 3. Learning Hub -->
+    <div class="section" id="s-learning">
+      <div class="section-header">
+        <h2>Learning Hub</h2>
+      </div>
+      <div id="lh-content">
+        <div class="spinner">Loading lessons…</div>
+      </div>
+    </div>
+
+    <!-- 4. Weekly Audit -->
+    <div class="section" id="s-audit">
+      <div class="section-header">
+        <h2>Weekly Audit</h2>
+      </div>
+      <div id="audit-content">
+        <div class="spinner">Loading audit…</div>
+      </div>
+    </div>
+
+    <!-- 5. Monthly Council -->
+    <div class="section" id="s-council">
+      <div class="section-header">
+        <h2>Monthly Council</h2><span class="tag">DRAMA</span>
+      </div>
+      <div id="council-content">
+        <div class="spinner">Loading council…</div>
+      </div>
+    </div>
+
+    <!-- 6. Trade Journal -->
+    <div class="section" id="s-trades">
+      <div class="section-header">
+        <h2>Trade Journal</h2>
+      </div>
+      <div id="trades-content">
+        <div class="spinner">Loading trades…</div>
+      </div>
+    </div>
+
+    <!-- 7. Portfolio -->
+    <div class="section" id="s-portfolio">
+      <div class="section-header">
+        <h2>Portfolio</h2><span class="tag">PAPER</span>
+      </div>
+      <div id="port-content">
+        <div class="spinner">Loading portfolio…</div>
+      </div>
+    </div>
+
+    <!-- 8. NRB Entry -->
+    <div class="section" id="s-nrb">
+      <div class="section-header">
+        <h2>NRB Entry</h2>
+        <div style="display:flex;align-items:center;gap:6px;margin-left:auto">
+          <div id="apiDot" class="api-dot"></div>
+          <span id="apiStatusText" style="font-size:10px;color:var(--muted)">checking api…</span>
+        </div>
+      </div>
+
+      <div class="nrb-layout">
+        <!-- LEFT: period + JSON paste -->
+        <div class="nrb-panel">
+          <div class="nrb-panel-hdr">01 — Period &amp; Source JSON</div>
+
+          <div class="nrb-period-grid">
+            <div class="nrb-field-grp">
+              <label class="nrb-label">Fiscal Year</label>
+              <select id="fiscalYear" class="nrb-select">
+                <option value="2026/27">2026/27</option>
+                <option value="2025/26" selected>2025/26</option>
+                <option value="2024/25">2024/25</option>
+                <option value="2023/24">2023/24</option>
+              </select>
+            </div>
+            <div class="nrb-field-grp">
+              <label class="nrb-label">Month</label>
+              <select id="monthNumber" class="nrb-select">
+                <option value="1">1 — Shrawan</option>
+                <option value="2">2 — Bhadra</option>
+                <option value="3">3 — Ashwin</option>
+                <option value="4">4 — Kartik</option>
+                <option value="5">5 — Mangsir</option>
+                <option value="6">6 — Poush</option>
+                <option value="7">7 — Magh</option>
+                <option value="8" selected>8 — Falgun</option>
+                <option value="9">9 — Chaitra</option>
+                <option value="10">10 — Baisakh</option>
+                <option value="11">11 — Jestha</option>
+                <option value="12">12 — Ashadh</option>
+              </select>
+            </div>
+            <div class="nrb-field-grp">
+              <label class="nrb-label">Type</label>
+              <select id="isAnnual" class="nrb-select">
+                <option value="false">Monthly</option>
+                <option value="true">Annual</option>
+              </select>
+            </div>
+            <div class="nrb-period-preview">
+              <span class="nrb-preview-label">period key →</span>
+              <span class="nrb-preview-val" id="periodPreview">fy2025/26-month8</span>
+              <span class="nrb-existing-badge" id="existingBadge">⚠ exists — will overwrite</span>
+            </div>
+          </div>
+
+          <div class="nrb-json-section">
+            <div class="nrb-json-toolbar">
+              <span>Paste NotebookLM JSON</span>
+              <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap">
+                <button class="nrb-btn nrb-btn-dim" onclick="nrbClearAll()">Clear</button>
+                <button class="nrb-btn nrb-btn-green" onclick="nrbParseJSON()">Parse →</button>
+              </div>
+            </div>
+            <textarea class="nrb-textarea" id="jsonInput"
+              placeholder='{&#10;  "policy_rate": 5.0,&#10;  "bank_rate": 7.0,&#10;  "cpi_inflation": 3.62,&#10;  "overall_sentiment": "BULLISH",&#10;  ...&#10;}'
+              spellcheck="false"></textarea>
+            <div class="nrb-json-error" id="jsonError"></div>
+          </div>
+        </div><!-- /nrb-left -->
+
+        <!-- RIGHT: review & edit fields -->
+        <div class="nrb-panel">
+          <div class="nrb-panel-hdr">02 — Review &amp; Edit Fields</div>
+
+          <div class="nrb-stats-bar">
+            <div class="nrb-stat-item"><span class="nrb-stat-label">Total</span><span class="nrb-stat-val"
+                id="statTotal">—</span></div>
+            <div class="nrb-stat-item"><span class="nrb-stat-label">Filled</span><span class="nrb-stat-val"
+                style="color:var(--green)" id="statFilled">—</span></div>
+            <div class="nrb-stat-item"><span class="nrb-stat-label">Null</span><span class="nrb-stat-val"
+                style="color:var(--red)" id="statNull">—</span></div>
+            <div class="nrb-stat-item"><span class="nrb-stat-label">Modified</span><span class="nrb-stat-val"
+                style="color:var(--amber)" id="statModified">0</span></div>
+          </div>
+
+          <div class="nrb-fields-wrap" id="fieldsContainer">
+            <div class="nrb-empty">Paste JSON on the left and click Parse →</div>
+          </div>
+
+          <div class="nrb-bottom-bar">
+            <div class="nrb-status-banner" id="statusBanner"></div>
+            <button class="nrb-btn nrb-btn-amber nrb-btn-big" id="saveBtn" onclick="nrbSaveToDatabase()" disabled>
+              Save to Database
+            </button>
+          </div>
+        </div><!-- /nrb-right -->
+      </div><!-- /nrb-layout -->
+    </div><!-- /s-nrb -->
+
+    <!-- 9. Query Reporter -->
+    <div class="section" id="s-reporter">
+      <div class="section-header">
+        <h2>Query Reporter</h2><span class="tag">SQL</span>
+      </div>
+      <div class="rpt-layout">
+
+        <!-- LEFT: Saved Queries list -->
+        <div class="rpt-panel">
+          <div class="rpt-panel-hdr">
+            <span>Saved Queries</span>
+            <button class="rpt-btn rpt-btn-dim" onclick="rptNewQuery()">+ New</button>
+          </div>
+          <div class="rpt-query-list" id="rpt-query-list">
+            <div class="spinner">Loading…</div>
+          </div>
+        </div>
+
+        <!-- RIGHT: Editor + Params + Results -->
+        <div class="rpt-panel">
+          <div class="rpt-panel-hdr">
+            <span>SQL Editor</span>
+            <div style="display:flex;gap:6px">
+              <button class="rpt-btn rpt-btn-green" onclick="rptRun()">&#9654; Run</button>
+              <button class="rpt-btn rpt-btn-dim" id="rpt-save-toggle" onclick="rptToggleSaveForm()">Save</button>
+            </div>
+          </div>
+
+          <!-- SQL textarea -->
+          <div style="padding:12px 14px;border-bottom:1px solid var(--border)">
+            <textarea class="rpt-textarea" id="rpt-sql" rows="8"
+              placeholder="SELECT * FROM market_log WHERE date >= :from_date LIMIT :limit"></textarea>
+          </div>
+
+          <!-- Inline save form (hidden by default) -->
+          <div id="rpt-save-form" style="display:none;padding:12px 14px;border-bottom:1px solid var(--border)">
+            <div class="rpt-save-box">
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+                <div>
+                  <div class="rpt-param-label">Name *</div>
+                  <input class="rpt-input" id="rpt-save-name" type="text" placeholder="My Query" />
+                </div>
+                <div>
+                  <div class="rpt-param-label">Description</div>
+                  <input class="rpt-input" id="rpt-save-desc" type="text" placeholder="Optional…" />
+                </div>
+              </div>
+              <div style="display:flex;gap:8px;align-items:center">
+                <button class="rpt-btn rpt-btn-green" onclick="rptSaveQuery()">Save Query</button>
+                <button class="rpt-btn rpt-btn-dim" onclick="rptToggleSaveForm()">Cancel</button>
+                <span id="rpt-save-msg" style="font-size:11px;margin-left:4px"></span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Dynamic param inputs -->
+          <div id="rpt-params-area" style="display:none;padding:12px 14px;border-bottom:1px solid var(--border)">
+            <div class="rpt-param-label" style="margin-bottom:8px">Parameters</div>
+            <div class="rpt-param-grid" id="rpt-params-grid"></div>
+          </div>
+
+          <!-- Download bar (shown after successful run) -->
+          <div id="rpt-dl-bar"
+            style="display:none;padding:8px 14px;border-bottom:1px solid var(--border);align-items:center;gap:8px">
+            <span id="rpt-row-info"
+              style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;flex:1"></span>
+            <button class="rpt-btn rpt-btn-blue" onclick="rptDownload('csv')">&#8595; CSV</button>
+            <button class="rpt-btn rpt-btn-blue" onclick="rptDownload('xlsx')">&#8595; XLSX</button>
+          </div>
+
+          <!-- Results table -->
+          <div style="padding:14px">
+            <div id="rpt-results"></div>
+          </div>
+        </div><!-- /rpt-right -->
+
+      </div><!-- /rpt-layout -->
+    </div><!-- /s-reporter -->
+
+  </div><!-- /main -->
+
+  <!-- ═══════════════════════ BOTTOM NAV (mobile) ═══════════════ -->
+  <nav id="bottom-nav" aria-label="Mobile navigation">
+    <div class="bnav-inner">
+      <a href="#s-dashboard" class="active"><span class="bico">◈</span>Dash</a>
+      <a href="#s-marketlog"><span class="bico">≡</span>Log</a>
+      <a href="#s-learning"><span class="bico">◆</span>Learn</a>
+      <a href="#s-audit"><span class="bico">✓</span>Audit</a>
+      <a href="#s-council"><span class="bico">⚡</span>Cncl</a>
+      <a href="#s-trades"><span class="bico">◉</span>Trades</a>
+      <a href="#s-portfolio"><span class="bico">◎</span>Port</a>
+      <a href="#s-nrb"><span class="bico">⊞</span>NRB</a>
+      <a href="#s-reporter"><span class="bico">⊟</span>Query</a>
+    </div>
   </nav>
-  <div class="refresh-info">
-    Auto-refresh: <span>5 min</span><br/>
-    Last: <span id="last-refresh">—</span>
-  </div>
-</div>
 
-<!-- ═══════════════════════ MAIN ══════════════════════════════ -->
-<div id="main">
+  <!-- ═══════════════════════ SCRIPTS ══════════════════════════ -->
+  <script>
+    /* ── Constants ───────────────────────────────────────────────────── */
+    const API = `http://${window.location.hostname}:8766`;
+    const chartInstances = {};
 
-  <!-- 1. Dashboard -->
-  <div class="section" id="s-dashboard">
-    <div class="section-header"><h2>Dashboard</h2><span class="tag">LIVE</span></div>
-    <div id="dash-content"><div class="spinner">Loading summary…</div></div>
-  </div>
+    /* ── Utils ───────────────────────────────────────────────────────── */
+    function esc(s) {
+      if (s == null) return '—';
+      return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+    function v(s) { return (s == null || s === '') ? '—' : s; }
+    function pnlClass(val) { const n = parseFloat(val); if (isNaN(n)) return ''; return n >= 0 ? 'pnl-pos' : 'pnl-neg'; }
+    function badge(text, color) {
+      if (!text || text === '—') return '<span style="color:var(--muted)">—</span>';
+      return `<span class="badge badge-${color}">${esc(text)}</span>`;
+    }
+    function actionBadge(a) {
+      const m = { BUY: 'green', WAIT: 'blue', AVOID: 'red', SELL: 'amber' };
+      return badge(a, m[String(a || '').toUpperCase()] || 'grey');
+    }
+    function resultBadge(r) {
+      const m = { WIN: 'green', LOSS: 'red', PENDING: 'amber', CORRECT: 'blue', WRONG: 'red' };
+      return badge(r, m[String(r || '').toUpperCase()] || 'grey');
+    }
+    function dirBadge(d) {
+      const m = { BULLISH: 'green', BEARISH: 'red', NEUTRAL: 'grey', MIXED: 'amber' };
+      return badge(d, m[String(d || '').toUpperCase()] || 'grey');
+    }
+    function scoreColor(val) { const n = parseFloat(val); if (isNaN(n)) return 'grey'; if (n >= 6) return 'green'; if (n >= 4) return 'amber'; return 'red'; }
+    function confColor(c) { const m = { HIGH: 'green', MEDIUM: 'amber', LOW: 'grey' }; return m[String(c || '').toUpperCase()] || 'grey'; }
+    function destroyChart(id) { if (chartInstances[id]) { chartInstances[id].destroy(); delete chartInstances[id]; } }
+    function setError(id, msg) { document.getElementById(id).innerHTML = `<div class="error-box">&#9888; ${esc(msg)}</div>`; }
+    async function fetchJSON(path) {
+      const r = await fetch(API + path);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json();
+    }
+    const CHART_OPTS_BASE = {
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: '#6b7280', font: { family: 'JetBrains Mono', size: 9 }, maxTicksLimit: 8 }, grid: { color: '#1a1a1a' } },
+        y: { ticks: { color: '#6b7280', font: { family: 'JetBrains Mono', size: 9 } }, grid: { color: '#1a1a1a' } }
+      }
+    };
 
-  <!-- 2. Market Log -->
-  <div class="section" id="s-marketlog">
-    <div class="section-header"><h2>Market Log</h2><span id="ml-count" class="tag">—</span></div>
-    <div class="filter-bar">
-      <select id="ml-action"><option value="">Action: ALL</option><option>BUY</option><option>WAIT</option><option>AVOID</option></select>
-      <select id="ml-outcome"><option value="">Outcome: ALL</option><option>WIN</option><option>LOSS</option><option>PENDING</option><option>CORRECT</option><option>WRONG</option></select>
-      <input  id="ml-sector"    type="text"  placeholder="Sector…"  style="width:110px" />
-      <input  id="ml-date-from" type="date"  title="From" />
-      <input  id="ml-date-to"   type="date"  title="To" />
-      <button onclick="renderMarketLog()" style="background:var(--bg4);border:1px solid var(--border);color:var(--green);padding:7px 14px;border-radius:4px;font-family:inherit;font-size:12px;cursor:pointer;min-height:36px;">Filter</button>
-    </div>
-    <div id="ml-content"><div class="spinner">Loading market log…</div></div>
-  </div>
+    /* ── 1. Dashboard ────────────────────────────────────────────────── */
+    async function loadSummary() {
+      try {
+        const d = await fetchJSON('/dashboard/summary');
+        renderSummary(d);
+      } catch (e) { setError('dash-content', 'Summary API error: ' + e.message); }
+    }
 
-  <!-- 3. Learning Hub -->
-  <div class="section" id="s-learning">
-    <div class="section-header"><h2>Learning Hub</h2></div>
-    <div id="lh-content"><div class="spinner">Loading lessons…</div></div>
-  </div>
+    function renderSummary(d) {
+      const tj = d.trade_journal || {};
+      const cap = parseFloat(d.paper_capital) || 0;
+      const unr = d.unrealized_pnl || 0;
+      const ms = d.market_state || 'UNKNOWN';
+      const msC = { BULL: 'green', BEAR: 'red', SIDEWAYS: 'amber', RANGING: 'amber' }[String(ms).toUpperCase()] || 'grey';
 
-  <!-- 4. Weekly Audit -->
-  <div class="section" id="s-audit">
-    <div class="section-header"><h2>Weekly Audit</h2></div>
-    <div id="audit-content"><div class="spinner">Loading audit…</div></div>
-  </div>
-
-  <!-- 5. Monthly Council -->
-  <div class="section" id="s-council">
-    <div class="section-header"><h2>Monthly Council</h2><span class="tag">DRAMA</span></div>
-    <div id="council-content"><div class="spinner">Loading council…</div></div>
-  </div>
-
-  <!-- 6. Trade Journal -->
-  <div class="section" id="s-trades">
-    <div class="section-header"><h2>Trade Journal</h2></div>
-    <div id="trades-content"><div class="spinner">Loading trades…</div></div>
-  </div>
-
-  <!-- 7. Portfolio -->
-  <div class="section" id="s-portfolio">
-    <div class="section-header"><h2>Portfolio</h2><span class="tag">PAPER</span></div>
-    <div id="port-content"><div class="spinner">Loading portfolio…</div></div>
-  </div>
-
-  <!-- 8. NRB Entry -->
-  <div class="section" id="s-nrb">
-    <div class="section-header">
-      <h2>NRB Entry</h2>
-      <div style="display:flex;align-items:center;gap:6px;margin-left:auto">
-        <div id="apiDot" class="api-dot"></div>
-        <span id="apiStatusText" style="font-size:10px;color:var(--muted)">checking api…</span>
-      </div>
-    </div>
-
-    <div class="nrb-layout">
-      <!-- LEFT: period + JSON paste -->
-      <div class="nrb-panel">
-        <div class="nrb-panel-hdr">01 — Period &amp; Source JSON</div>
-
-        <div class="nrb-period-grid">
-          <div class="nrb-field-grp">
-            <label class="nrb-label">Fiscal Year</label>
-            <select id="fiscalYear" class="nrb-select">
-              <option value="2026/27">2026/27</option>
-              <option value="2025/26" selected>2025/26</option>
-              <option value="2024/25">2024/25</option>
-              <option value="2023/24">2023/24</option>
-            </select>
-          </div>
-          <div class="nrb-field-grp">
-            <label class="nrb-label">Month</label>
-            <select id="monthNumber" class="nrb-select">
-              <option value="1">1 — Shrawan</option>
-              <option value="2">2 — Bhadra</option>
-              <option value="3">3 — Ashwin</option>
-              <option value="4">4 — Kartik</option>
-              <option value="5">5 — Mangsir</option>
-              <option value="6">6 — Poush</option>
-              <option value="7">7 — Magh</option>
-              <option value="8" selected>8 — Falgun</option>
-              <option value="9">9 — Chaitra</option>
-              <option value="10">10 — Baisakh</option>
-              <option value="11">11 — Jestha</option>
-              <option value="12">12 — Ashadh</option>
-            </select>
-          </div>
-          <div class="nrb-field-grp">
-            <label class="nrb-label">Type</label>
-            <select id="isAnnual" class="nrb-select">
-              <option value="false">Monthly</option>
-              <option value="true">Annual</option>
-            </select>
-          </div>
-          <div class="nrb-period-preview">
-            <span class="nrb-preview-label">period key →</span>
-            <span class="nrb-preview-val" id="periodPreview">fy2025/26-month8</span>
-            <span class="nrb-existing-badge" id="existingBadge">⚠ exists — will overwrite</span>
-          </div>
-        </div>
-
-        <div class="nrb-json-section">
-          <div class="nrb-json-toolbar">
-            <span>Paste NotebookLM JSON</span>
-            <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap">
-              <button class="nrb-btn nrb-btn-dim" onclick="nrbClearAll()">Clear</button>
-              <button class="nrb-btn nrb-btn-green" onclick="nrbParseJSON()">Parse →</button>
-            </div>
-          </div>
-          <textarea class="nrb-textarea" id="jsonInput"
-            placeholder='{&#10;  "policy_rate": 5.0,&#10;  "bank_rate": 7.0,&#10;  "cpi_inflation": 3.62,&#10;  "overall_sentiment": "BULLISH",&#10;  ...&#10;}'
-            spellcheck="false"></textarea>
-          <div class="nrb-json-error" id="jsonError"></div>
-        </div>
-      </div><!-- /nrb-left -->
-
-      <!-- RIGHT: review & edit fields -->
-      <div class="nrb-panel">
-        <div class="nrb-panel-hdr">02 — Review &amp; Edit Fields</div>
-
-        <div class="nrb-stats-bar">
-          <div class="nrb-stat-item"><span class="nrb-stat-label">Total</span><span class="nrb-stat-val" id="statTotal">—</span></div>
-          <div class="nrb-stat-item"><span class="nrb-stat-label">Filled</span><span class="nrb-stat-val" style="color:var(--green)" id="statFilled">—</span></div>
-          <div class="nrb-stat-item"><span class="nrb-stat-label">Null</span><span class="nrb-stat-val" style="color:var(--red)" id="statNull">—</span></div>
-          <div class="nrb-stat-item"><span class="nrb-stat-label">Modified</span><span class="nrb-stat-val" style="color:var(--amber)" id="statModified">0</span></div>
-        </div>
-
-        <div class="nrb-fields-wrap" id="fieldsContainer">
-          <div class="nrb-empty">Paste JSON on the left and click Parse →</div>
-        </div>
-
-        <div class="nrb-bottom-bar">
-          <div class="nrb-status-banner" id="statusBanner"></div>
-          <button class="nrb-btn nrb-btn-amber nrb-btn-big" id="saveBtn" onclick="nrbSaveToDatabase()" disabled>
-            Save to Database
-          </button>
-        </div>
-      </div><!-- /nrb-right -->
-    </div><!-- /nrb-layout -->
-  </div><!-- /s-nrb -->
-
-  <!-- 9. Query Reporter -->
-  <div class="section" id="s-reporter">
-    <div class="section-header"><h2>Query Reporter</h2><span class="tag">SQL</span></div>
-    <div class="rpt-layout">
-
-      <!-- LEFT: Saved Queries list -->
-      <div class="rpt-panel">
-        <div class="rpt-panel-hdr">
-          <span>Saved Queries</span>
-          <button class="rpt-btn rpt-btn-dim" onclick="rptNewQuery()">+ New</button>
-        </div>
-        <div class="rpt-query-list" id="rpt-query-list">
-          <div class="spinner">Loading…</div>
-        </div>
-      </div>
-
-      <!-- RIGHT: Editor + Params + Results -->
-      <div class="rpt-panel">
-        <div class="rpt-panel-hdr">
-          <span>SQL Editor</span>
-          <div style="display:flex;gap:6px">
-            <button class="rpt-btn rpt-btn-green" onclick="rptRun()">&#9654; Run</button>
-            <button class="rpt-btn rpt-btn-dim" id="rpt-save-toggle" onclick="rptToggleSaveForm()">Save</button>
-          </div>
-        </div>
-
-        <!-- SQL textarea -->
-        <div style="padding:12px 14px;border-bottom:1px solid var(--border)">
-          <textarea class="rpt-textarea" id="rpt-sql" rows="8"
-            placeholder="SELECT * FROM market_log WHERE date >= :from_date LIMIT :limit"></textarea>
-        </div>
-
-        <!-- Inline save form (hidden by default) -->
-        <div id="rpt-save-form" style="display:none;padding:12px 14px;border-bottom:1px solid var(--border)">
-          <div class="rpt-save-box">
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
-              <div>
-                <div class="rpt-param-label">Name *</div>
-                <input class="rpt-input" id="rpt-save-name" type="text" placeholder="My Query" />
-              </div>
-              <div>
-                <div class="rpt-param-label">Description</div>
-                <input class="rpt-input" id="rpt-save-desc" type="text" placeholder="Optional…" />
-              </div>
-            </div>
-            <div style="display:flex;gap:8px;align-items:center">
-              <button class="rpt-btn rpt-btn-green" onclick="rptSaveQuery()">Save Query</button>
-              <button class="rpt-btn rpt-btn-dim" onclick="rptToggleSaveForm()">Cancel</button>
-              <span id="rpt-save-msg" style="font-size:11px;margin-left:4px"></span>
-            </div>
-          </div>
-        </div>
-
-        <!-- Dynamic param inputs -->
-        <div id="rpt-params-area" style="display:none;padding:12px 14px;border-bottom:1px solid var(--border)">
-          <div class="rpt-param-label" style="margin-bottom:8px">Parameters</div>
-          <div class="rpt-param-grid" id="rpt-params-grid"></div>
-        </div>
-
-        <!-- Download bar (shown after successful run) -->
-        <div id="rpt-dl-bar" style="display:none;padding:8px 14px;border-bottom:1px solid var(--border);align-items:center;gap:8px">
-          <span id="rpt-row-info" style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;flex:1"></span>
-          <button class="rpt-btn rpt-btn-blue" onclick="rptDownload('csv')">&#8595; CSV</button>
-          <button class="rpt-btn rpt-btn-blue" onclick="rptDownload('xlsx')">&#8595; XLSX</button>
-        </div>
-
-        <!-- Results table -->
-        <div style="padding:14px">
-          <div id="rpt-results"></div>
-        </div>
-      </div><!-- /rpt-right -->
-
-    </div><!-- /rpt-layout -->
-  </div><!-- /s-reporter -->
-
-</div><!-- /main -->
-
-<!-- ═══════════════════════ BOTTOM NAV (mobile) ═══════════════ -->
-<nav id="bottom-nav" aria-label="Mobile navigation">
-  <div class="bnav-inner">
-    <a href="#s-dashboard" class="active"><span class="bico">◈</span>Dash</a>
-    <a href="#s-marketlog"><span class="bico">≡</span>Log</a>
-    <a href="#s-learning"><span class="bico">◆</span>Learn</a>
-    <a href="#s-audit"><span class="bico">✓</span>Audit</a>
-    <a href="#s-council"><span class="bico">⚡</span>Cncl</a>
-    <a href="#s-trades"><span class="bico">◉</span>Trades</a>
-    <a href="#s-portfolio"><span class="bico">◎</span>Port</a>
-    <a href="#s-nrb"><span class="bico">⊞</span>NRB</a>
-    <a href="#s-reporter"><span class="bico">⊟</span>Query</a>
-  </div>
-</nav>
-
-<!-- ═══════════════════════ SCRIPTS ══════════════════════════ -->
-<script>
-/* ── Constants ───────────────────────────────────────────────────── */
-const API = `http://${window.location.hostname}:8766`;
-const chartInstances = {};
-
-/* ── Utils ───────────────────────────────────────────────────────── */
-function esc(s) {
-  if (s == null) return '—';
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-function v(s) { return (s == null || s === '') ? '—' : s; }
-function pnlClass(val) { const n = parseFloat(val); if (isNaN(n)) return ''; return n >= 0 ? 'pnl-pos' : 'pnl-neg'; }
-function badge(text, color) {
-  if (!text || text === '—') return '<span style="color:var(--muted)">—</span>';
-  return `<span class="badge badge-${color}">${esc(text)}</span>`;
-}
-function actionBadge(a) {
-  const m = {BUY:'green',WAIT:'blue',AVOID:'red',SELL:'amber'};
-  return badge(a, m[String(a||'').toUpperCase()] || 'grey');
-}
-function resultBadge(r) {
-  const m = {WIN:'green',LOSS:'red',PENDING:'amber',CORRECT:'blue',WRONG:'red'};
-  return badge(r, m[String(r||'').toUpperCase()] || 'grey');
-}
-function dirBadge(d) {
-  const m = {BULLISH:'green',BEARISH:'red',NEUTRAL:'grey',MIXED:'amber'};
-  return badge(d, m[String(d||'').toUpperCase()] || 'grey');
-}
-function scoreColor(val) { const n = parseFloat(val); if (isNaN(n)) return 'grey'; if (n>=6) return 'green'; if (n>=4) return 'amber'; return 'red'; }
-function confColor(c) { const m = {HIGH:'green',MEDIUM:'amber',LOW:'grey'}; return m[String(c||'').toUpperCase()] || 'grey'; }
-function destroyChart(id) { if (chartInstances[id]) { chartInstances[id].destroy(); delete chartInstances[id]; } }
-function setError(id, msg) { document.getElementById(id).innerHTML = `<div class="error-box">&#9888; ${esc(msg)}</div>`; }
-async function fetchJSON(path) {
-  const r = await fetch(API + path);
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return r.json();
-}
-const CHART_OPTS_BASE = {
-  responsive: true,
-  plugins: { legend: { display: false } },
-  scales: {
-    x: { ticks: { color:'#6b7280', font:{family:'JetBrains Mono',size:9}, maxTicksLimit:8 }, grid:{color:'#1a1a1a'} },
-    y: { ticks: { color:'#6b7280', font:{family:'JetBrains Mono',size:9} }, grid:{color:'#1a1a1a'} }
-  }
-};
-
-/* ── 1. Dashboard ────────────────────────────────────────────────── */
-async function loadSummary() {
-  try {
-    const d = await fetchJSON('/dashboard/summary');
-    renderSummary(d);
-  } catch(e) { setError('dash-content', 'Summary API error: ' + e.message); }
-}
-
-function renderSummary(d) {
-  const tj  = d.trade_journal || {};
-  const cap = parseFloat(d.paper_capital) || 0;
-  const unr = d.unrealized_pnl || 0;
-  const ms  = d.market_state || 'UNKNOWN';
-  const msC = {BULL:'green',BEAR:'red',SIDEWAYS:'amber',RANGING:'amber'}[String(ms).toUpperCase()] || 'grey';
-
-  const cards = `
+      const cards = `
   <div class="g4" style="margin-bottom:16px">
     <div class="card stat-card">
       <div class="label">Cash Balance</div>
@@ -776,118 +1901,118 @@ function renderSummary(d) {
     </div>
     <div class="card stat-card">
       <div class="label">Open Positions</div>
-      <div class="value">${d.open_positions||0}</div>
-      <div class="sub">unreal: <span class="${pnlClass(unr)}">${unr>=0?'+':''}${unr.toLocaleString(undefined,{maximumFractionDigits:0})}</span></div>
+      <div class="value">${d.open_positions || 0}</div>
+      <div class="sub">unreal: <span class="${pnlClass(unr)}">${unr >= 0 ? '+' : ''}${unr.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span></div>
     </div>
     <div class="card stat-card">
       <div class="label">Win Rate</div>
-      <div class="value" style="color:${tj.win_rate>=60?'var(--green)':tj.win_rate>=45?'var(--amber)':'var(--red)'}">
-        ${tj.win_rate||0}%
+      <div class="value" style="color:${tj.win_rate >= 60 ? 'var(--green)' : tj.win_rate >= 45 ? 'var(--amber)' : 'var(--red)'}">
+        ${tj.win_rate || 0}%
       </div>
-      <div class="sub">${tj.wins||0}W / ${tj.losses||0}L of ${tj.total_trades||0}</div>
+      <div class="sub">${tj.wins || 0}W / ${tj.losses || 0}L of ${tj.total_trades || 0}</div>
     </div>
     <div class="card stat-card">
       <div class="label">Avg Return</div>
-      <div class="value" style="color:${(tj.avg_return||0)>=0?'var(--green)':'var(--red)'}">
-        ${(tj.avg_return||0)>=0?'+':''}${tj.avg_return||0}%
+      <div class="value" style="color:${(tj.avg_return || 0) >= 0 ? 'var(--green)' : 'var(--red)'}">
+        ${(tj.avg_return || 0) >= 0 ? '+' : ''}${tj.avg_return || 0}%
       </div>
       <div class="sub">per trade</div>
     </div>
   </div>`;
 
-  const badges = `
+      const badges = `
   <div class="card" style="padding:10px 14px;display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:16px">
-    <span style="font-size:10px;color:var(--muted);text-transform:uppercase">State</span>${badge(ms,msC)}
-    <span style="font-size:10px;color:var(--muted);text-transform:uppercase;margin-left:4px">Nepal</span>${badge(d.nepal_score,scoreColor(d.nepal_score))}
-    <span style="font-size:10px;color:var(--muted);text-transform:uppercase;margin-left:4px">Geo</span>${badge(d.geo_score,scoreColor(d.geo_score))}
+    <span style="font-size:10px;color:var(--muted);text-transform:uppercase">State</span>${badge(ms, msC)}
+    <span style="font-size:10px;color:var(--muted);text-transform:uppercase;margin-left:4px">Nepal</span>${badge(d.nepal_score, scoreColor(d.nepal_score))}
+    <span style="font-size:10px;color:var(--muted);text-transform:uppercase;margin-left:4px">Geo</span>${badge(d.geo_score, scoreColor(d.geo_score))}
   </div>`;
 
-  const charts = `
+      const charts = `
   <div class="chart-box" style="margin-bottom:16px">
     <div class="chart-title">NEPSE Index — Last 30 Days</div>
     <canvas id="chart-nepse" height="75"></canvas>
   </div>`;
 
-  const signals = (d.recent_signals||[]);
-  const sigRows = signals.map(s => {
-    const oc = {WIN:'green',LOSS:'red',PENDING:'amber',CORRECT:'blue',WRONG:'red'}[String(s.outcome||'').toUpperCase()]||'grey';
-    return `<tr>
+      const signals = (d.recent_signals || []);
+      const sigRows = signals.map(s => {
+        const oc = { WIN: 'green', LOSS: 'red', PENDING: 'amber', CORRECT: 'blue', WRONG: 'red' }[String(s.outcome || '').toUpperCase()] || 'grey';
+        return `<tr>
       <td>${v(s.date)}</td>
       <td style="color:var(--green);font-weight:600">${v(s.symbol)}</td>
       <td>${actionBadge(s.action)}</td>
       <td>${v(s.confidence)}</td>
       <td style="color:var(--muted)">${v(s.primary_signal)}</td>
-      <td>${badge(s.outcome,oc)}</td>
+      <td>${badge(s.outcome, oc)}</td>
       <td><span class="${pnlClass(s.actual_pnl)}">${v(s.actual_pnl)}</span></td>
     </tr>`;
-  }).join('');
+      }).join('');
 
-  const recent = `
+      const recent = `
   <div class="card">
     <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Recent Signals</div>
     <div class="tbl-wrap"><table>
       <thead><tr><th>Date</th><th>Symbol</th><th>Action</th><th>Conf</th><th>Signal</th><th>Outcome</th><th>PnL</th></tr></thead>
-      <tbody>${sigRows||'<tr><td colspan="7" style="color:var(--muted)">No signals yet</td></tr>'}</tbody>
+      <tbody>${sigRows || '<tr><td colspan="7" style="color:var(--muted)">No signals yet</td></tr>'}</tbody>
     </table></div>
   </div>`;
 
-  document.getElementById('dash-content').innerHTML = cards + badges + charts + recent;
+      document.getElementById('dash-content').innerHTML = cards + badges + charts + recent;
 
-  destroyChart('chart-nepse');
-  const nepse = d.nepse_30d || [];
-  if (nepse.length) {
-    const ctx = document.getElementById('chart-nepse').getContext('2d');
-    chartInstances['chart-nepse'] = new Chart(ctx, {
-      type: 'line',
-      data: {
-        labels: nepse.map(r => r.date),
-        datasets: [{ data: nepse.map(r => parseFloat(r.current_value)||null), borderColor:'#00d97e', backgroundColor:'rgba(0,217,126,.06)', borderWidth:2, pointRadius:2, tension:.3, fill:true }]
-      },
-      options: { ...CHART_OPTS_BASE, plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label: ctx => ' '+String(ctx.parsed.y||'') } } } }
-    });
-  }
-}
+      destroyChart('chart-nepse');
+      const nepse = d.nepse_30d || [];
+      if (nepse.length) {
+        const ctx = document.getElementById('chart-nepse').getContext('2d');
+        chartInstances['chart-nepse'] = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: nepse.map(r => r.date),
+            datasets: [{ data: nepse.map(r => parseFloat(r.current_value) || null), borderColor: '#00d97e', backgroundColor: 'rgba(0,217,126,.06)', borderWidth: 2, pointRadius: 2, tension: .3, fill: true }]
+          },
+          options: { ...CHART_OPTS_BASE, plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ' ' + String(ctx.parsed.y || '') } } } }
+        });
+      }
+    }
 
-/* ── 2. Market Log ───────────────────────────────────────────────── */
-let _mlData = [];
+    /* ── 2. Market Log ───────────────────────────────────────────────── */
+    let _mlData = [];
 
-async function loadMarketLog() {
-  try {
-    const d = await fetchJSON('/dashboard/market_log');
-    _mlData = d.rows || [];
-    document.getElementById('ml-count').textContent = _mlData.length + ' rows';
-    renderMarketLog();
-  } catch(e) { setError('ml-content', 'Market log API error: ' + e.message); }
-}
+    async function loadMarketLog() {
+      try {
+        const d = await fetchJSON('/dashboard/market_log');
+        _mlData = d.rows || [];
+        document.getElementById('ml-count').textContent = _mlData.length + ' rows';
+        renderMarketLog();
+      } catch (e) { setError('ml-content', 'Market log API error: ' + e.message); }
+    }
 
-function renderMarketLog() {
-  const action   = document.getElementById('ml-action').value.toUpperCase();
-  const outcome  = document.getElementById('ml-outcome').value.toUpperCase();
-  const sector   = document.getElementById('ml-sector').value.trim().toLowerCase();
-  const dateFrom = document.getElementById('ml-date-from').value;
-  const dateTo   = document.getElementById('ml-date-to').value;
+    function renderMarketLog() {
+      const action = document.getElementById('ml-action').value.toUpperCase();
+      const outcome = document.getElementById('ml-outcome').value.toUpperCase();
+      const sector = document.getElementById('ml-sector').value.trim().toLowerCase();
+      const dateFrom = document.getElementById('ml-date-from').value;
+      const dateTo = document.getElementById('ml-date-to').value;
 
-  const rows = _mlData.filter(r => {
-    if (action  && String(r.action ||'').toUpperCase() !== action)  return false;
-    if (outcome && String(r.outcome||'').toUpperCase() !== outcome) return false;
-    if (sector  && !String(r.sector||'').toLowerCase().includes(sector)) return false;
-    if (dateFrom && (r.date||'') < dateFrom) return false;
-    if (dateTo   && (r.date||'') > dateTo)   return false;
-    return true;
-  });
+      const rows = _mlData.filter(r => {
+        if (action && String(r.action || '').toUpperCase() !== action) return false;
+        if (outcome && String(r.outcome || '').toUpperCase() !== outcome) return false;
+        if (sector && !String(r.sector || '').toLowerCase().includes(sector)) return false;
+        if (dateFrom && (r.date || '') < dateFrom) return false;
+        if (dateTo && (r.date || '') > dateTo) return false;
+        return true;
+      });
 
-  if (!rows.length) {
-    document.getElementById('ml-content').innerHTML = '<div style="color:var(--muted);padding:16px 0">No rows match filters.</div>';
-    return;
-  }
+      if (!rows.length) {
+        document.getElementById('ml-content').innerHTML = '<div style="color:var(--muted);padding:16px 0">No rows match filters.</div>';
+        return;
+      }
 
-  const trs = rows.map((r,i) => {
-    const act = String(r.action||'').toUpperCase();
-    const oc  = String(r.outcome||'').toUpperCase();
-    let rc = '';
-    if (act==='BUY'&&oc==='WIN') rc='row-win'; else if (act==='BUY'&&oc==='LOSS') rc='row-loss';
-    else if (act==='WAIT'&&(oc==='CORRECT'||oc==='WIN')) rc='row-wait'; else if (oc==='PENDING') rc='row-pending';
-    return `
+      const trs = rows.map((r, i) => {
+        const act = String(r.action || '').toUpperCase();
+        const oc = String(r.outcome || '').toUpperCase();
+        let rc = '';
+        if (act === 'BUY' && oc === 'WIN') rc = 'row-win'; else if (act === 'BUY' && oc === 'LOSS') rc = 'row-loss';
+        else if (act === 'WAIT' && (oc === 'CORRECT' || oc === 'WIN')) rc = 'row-wait'; else if (oc === 'PENDING') rc = 'row-pending';
+        return `
     <tr class="clickable-row ${rc}" onclick="toggleMlExpand(this,${i})">
       <td>${v(r.date)}</td>
       <td style="color:var(--green);font-weight:600">${v(r.symbol)}</td>
@@ -903,102 +2028,102 @@ function renderMarketLog() {
         <div class="expand-inner">
           <div>
             <div style="font-size:10px;color:var(--muted);margin-bottom:4px">REASONING</div>
-            <div class="expand-pre">${esc(r.reasoning)||'—'}</div>
+            <div class="expand-pre">${esc(r.reasoning) || '—'}</div>
           </div>
           <div>
             <div style="font-size:10px;color:var(--muted);margin-bottom:4px">EVAL / CONTEXT</div>
             <div class="expand-pre">${[
-              r.eval_date&&'Eval: '+r.eval_date,
-              r.eval_market_state&&'State: '+r.eval_market_state,
-              r.eval_nepal_score&&'Nepal: '+r.eval_nepal_score,
-              r.eval_geo_score&&'Geo: '+r.eval_geo_score,
-              r.eval_price_change_pct&&'Price chg: '+r.eval_price_change_pct+'%',
-              r.eval_key_news&&'News: '+r.eval_key_news,
-              r.wait_condition&&'Wait: '+r.wait_condition,
-            ].filter(Boolean).map(esc).join('\n')||'—'}</div>
+            r.eval_date && 'Eval: ' + r.eval_date,
+            r.eval_market_state && 'State: ' + r.eval_market_state,
+            r.eval_nepal_score && 'Nepal: ' + r.eval_nepal_score,
+            r.eval_geo_score && 'Geo: ' + r.eval_geo_score,
+            r.eval_price_change_pct && 'Price chg: ' + r.eval_price_change_pct + '%',
+            r.eval_key_news && 'News: ' + r.eval_key_news,
+            r.wait_condition && 'Wait: ' + r.wait_condition,
+          ].filter(Boolean).map(esc).join('\n') || '—'}</div>
           </div>
         </div>
       </td>
     </tr>`;
-  }).join('');
+      }).join('');
 
-  document.getElementById('ml-content').innerHTML = `
+      document.getElementById('ml-content').innerHTML = `
     <div class="tbl-wrap"><table>
       <thead><tr><th>Date</th><th>Symbol</th><th>Sector</th><th>Action</th><th>Conf</th><th>Primary Signal</th><th>Outcome</th><th>PnL</th></tr></thead>
       <tbody>${trs}</tbody>
     </table></div>`;
-}
+    }
 
-function toggleMlExpand(row, i) {
-  const exp = document.getElementById('ml-expand-' + i);
-  if (exp) exp.style.display = exp.style.display === 'none' ? 'table-row' : 'none';
-}
+    function toggleMlExpand(row, i) {
+      const exp = document.getElementById('ml-expand-' + i);
+      if (exp) exp.style.display = exp.style.display === 'none' ? 'table-row' : 'none';
+    }
 
-/* ── 3. Learning Hub ─────────────────────────────────────────────── */
-async function loadLearningHub() {
-  try {
-    const d = await fetchJSON('/dashboard/learning_hub');
-    renderLearningHub(d.lessons||[], d.superseded_lessons||{});
-  } catch(e) { setError('lh-content', 'Learning hub API error: ' + e.message); }
-}
+    /* ── 3. Learning Hub ─────────────────────────────────────────────── */
+    async function loadLearningHub() {
+      try {
+        const d = await fetchJSON('/dashboard/learning_hub');
+        renderLearningHub(d.lessons || [], d.superseded_lessons || {});
+      } catch (e) { setError('lh-content', 'Learning hub API error: ' + e.message); }
+    }
 
-function renderLearningHub(lessons, superseded) {
-  if (!lessons.length) { document.getElementById('lh-content').innerHTML = '<div style="color:var(--muted)">No active lessons.</div>'; return; }
-  const groups = {};
-  for (const l of lessons) { const t=l.lesson_type||'UNCATEGORISED'; if(!groups[t]) groups[t]=[]; groups[t].push(l); }
-  const order = {HIGH:0,MEDIUM:1,LOW:2};
-  for (const t of Object.keys(groups)) groups[t].sort((a,b)=>(order[String(a.confidence_level||'').toUpperCase()]??3)-(order[String(b.confidence_level||'').toUpperCase()]??3));
+    function renderLearningHub(lessons, superseded) {
+      if (!lessons.length) { document.getElementById('lh-content').innerHTML = '<div style="color:var(--muted)">No active lessons.</div>'; return; }
+      const groups = {};
+      for (const l of lessons) { const t = l.lesson_type || 'UNCATEGORISED'; if (!groups[t]) groups[t] = []; groups[t].push(l); }
+      const order = { HIGH: 0, MEDIUM: 1, LOW: 2 };
+      for (const t of Object.keys(groups)) groups[t].sort((a, b) => (order[String(a.confidence_level || '').toUpperCase()] ?? 3) - (order[String(b.confidence_level || '').toUpperCase()] ?? 3));
 
-  const tabIds = Object.keys(groups);
-  const tabBar = tabIds.map((t,i) =>
-    `<button class="tab-btn ${i===0?'active':''}" onclick="switchLhTab('${t}',this)">${esc(t)} <span style="color:var(--muted)">(${groups[t].length})</span></button>`
-  ).join('');
+      const tabIds = Object.keys(groups);
+      const tabBar = tabIds.map((t, i) =>
+        `<button class="tab-btn ${i === 0 ? 'active' : ''}" onclick="switchLhTab('${t}',this)">${esc(t)} <span style="color:var(--muted)">(${groups[t].length})</span></button>`
+      ).join('');
 
-  const panes = tabIds.map((t,i) => {
-    const cards = groups[t].map(l => {
-      const cl = String(l.confidence_level||'').toUpperCase();
-      const supId = l.supersedes_lesson_id;
-      const supLink = supId&&superseded[String(supId)]
-        ? `<span style="color:var(--amber);font-size:10px">&#8657; supersedes #${supId}: ${esc(superseded[String(supId)].condition||'').substring(0,50)}</span>`
-        : '';
-      return `
-      <div class="lesson-card conf-${cl.toLowerCase()||'low'}">
+      const panes = tabIds.map((t, i) => {
+        const cards = groups[t].map(l => {
+          const cl = String(l.confidence_level || '').toUpperCase();
+          const supId = l.supersedes_lesson_id;
+          const supLink = supId && superseded[String(supId)]
+            ? `<span style="color:var(--amber);font-size:10px">&#8657; supersedes #${supId}: ${esc(superseded[String(supId)].condition || '').substring(0, 50)}</span>`
+            : '';
+          return `
+      <div class="lesson-card conf-${cl.toLowerCase() || 'low'}">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:8px;flex-wrap:wrap">
           <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-            ${badge(cl,confColor(cl))} ${badge(l.action,'blue')} ${badge(l.source,'grey')}
+            ${badge(cl, confColor(cl))} ${badge(l.action, 'blue')} ${badge(l.source, 'grey')}
           </div>
           <span style="font-size:10px;color:var(--muted)">trades:${v(l.trade_count)} #${v(l.id)}</span>
         </div>
         <div style="font-size:12px;margin-bottom:5px"><strong>Condition:</strong> ${esc(l.condition)}</div>
         <div style="font-size:12px;color:var(--muted)"><strong>Finding:</strong> ${esc(l.finding)}</div>
-        ${supLink?`<div style="margin-top:6px">${supLink}</div>`:''}
+        ${supLink ? `<div style="margin-top:6px">${supLink}</div>` : ''}
       </div>`;
-    }).join('');
-    return `<div id="lh-pane-${t}" class="tab-pane ${i===0?'active':''}">${cards}</div>`;
-  }).join('');
+        }).join('');
+        return `<div id="lh-pane-${t}" class="tab-pane ${i === 0 ? 'active' : ''}">${cards}</div>`;
+      }).join('');
 
-  document.getElementById('lh-content').innerHTML = `<div class="tab-bar">${tabBar}</div>${panes}`;
-}
+      document.getElementById('lh-content').innerHTML = `<div class="tab-bar">${tabBar}</div>${panes}`;
+    }
 
-function switchLhTab(id, btn) {
-  document.querySelectorAll('#lh-content .tab-pane').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('#lh-content .tab-btn').forEach(b => b.classList.remove('active'));
-  document.getElementById('lh-pane-'+id).classList.add('active');
-  btn.classList.add('active');
-}
+    function switchLhTab(id, btn) {
+      document.querySelectorAll('#lh-content .tab-pane').forEach(p => p.classList.remove('active'));
+      document.querySelectorAll('#lh-content .tab-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById('lh-pane-' + id).classList.add('active');
+      btn.classList.add('active');
+    }
 
-/* ── 4. Weekly Audit ─────────────────────────────────────────────── */
-async function loadAudit() {
-  try {
-    const d = await fetchJSON('/dashboard/audit');
-    renderAudit(d.rows||[]);
-  } catch(e) { setError('audit-content', 'Audit API error: ' + e.message); }
-}
+    /* ── 4. Weekly Audit ─────────────────────────────────────────────── */
+    async function loadAudit() {
+      try {
+        const d = await fetchJSON('/dashboard/audit');
+        renderAudit(d.rows || []);
+      } catch (e) { setError('audit-content', 'Audit API error: ' + e.message); }
+    }
 
-function renderAudit(rows) {
-  if (!rows.length) { document.getElementById('audit-content').innerHTML = '<div style="color:var(--muted)">No audit data yet.</div>'; return; }
+    function renderAudit(rows) {
+      if (!rows.length) { document.getElementById('audit-content').innerHTML = '<div style="color:var(--muted)">No audit data yet.</div>'; return; }
 
-  const trs = rows.map(r => `
+      const trs = rows.map(r => `
     <tr>
       <td style="font-weight:600;color:var(--green)">${v(r.review_week)}</td>
       <td>${v(r.buy_count)}</td>
@@ -1008,14 +2133,14 @@ function renderAudit(rows) {
       <td>${v(r.wait_accuracy)}</td>
       <td>${v(r.avoid_count)}</td>
       <td>${v(r.overall_accuracy)}</td>
-      <td style="max-width:220px;color:var(--muted);font-size:11px">${esc(r.audit_summary||'').substring(0,120)}</td>
+      <td style="max-width:220px;color:var(--muted);font-size:11px">${esc(r.audit_summary || '').substring(0, 120)}</td>
     </tr>`).join('');
 
-  const labels   = rows.map(r => r.review_week||'');
-  const winRates = rows.map(r => parseFloat(r.buy_win_rate)||null);
-  const waitAcc  = rows.map(r => parseFloat(r.wait_accuracy)||null);
+      const labels = rows.map(r => r.review_week || '');
+      const winRates = rows.map(r => parseFloat(r.buy_win_rate) || null);
+      const waitAcc = rows.map(r => parseFloat(r.wait_accuracy) || null);
 
-  document.getElementById('audit-content').innerHTML = `
+      document.getElementById('audit-content').innerHTML = `
     <div class="g2" style="margin-bottom:18px">
       <div class="chart-box"><div class="chart-title">Buy Win Rate</div><canvas id="chart-audit-wr" height="80"></canvas></div>
       <div class="chart-box"><div class="chart-title">Wait Accuracy</div><canvas id="chart-audit-wa" height="80"></canvas></div>
@@ -1025,37 +2150,37 @@ function renderAudit(rows) {
       <tbody>${trs}</tbody>
     </table></div>`;
 
-  const mkChart = (id, data, color) => {
-    destroyChart(id);
-    chartInstances[id] = new Chart(document.getElementById(id).getContext('2d'), {
-      type:'line',
-      data:{ labels, datasets:[{ data, borderColor:color, backgroundColor:color+'18', borderWidth:2, pointRadius:3, tension:.3, fill:true }] },
-      options: CHART_OPTS_BASE
-    });
-  };
-  mkChart('chart-audit-wr', winRates, '#00d97e');
-  mkChart('chart-audit-wa', waitAcc,  '#60a5fa');
-}
+      const mkChart = (id, data, color) => {
+        destroyChart(id);
+        chartInstances[id] = new Chart(document.getElementById(id).getContext('2d'), {
+          type: 'line',
+          data: { labels, datasets: [{ data, borderColor: color, backgroundColor: color + '18', borderWidth: 2, pointRadius: 3, tension: .3, fill: true }] },
+          options: CHART_OPTS_BASE
+        });
+      };
+      mkChart('chart-audit-wr', winRates, '#00d97e');
+      mkChart('chart-audit-wa', waitAcc, '#60a5fa');
+    }
 
-/* ── 5. Monthly Council ──────────────────────────────────────────── */
-async function loadCouncil() {
-  try {
-    const d = await fetchJSON('/dashboard/council');
-    renderCouncil(d.log||[], d.agenda||[], d.checklist||[]);
-  } catch(e) { setError('council-content', 'Council API error: ' + e.message); }
-}
+    /* ── 5. Monthly Council ──────────────────────────────────────────── */
+    async function loadCouncil() {
+      try {
+        const d = await fetchJSON('/dashboard/council');
+        renderCouncil(d.log || [], d.agenda || [], d.checklist || []);
+      } catch (e) { setError('council-content', 'Council API error: ' + e.message); }
+    }
 
-function renderCouncil(logRows, agendaRows, checklistRows) {
-  if (!logRows.length && !agendaRows.length) { document.getElementById('council-content').innerHTML = '<div style="color:var(--muted)">No council data yet.</div>'; return; }
+    function renderCouncil(logRows, agendaRows, checklistRows) {
+      if (!logRows.length && !agendaRows.length) { document.getElementById('council-content').innerHTML = '<div style="color:var(--muted)">No council data yet.</div>'; return; }
 
-  const months = [...new Set([...logRows.map(r=>r.run_month),...agendaRows.map(r=>r.run_month)])].filter(Boolean).sort((a,b)=>b.localeCompare(a));
+      const months = [...new Set([...logRows.map(r => r.run_month), ...agendaRows.map(r => r.run_month)])].filter(Boolean).sort((a, b) => b.localeCompare(a));
 
-  const html = months.map((month, mi) => {
-    const mLog  = logRows.filter(r=>r.run_month===month);
-    const mCl   = checklistRows.filter(r=>r.run_month===month);
-    const cl    = mCl[0]||{};
+      const html = months.map((month, mi) => {
+        const mLog = logRows.filter(r => r.run_month === month);
+        const mCl = checklistRows.filter(r => r.run_month === month);
+        const cl = mCl[0] || {};
 
-    const checklistHtml = cl.stop_trigger||cl.go_trigger ? `
+        const checklistHtml = cl.stop_trigger || cl.go_trigger ? `
       <div class="g2s" style="margin-bottom:14px">
         <div class="card" style="border-left:3px solid var(--red)">
           <div style="font-size:10px;color:var(--muted);margin-bottom:4px">STOP TRIGGER</div>
@@ -1067,49 +2192,49 @@ function renderCouncil(logRows, agendaRows, checklistRows) {
         </div>
       </div>` : '';
 
-    const byAgenda = {};
-    for (const r of mLog) { const k=r.agenda_item||r.stage||'General'; if(!byAgenda[k]) byAgenda[k]=[]; byAgenda[k].push(r); }
-    const items = Object.keys(byAgenda);
-    if (!items.length) return '';
+        const byAgenda = {};
+        for (const r of mLog) { const k = r.agenda_item || r.stage || 'General'; if (!byAgenda[k]) byAgenda[k] = []; byAgenda[k].push(r); }
+        const items = Object.keys(byAgenda);
+        if (!items.length) return '';
 
-    const tabBar = items.map((item,ti) =>
-      `<button class="tab-btn ${ti===0?'active':''}" onclick="switchCouncilTab('${month}','${ti}',this)">${esc(item).substring(0,28)}</button>`
-    ).join('');
+        const tabBar = items.map((item, ti) =>
+          `<button class="tab-btn ${ti === 0 ? 'active' : ''}" onclick="switchCouncilTab('${month}','${ti}',this)">${esc(item).substring(0, 28)}</button>`
+        ).join('');
 
-    const tabPanes = items.map((item,ti) => {
-      const modelRows = byAgenda[item];
-      const dirs = [...new Set(modelRows.map(r=>String(r.direction||'').toUpperCase()).filter(Boolean))];
-      const hasSplit = dirs.length > 1;
+        const tabPanes = items.map((item, ti) => {
+          const modelRows = byAgenda[item];
+          const dirs = [...new Set(modelRows.map(r => String(r.direction || '').toUpperCase()).filter(Boolean))];
+          const hasSplit = dirs.length > 1;
 
-      const mCards = modelRows.map(r => {
-        const confVal = parseFloat(r.confidence)||0;
-        const confPct = Math.min(100, confVal>1?confVal:confVal*100);
-        return `
+          const mCards = modelRows.map(r => {
+            const confVal = parseFloat(r.confidence) || 0;
+            const confPct = Math.min(100, confVal > 1 ? confVal : confVal * 100);
+            return `
         <div class="card" style="margin-bottom:10px">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px">
             <span style="font-weight:600;color:var(--blue)">${esc(r.model)}</span>
-            ${dirBadge(r.direction)} ${badge(r.stage,'grey')}
+            ${dirBadge(r.direction)} ${badge(r.stage, 'grey')}
           </div>
           <div style="margin-bottom:8px">
             <div class="conf-bar-wrap">
               <span style="font-size:10px;color:var(--muted);width:60px;flex-shrink:0">Conf</span>
               <div class="conf-bar"><div class="conf-bar-fill" style="width:${confPct}%"></div></div>
-              <span style="font-size:11px">${r.confidence||'—'}</span>
+              <span style="font-size:11px">${r.confidence || '—'}</span>
             </div>
           </div>
           <div style="font-size:11px;margin-bottom:4px"><strong>Key driver:</strong> ${esc(r.key_driver)}</div>
           <div style="font-size:11px;color:var(--muted)"><strong>Risk:</strong> ${esc(r.risk_factor)}</div>
-          ${r.full_response?`<details style="margin-top:8px"><summary style="cursor:pointer;font-size:10px;color:var(--muted)">Full response &#9654;</summary><pre class="expand-pre" style="margin-top:8px;background:var(--bg);padding:10px;border-radius:4px">${esc(r.full_response)}</pre></details>`:''}
+          ${r.full_response ? `<details style="margin-top:8px"><summary style="cursor:pointer;font-size:10px;color:var(--muted)">Full response &#9654;</summary><pre class="expand-pre" style="margin-top:8px;background:var(--bg);padding:10px;border-radius:4px">${esc(r.full_response)}</pre></details>` : ''}
         </div>`;
-      }).join('');
+          }).join('');
 
-      return `<div id="council-${month}-${ti}" class="tab-pane ${ti===0?'active':''}">
-        ${hasSplit?`<div style="margin-bottom:10px"><span class="split-badge">&#9889; SPLIT</span></div>`:''}
+          return `<div id="council-${month}-${ti}" class="tab-pane ${ti === 0 ? 'active' : ''}">
+        ${hasSplit ? `<div style="margin-bottom:10px"><span class="split-badge">&#9889; SPLIT</span></div>` : ''}
         ${mCards}
       </div>`;
-    }).join('');
+        }).join('');
 
-    return `
+        return `
     <div style="margin-bottom:8px">
       <div class="accordion-header" onclick="toggleAccordion('council-body-${mi}',this)">
         <h3>${esc(month)}</h3>
@@ -1121,79 +2246,79 @@ function renderCouncil(logRows, agendaRows, checklistRows) {
         ${tabPanes}
       </div>
     </div>`;
-  }).join('');
+      }).join('');
 
-  document.getElementById('council-content').innerHTML = html || '<div style="color:var(--muted)">No data.</div>';
-}
+      document.getElementById('council-content').innerHTML = html || '<div style="color:var(--muted)">No data.</div>';
+    }
 
-function switchCouncilTab(month, ti, btn) {
-  const body = btn.closest('.accordion-body');
-  body.querySelectorAll('.tab-pane').forEach(p=>p.classList.remove('active'));
-  body.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
-  document.getElementById('council-'+month+'-'+ti).classList.add('active');
-  btn.classList.add('active');
-}
+    function switchCouncilTab(month, ti, btn) {
+      const body = btn.closest('.accordion-body');
+      body.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+      body.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById('council-' + month + '-' + ti).classList.add('active');
+      btn.classList.add('active');
+    }
 
-function toggleAccordion(id, header) {
-  const body = document.getElementById(id);
-  const wasHidden = body.classList.contains('hidden');
-  body.classList.toggle('hidden', !wasHidden);
-  const span = header.querySelector('span:last-child');
-  span.textContent = wasHidden
-    ? span.textContent.replace('▼','▲').replace('&#9660;','▲')
-    : span.textContent.replace('▲','▼').replace('&#9650;','▼');
-}
+    function toggleAccordion(id, header) {
+      const body = document.getElementById(id);
+      const wasHidden = body.classList.contains('hidden');
+      body.classList.toggle('hidden', !wasHidden);
+      const span = header.querySelector('span:last-child');
+      span.textContent = wasHidden
+        ? span.textContent.replace('▼', '▲').replace('&#9660;', '▲')
+        : span.textContent.replace('▲', '▼').replace('&#9650;', '▼');
+    }
 
-/* ── 6. Trade Journal ────────────────────────────────────────────── */
-async function loadTrades() {
-  try {
-    const d = await fetchJSON('/dashboard/trades');
-    renderTrades(d.trade_journal||[]);
-  } catch(e) { setError('trades-content', 'Trades API error: ' + e.message); }
-}
+    /* ── 6. Trade Journal ────────────────────────────────────────────── */
+    async function loadTrades() {
+      try {
+        const d = await fetchJSON('/dashboard/trades');
+        renderTrades(d.trade_journal || []);
+      } catch (e) { setError('trades-content', 'Trades API error: ' + e.message); }
+    }
 
-function renderTrades(rows) {
-  if (!rows.length) { document.getElementById('trades-content').innerHTML = '<div style="color:var(--muted)">No trades yet.</div>'; return; }
+    function renderTrades(rows) {
+      if (!rows.length) { document.getElementById('trades-content').innerHTML = '<div style="color:var(--muted)">No trades yet.</div>'; return; }
 
-  const total = rows.length;
-  const wins  = rows.filter(r=>String(r.result||'').toUpperCase()==='WIN').length;
-  const losses= rows.filter(r=>String(r.result||'').toUpperCase()==='LOSS').length;
-  const wr    = total ? (wins/total*100).toFixed(1) : 0;
-  let totalPnl = 0;
-  rows.forEach(r=>{ totalPnl += parseFloat(r.pnl_npr)||0; });
+      const total = rows.length;
+      const wins = rows.filter(r => String(r.result || '').toUpperCase() === 'WIN').length;
+      const losses = rows.filter(r => String(r.result || '').toUpperCase() === 'LOSS').length;
+      const wr = total ? (wins / total * 100).toFixed(1) : 0;
+      let totalPnl = 0;
+      rows.forEach(r => { totalPnl += parseFloat(r.pnl_npr) || 0; });
 
-  const summary = `
+      const summary = `
   <div class="g5" style="margin-bottom:16px">
     <div class="card stat-card"><div class="label">Trades</div><div class="value">${total}</div></div>
     <div class="card stat-card"><div class="label">Wins</div><div class="value" style="color:var(--green)">${wins}</div></div>
     <div class="card stat-card"><div class="label">Losses</div><div class="value" style="color:var(--red)">${losses}</div></div>
-    <div class="card stat-card"><div class="label">Win Rate</div><div class="value" style="color:${wr>=60?'var(--green)':wr>=45?'var(--amber)':'var(--red)'}">${wr}%</div></div>
-    <div class="card stat-card"><div class="label">Total PnL</div><div class="value ${totalPnl>=0?'pnl-pos':'pnl-neg'}" style="font-size:14px">${totalPnl>=0?'+':''}${totalPnl.toLocaleString(undefined,{maximumFractionDigits:0})}</div></div>
+    <div class="card stat-card"><div class="label">Win Rate</div><div class="value" style="color:${wr >= 60 ? 'var(--green)' : wr >= 45 ? 'var(--amber)' : 'var(--red)'}">${wr}%</div></div>
+    <div class="card stat-card"><div class="label">Total PnL</div><div class="value ${totalPnl >= 0 ? 'pnl-pos' : 'pnl-neg'}" style="font-size:14px">${totalPnl >= 0 ? '+' : ''}${totalPnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div></div>
   </div>`;
 
-  const closed = rows.filter(r=>r.return_pct&&r.return_pct!=='').reverse();
-  let cumRet = 0;
-  const cumData   = closed.map(r=>{ cumRet+=parseFloat(r.return_pct)||0; return cumRet; });
-  const cumLabels = closed.map(r=>r.symbol||'');
+      const closed = rows.filter(r => r.return_pct && r.return_pct !== '').reverse();
+      let cumRet = 0;
+      const cumData = closed.map(r => { cumRet += parseFloat(r.return_pct) || 0; return cumRet; });
+      const cumLabels = closed.map(r => r.symbol || '');
 
-  const trs = rows.map(r => {
-    const res = String(r.result||'').toUpperCase();
-    const rc  = res==='WIN'?'row-win':res==='LOSS'?'row-loss':'row-pending';
-    return `<tr class="${rc}">
+      const trs = rows.map(r => {
+        const res = String(r.result || '').toUpperCase();
+        const rc = res === 'WIN' ? 'row-win' : res === 'LOSS' ? 'row-loss' : 'row-pending';
+        return `<tr class="${rc}">
       <td style="color:var(--green);font-weight:600">${v(r.symbol)}</td>
       <td>${v(r.sector)}</td>
       <td>${v(r.entry_date)}</td>
       <td>${v(r.exit_date)}</td>
       <td>${resultBadge(r.result)}</td>
-      <td><span class="${pnlClass(r.return_pct)}">${v(r.return_pct)}${r.return_pct&&r.return_pct!=='—'?'%':''}</span></td>
+      <td><span class="${pnlClass(r.return_pct)}">${v(r.return_pct)}${r.return_pct && r.return_pct !== '—' ? '%' : ''}</span></td>
       <td><span class="${pnlClass(r.pnl_npr)}">${v(r.pnl_npr)}</span></td>
       <td>${v(r.hold_days_actual)}</td>
       <td style="color:var(--muted);max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${v(r.primary_signal)}</td>
       <td style="color:var(--red);font-size:11px">${v(r.loss_cause)}</td>
     </tr>`;
-  }).join('');
+      }).join('');
 
-  document.getElementById('trades-content').innerHTML = `
+      document.getElementById('trades-content').innerHTML = `
     ${summary}
     <div class="chart-box" style="margin-bottom:16px">
       <div class="chart-title">Cumulative Return %</div>
@@ -1204,176 +2329,176 @@ function renderTrades(rows) {
       <tbody>${trs}</tbody>
     </table></div>`;
 
-  destroyChart('chart-cumret');
-  if (cumData.length) {
-    chartInstances['chart-cumret'] = new Chart(document.getElementById('chart-cumret').getContext('2d'), {
-      type:'line',
-      data:{ labels:cumLabels, datasets:[{ data:cumData, borderColor:cumRet>=0?'#00d97e':'#ef4444', backgroundColor:(cumRet>=0?'#00d97e':'#ef4444')+'18', borderWidth:2, pointRadius:2, tension:.2, fill:true }] },
-      options: { ...CHART_OPTS_BASE, scales:{ ...CHART_OPTS_BASE.scales, y:{ ...CHART_OPTS_BASE.scales.y, ticks:{ ...CHART_OPTS_BASE.scales.y.ticks, callback:v=>v+'%' } } } }
-    });
-  }
-}
+      destroyChart('chart-cumret');
+      if (cumData.length) {
+        chartInstances['chart-cumret'] = new Chart(document.getElementById('chart-cumret').getContext('2d'), {
+          type: 'line',
+          data: { labels: cumLabels, datasets: [{ data: cumData, borderColor: cumRet >= 0 ? '#00d97e' : '#ef4444', backgroundColor: (cumRet >= 0 ? '#00d97e' : '#ef4444') + '18', borderWidth: 2, pointRadius: 2, tension: .2, fill: true }] },
+          options: { ...CHART_OPTS_BASE, scales: { ...CHART_OPTS_BASE.scales, y: { ...CHART_OPTS_BASE.scales.y, ticks: { ...CHART_OPTS_BASE.scales.y.ticks, callback: v => v + '%' } } } }
+        });
+      }
+    }
 
-/* ── 7. Portfolio ────────────────────────────────────────────────── */
-async function loadPortfolio() {
-  try {
-    const d = await fetchJSON('/dashboard/portfolio');
-    renderPortfolio(d.open_positions||[], d.cash_balance);
-  } catch(e) { setError('port-content', 'Portfolio API error: ' + e.message); }
-}
+    /* ── 7. Portfolio ────────────────────────────────────────────────── */
+    async function loadPortfolio() {
+      try {
+        const d = await fetchJSON('/dashboard/portfolio');
+        renderPortfolio(d.open_positions || [], d.cash_balance);
+      } catch (e) { setError('port-content', 'Portfolio API error: ' + e.message); }
+    }
 
-function renderPortfolio(positions, cash) {
-  const cashVal   = parseFloat(cash)||0;
-  let stocksVal   = 0;
-  positions.forEach(p=>{ stocksVal += (parseFloat(p.total_shares)||0)*(parseFloat(p.current_ltp)||0); });
-  const totalVal  = cashVal + stocksVal;
+    function renderPortfolio(positions, cash) {
+      const cashVal = parseFloat(cash) || 0;
+      let stocksVal = 0;
+      positions.forEach(p => { stocksVal += (parseFloat(p.total_shares) || 0) * (parseFloat(p.current_ltp) || 0); });
+      const totalVal = cashVal + stocksVal;
 
-  const summary = `
+      const summary = `
   <div class="g3" style="margin-bottom:16px">
     <div class="card stat-card"><div class="label">Cash Balance</div><div class="value" style="font-size:16px">NPR ${cashVal.toLocaleString()}</div></div>
-    <div class="card stat-card"><div class="label">Stocks Value</div><div class="value" style="font-size:16px">NPR ${stocksVal.toLocaleString(undefined,{maximumFractionDigits:0})}</div></div>
-    <div class="card stat-card"><div class="label">Total Portfolio</div><div class="value" style="font-size:16px;color:var(--amber)">NPR ${totalVal.toLocaleString(undefined,{maximumFractionDigits:0})}</div></div>
+    <div class="card stat-card"><div class="label">Stocks Value</div><div class="value" style="font-size:16px">NPR ${stocksVal.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div></div>
+    <div class="card stat-card"><div class="label">Total Portfolio</div><div class="value" style="font-size:16px;color:var(--amber)">NPR ${totalVal.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div></div>
   </div>`;
 
-  if (!positions.length) { document.getElementById('port-content').innerHTML = summary + '<div style="color:var(--muted)">No open positions.</div>'; return; }
+      if (!positions.length) { document.getElementById('port-content').innerHTML = summary + '<div style="color:var(--muted)">No open positions.</div>'; return; }
 
-  const trs = positions.map(p => {
-    const unrPct = p.unrealized_pnl_pct;
-    const unrNpr = p.unrealized_pnl_npr;
-    return `<tr>
+      const trs = positions.map(p => {
+        const unrPct = p.unrealized_pnl_pct;
+        const unrNpr = p.unrealized_pnl_npr;
+        return `<tr>
       <td style="color:var(--green);font-weight:600">${v(p.symbol)}</td>
       <td>${v(p.first_buy_date)}</td>
       <td>${v(p.total_shares)}</td>
       <td>${v(p.wacc)}</td>
       <td style="color:var(--blue)">${v(p.current_ltp)}</td>
-      <td><span class="${pnlClass(unrPct)}">${unrPct!=null?(unrPct>=0?'+':'')+unrPct+'%':'—'}</span></td>
-      <td><span class="${pnlClass(unrNpr)}">${unrNpr!=null?(unrNpr>=0?'+':'')+unrNpr.toLocaleString(undefined,{maximumFractionDigits:0}):'—'}</span></td>
+      <td><span class="${pnlClass(unrPct)}">${unrPct != null ? (unrPct >= 0 ? '+' : '') + unrPct + '%' : '—'}</span></td>
+      <td><span class="${pnlClass(unrNpr)}">${unrNpr != null ? (unrNpr >= 0 ? '+' : '') + unrNpr.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}</span></td>
       <td>${v(p.total_cost)}</td>
     </tr>`;
-  }).join('');
+      }).join('');
 
-  document.getElementById('port-content').innerHTML = `
+      document.getElementById('port-content').innerHTML = `
     ${summary}
     <div class="tbl-wrap"><table>
       <thead><tr><th>Symbol</th><th>Entry</th><th>Shares</th><th>WACC</th><th>LTP</th><th>Unreal%</th><th>Unreal NPR</th><th>Cost</th></tr></thead>
       <tbody>${trs}</tbody>
     </table></div>`;
-}
-
-/* ── Sidebar / bottom-nav active tracking ────────────────────────── */
-const NAV_SECTIONS = ['s-dashboard','s-marketlog','s-learning','s-audit','s-council','s-trades','s-portfolio','s-nrb','s-reporter'];
-
-function updateActiveNav() {
-  let current = NAV_SECTIONS[0];
-  for (const id of NAV_SECTIONS) {
-    const el = document.getElementById(id);
-    if (el && el.getBoundingClientRect().top <= 100) current = id;
-  }
-  document.querySelectorAll('#sidebar nav a[href^="#"], #bottom-nav a').forEach(a => {
-    a.classList.toggle('active', a.getAttribute('href') === '#' + current);
-  });
-}
-window.addEventListener('scroll', updateActiveNav, { passive: true });
-
-/* ── Init & auto-refresh ─────────────────────────────────────────── */
-async function refreshAll() {
-  document.getElementById('last-refresh').textContent =
-    new Date().toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
-  await Promise.allSettled([
-    loadSummary(), loadMarketLog(), loadLearningHub(),
-    loadAudit(), loadCouncil(), loadTrades(), loadPortfolio(),
-  ]);
-}
-
-document.addEventListener('DOMContentLoaded', () => {
-  refreshAll();
-  nrbCheckAPI();
-  loadReporter();
-  setInterval(refreshAll, 5 * 60 * 1000);
-  setInterval(nrbCheckAPI, 15000);
-});
-
-
-/* ═══════════════════════════════════════════════════════════
-   REPORTER  (prefixed rpt*)
-═══════════════════════════════════════════════════════════ */
-
-let _rptSectors    = null;
-let _rptParamTimer = null;
-let _rptLastSQL    = '';
-let _rptLastParams = {};
-
-async function loadReporter() {
-  try {
-    const d = await fetchJSON('/reporter/queries');
-    _rptRenderQueryList(d.queries || []);
-  } catch(e) {
-    document.getElementById('rpt-query-list').innerHTML =
-      `<div class="error-box">&#9888; ${esc(e.message)}</div>`;
-  }
-  _rptLoadTables();
-  const sqlEl = document.getElementById('rpt-sql');
-  sqlEl.addEventListener('input', () => {
-    clearTimeout(_rptParamTimer);
-    _rptParamTimer = setTimeout(_rptRenderParams, 400);
-    _rptShowTableSuggest(sqlEl);
-  });
-  sqlEl.addEventListener('keydown', e => {
-    if (e.key === 'Escape') {
-      const box = document.getElementById('rpt-suggest-box');
-      if (box) box.style.display = 'none';
     }
-  });
-}
 
-let _rptTables = [];
+    /* ── Sidebar / bottom-nav active tracking ────────────────────────── */
+    const NAV_SECTIONS = ['s-dashboard', 's-marketlog', 's-learning', 's-audit', 's-council', 's-trades', 's-portfolio', 's-nrb', 's-reporter'];
 
-async function _rptLoadTables() {
-  try {
-    const d = await fetchJSON('/reporter/tables');
-    _rptTables = d.tables || [];
-  } catch {}
-}
+    function updateActiveNav() {
+      let current = NAV_SECTIONS[0];
+      for (const id of NAV_SECTIONS) {
+        const el = document.getElementById(id);
+        if (el && el.getBoundingClientRect().top <= 100) current = id;
+      }
+      document.querySelectorAll('#sidebar nav a[href^="#"], #bottom-nav a').forEach(a => {
+        a.classList.toggle('active', a.getAttribute('href') === '#' + current);
+      });
+    }
+    window.addEventListener('scroll', updateActiveNav, { passive: true });
 
-function _rptShowTableSuggest(textarea) {
-  let box = document.getElementById('rpt-suggest-box');
-  if (!box) {
-    box = document.createElement('div');
-    box.id = 'rpt-suggest-box';
-    box.style.cssText = [
-      'position:absolute',
-      'background:var(--bg3)',
-      'border:1px solid var(--border)',
-      'border-radius:4px',
-      'z-index:999',
-      'max-height:180px',
-      'overflow-y:auto',
-      "font-family:'JetBrains Mono',monospace",
-      'font-size:12px',
-      'min-width:200px',
-      'box-shadow:0 4px 12px rgba(0,0,0,.4)',
-    ].join(';');
-    document.body.appendChild(box);
-  }
+    /* ── Init & auto-refresh ─────────────────────────────────────────── */
+    async function refreshAll() {
+      document.getElementById('last-refresh').textContent =
+        new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      await Promise.allSettled([
+        loadSummary(), loadMarketLog(), loadLearningHub(),
+        loadAudit(), loadCouncil(), loadTrades(), loadPortfolio(),
+      ]);
+    }
 
-  const val    = textarea.value;
-  const cursor = textarea.selectionStart;
-  const before = val.substring(0, cursor);
-  const match  = before.match(/(?:FROM|JOIN|UPDATE|INTO)\s+(\w*)$/i);
+    document.addEventListener('DOMContentLoaded', () => {
+      refreshAll();
+      nrbCheckAPI();
+      loadReporter();
+      setInterval(refreshAll, 5 * 60 * 1000);
+      setInterval(nrbCheckAPI, 15000);
+    });
 
-  if (!match) { box.style.display = 'none'; return; }
 
-  const typed   = match[1].toLowerCase();
-  const matches = _rptTables.filter(t => t.startsWith(typed));
+    /* ═══════════════════════════════════════════════════════════
+       REPORTER  (prefixed rpt*)
+    ═══════════════════════════════════════════════════════════ */
 
-  if (!matches.length) { box.style.display = 'none'; return; }
+    let _rptSectors = null;
+    let _rptParamTimer = null;
+    let _rptLastSQL = '';
+    let _rptLastParams = {};
 
-  const rect = textarea.getBoundingClientRect();
-  box.style.left    = (rect.left + window.scrollX + 12) + 'px';
-  box.style.top     = (rect.bottom + window.scrollY + 4) + 'px';
-  box.style.display = 'block';
+    async function loadReporter() {
+      try {
+        const d = await fetchJSON('/reporter/queries');
+        _rptRenderQueryList(d.queries || []);
+      } catch (e) {
+        document.getElementById('rpt-query-list').innerHTML =
+          `<div class="error-box">&#9888; ${esc(e.message)}</div>`;
+      }
+      _rptLoadTables();
+      const sqlEl = document.getElementById('rpt-sql');
+      sqlEl.addEventListener('input', () => {
+        clearTimeout(_rptParamTimer);
+        _rptParamTimer = setTimeout(_rptRenderParams, 400);
+        _rptShowTableSuggest(sqlEl);
+      });
+      sqlEl.addEventListener('keydown', e => {
+        if (e.key === 'Escape') {
+          const box = document.getElementById('rpt-suggest-box');
+          if (box) box.style.display = 'none';
+        }
+      });
+    }
 
-  box.innerHTML = matches.map(t => `
+    let _rptTables = [];
+
+    async function _rptLoadTables() {
+      try {
+        const d = await fetchJSON('/reporter/tables');
+        _rptTables = d.tables || [];
+      } catch { }
+    }
+
+    function _rptShowTableSuggest(textarea) {
+      let box = document.getElementById('rpt-suggest-box');
+      if (!box) {
+        box = document.createElement('div');
+        box.id = 'rpt-suggest-box';
+        box.style.cssText = [
+          'position:absolute',
+          'background:var(--bg3)',
+          'border:1px solid var(--border)',
+          'border-radius:4px',
+          'z-index:999',
+          'max-height:180px',
+          'overflow-y:auto',
+          "font-family:'JetBrains Mono',monospace",
+          'font-size:12px',
+          'min-width:200px',
+          'box-shadow:0 4px 12px rgba(0,0,0,.4)',
+        ].join(';');
+        document.body.appendChild(box);
+      }
+
+      const val = textarea.value;
+      const cursor = textarea.selectionStart;
+      const before = val.substring(0, cursor);
+      const match = before.match(/(?:FROM|JOIN|UPDATE|INTO)\s+(\w*)$/i);
+
+      if (!match) { box.style.display = 'none'; return; }
+
+      const typed = match[1].toLowerCase();
+      const matches = _rptTables.filter(t => t.startsWith(typed));
+
+      if (!matches.length) { box.style.display = 'none'; return; }
+
+      const rect = textarea.getBoundingClientRect();
+      box.style.left = (rect.left + window.scrollX + 12) + 'px';
+      box.style.top = (rect.bottom + window.scrollY + 4) + 'px';
+      box.style.display = 'block';
+
+      box.innerHTML = matches.map(t => `
     <div style="padding:7px 12px;cursor:pointer;border-bottom:1px solid var(--border)"
       onmouseenter="this.style.background='var(--bg4)'"
       onmouseleave="this.style.background=''"
@@ -1381,515 +2506,534 @@ function _rptShowTableSuggest(textarea) {
       ${t}
     </div>
   `).join('');
-}
+    }
 
-function _rptInsertTable(tableName) {
-  const textarea = document.getElementById('rpt-sql');
-  const cursor   = textarea.selectionStart;
-  const val      = textarea.value;
-  const before   = val.substring(0, cursor);
-  const after    = val.substring(cursor);
-  const replaced = before.replace(/(\b(?:FROM|JOIN|UPDATE|INTO)\s+)\w*$/i, `$1${tableName}`);
-  textarea.value = replaced + after;
-  textarea.focus();
-  const newPos = replaced.length;
-  textarea.setSelectionRange(newPos, newPos);
-  const box = document.getElementById('rpt-suggest-box');
-  if (box) box.style.display = 'none';
-  _rptRenderParams();
-}
+    function _rptInsertTable(tableName) {
+      const textarea = document.getElementById('rpt-sql');
+      const cursor = textarea.selectionStart;
+      const val = textarea.value;
+      const before = val.substring(0, cursor);
+      const after = val.substring(cursor);
+      const replaced = before.replace(/(\b(?:FROM|JOIN|UPDATE|INTO)\s+)\w*$/i, `$1${tableName}`);
+      textarea.value = replaced + after;
+      textarea.focus();
+      const newPos = replaced.length;
+      textarea.setSelectionRange(newPos, newPos);
+      const box = document.getElementById('rpt-suggest-box');
+      if (box) box.style.display = 'none';
+      _rptRenderParams();
+    }
 
-document.addEventListener('click', e => {
-  const box = document.getElementById('rpt-suggest-box');
-  if (box && !box.contains(e.target) && e.target.id !== 'rpt-sql')
-    box.style.display = 'none';
-});
+    document.addEventListener('click', e => {
+      const box = document.getElementById('rpt-suggest-box');
+      if (box && !box.contains(e.target) && e.target.id !== 'rpt-sql')
+        box.style.display = 'none';
+    });
 
-function _rptRenderQueryList(queries) {
-  const el = document.getElementById('rpt-query-list');
-  if (!queries.length) {
-    el.innerHTML = '<div class="rpt-empty">No saved queries yet.<br/>Write a query and click Save.</div>';
-    return;
-  }
-  el.innerHTML = queries.map(q => `
+    function _rptRenderQueryList(queries) {
+      const el = document.getElementById('rpt-query-list');
+      if (!queries.length) {
+        el.innerHTML = '<div class="rpt-empty">No saved queries yet.<br/>Write a query and click Save.</div>';
+        return;
+      }
+      el.innerHTML = queries.map(q => `
     <div class="rpt-query-item" data-id="${q.id}" onclick="rptLoadQuery(${q.id})">
       <div class="rpt-query-name">${esc(q.name)}</div>
       ${q.description ? `<div class="rpt-query-desc">${esc(q.description)}</div>` : ''}
     </div>
   `).join('');
-}
+    }
 
-async function rptLoadQuery(id) {
-  try {
-    const q = await fetchJSON(`/reporter/queries/${id}`);
-    document.getElementById('rpt-sql').value = q.sql || '';
-    document.querySelectorAll('.rpt-query-item').forEach(el =>
-      el.classList.toggle('active', +el.dataset.id === id));
-    _rptRenderParams();
-    document.getElementById('rpt-results').innerHTML = '';
-    document.getElementById('rpt-dl-bar').style.display = 'none';
-  } catch(e) {
-    document.getElementById('rpt-results').innerHTML =
-      `<div class="error-box">&#9888; ${esc(e.message)}</div>`;
-  }
-}
+    async function rptLoadQuery(id) {
+      try {
+        const q = await fetchJSON(`/reporter/queries/${id}`);
+        document.getElementById('rpt-sql').value = q.sql || '';
+        document.querySelectorAll('.rpt-query-item').forEach(el =>
+          el.classList.toggle('active', +el.dataset.id === id));
+        _rptRenderParams();
+        document.getElementById('rpt-results').innerHTML = '';
+        document.getElementById('rpt-dl-bar').style.display = 'none';
+      } catch (e) {
+        document.getElementById('rpt-results').innerHTML =
+          `<div class="error-box">&#9888; ${esc(e.message)}</div>`;
+      }
+    }
 
-function rptNewQuery() {
-  document.getElementById('rpt-sql').value = '';
-  document.querySelectorAll('.rpt-query-item').forEach(el => el.classList.remove('active'));
-  _rptRenderParams();
-  document.getElementById('rpt-results').innerHTML = '';
-  document.getElementById('rpt-dl-bar').style.display = 'none';
-  _rptLastSQL = ''; _rptLastParams = {};
-  document.getElementById('rpt-sql').focus();
-}
+    function rptNewQuery() {
+      document.getElementById('rpt-sql').value = '';
+      document.querySelectorAll('.rpt-query-item').forEach(el => el.classList.remove('active'));
+      _rptRenderParams();
+      document.getElementById('rpt-results').innerHTML = '';
+      document.getElementById('rpt-dl-bar').style.display = 'none';
+      _rptLastSQL = ''; _rptLastParams = {};
+      document.getElementById('rpt-sql').focus();
+    }
 
-function _rptExtractParams(sql) {
-  const re = /:([a-zA-Z_][a-zA-Z0-9_]*)/g;
-  const seen = new Set(), out = [];
-  let m;
-  while ((m = re.exec(sql)) !== null)
-    if (!seen.has(m[1])) { seen.add(m[1]); out.push(m[1]); }
-  return out;
-}
+    function _rptExtractParams(sql) {
+      const re = /:([a-zA-Z_][a-zA-Z0-9_]*)/g;
+      const seen = new Set(), out = [];
+      let m;
+      while ((m = re.exec(sql)) !== null)
+        if (!seen.has(m[1])) { seen.add(m[1]); out.push(m[1]); }
+      return out;
+    }
 
-function _rptParamLabel(name) {
-  return name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-}
+    function _rptParamLabel(name) {
+      return name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    }
 
-async function _rptGetSectors() {
-  if (_rptSectors) return _rptSectors;
-  try { const d = await fetchJSON('/reporter/sectors'); _rptSectors = d.sectors || []; }
-  catch { _rptSectors = []; }
-  return _rptSectors;
-}
+    async function _rptGetSectors() {
+      if (_rptSectors) return _rptSectors;
+      try { const d = await fetchJSON('/reporter/sectors'); _rptSectors = d.sectors || []; }
+      catch { _rptSectors = []; }
+      return _rptSectors;
+    }
 
-async function _rptRenderParams() {
-  const sql    = document.getElementById('rpt-sql').value;
-  const params = _rptExtractParams(sql);
-  const area   = document.getElementById('rpt-params-area');
-  const grid   = document.getElementById('rpt-params-grid');
+    async function _rptRenderParams() {
+      const sql = document.getElementById('rpt-sql').value;
+      const params = _rptExtractParams(sql);
+      const area = document.getElementById('rpt-params-area');
+      const grid = document.getElementById('rpt-params-grid');
 
-  if (!params.length) { area.style.display = 'none'; grid.innerHTML = ''; return; }
-  area.style.display = 'block';
+      if (!params.length) { area.style.display = 'none'; grid.innerHTML = ''; return; }
+      area.style.display = 'block';
 
-  // Preserve existing input values
-  const prev = {};
-  grid.querySelectorAll('[data-param]').forEach(el => { prev[el.dataset.param] = el.value; });
+      // Preserve existing input values
+      const prev = {};
+      grid.querySelectorAll('[data-param]').forEach(el => { prev[el.dataset.param] = el.value; });
 
-  const needSectors = params.some(p => p.includes('sector'));
-  const sectors = needSectors ? await _rptGetSectors() : [];
+      const needSectors = params.some(p => p.includes('sector'));
+      const sectors = needSectors ? await _rptGetSectors() : [];
 
-  grid.innerHTML = params.map(name => {
-    const label = _rptParamLabel(name);
-    const cur   = prev[name] !== undefined ? prev[name] : '';
-    let inp = '';
-    if (name.includes('date')) {
-      inp = `<input class="rpt-input" type="date" data-param="${name}" value="${esc(cur)}" />`;
-    } else if (name.includes('symbol')) {
-      inp = `<input class="rpt-input" type="text" data-param="${name}" value="${esc(cur)}"
+      grid.innerHTML = params.map(name => {
+        const label = _rptParamLabel(name);
+        const cur = prev[name] !== undefined ? prev[name] : '';
+        let inp = '';
+        if (name.includes('date')) {
+          inp = `<input class="rpt-input" type="date" data-param="${name}" value="${esc(cur)}" />`;
+        } else if (name.includes('symbol')) {
+          inp = `<input class="rpt-input" type="text" data-param="${name}" value="${esc(cur)}"
                placeholder="e.g. NABIL" style="text-transform:uppercase"
                oninput="this.value=this.value.toUpperCase()" />`;
-    } else if (name.includes('sector')) {
-      const opts = sectors.map(s =>
-        `<option value="${esc(s)}"${s===cur?' selected':''}>${esc(s)}</option>`).join('');
-      inp = `<select class="rpt-select" data-param="${name}"><option value=""></option>${opts}</select>`;
-    } else if (name.includes('status')) {
-      const vals = ['ALL','BUY','WAIT','AVOID','WIN','LOSS','OPEN','CLOSED'];
-      const opts = vals.map(s =>
-        `<option value="${s}"${s===cur?' selected':''}>${s}</option>`).join('');
-      inp = `<select class="rpt-select" data-param="${name}"><option value=""></option>${opts}</select>`;
-    } else if (name.includes('flag') || name.includes('mode')) {
-      const opts = ['true','false'].map(s =>
-        `<option value="${s}"${s===cur?' selected':''}>${s}</option>`).join('');
-      inp = `<select class="rpt-select" data-param="${name}"><option value=""></option>${opts}</select>`;
-    } else if (name.includes('limit') || name.includes('count')) {
-      inp = `<input class="rpt-input" type="number" data-param="${name}" value="${esc(cur)}" placeholder="100" />`;
-    } else {
-      inp = `<input class="rpt-input" type="text" data-param="${name}" value="${esc(cur)}" />`;
-    }
-    return `<div><div class="rpt-param-label">${esc(label)}</div>${inp}</div>`;
-  }).join('');
-}
-
-function _rptCollectParams() {
-  const params = {};
-  document.getElementById('rpt-params-grid').querySelectorAll('[data-param]').forEach(el => {
-    const val = el.value.trim();
-    if (val !== '') params[el.dataset.param] = val;
-  });
-  return params;
-}
-
-async function rptRun() {
-  const sql = document.getElementById('rpt-sql').value.trim();
-  if (!sql) return;
-  const resultsEl = document.getElementById('rpt-results');
-  const dlBar     = document.getElementById('rpt-dl-bar');
-  resultsEl.innerHTML = '<div class="spinner">Running query…</div>';
-  dlBar.style.display = 'none';
-
-  const params = _rptCollectParams();
-  try {
-    const r = await fetch(API + '/reporter/run', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ sql, params }),
-    });
-    const d = await r.json();
-    if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
-    _rptLastSQL = sql;
-    _rptLastParams = params;
-    _rptRenderResults(d.rows, d.count);
-  } catch(e) {
-    resultsEl.innerHTML = `<div class="error-box">&#9888; ${esc(e.message)}</div>`;
-  }
-}
-
-function _rptRenderResults(rows, count) {
-  const resultsEl = document.getElementById('rpt-results');
-  const dlBar     = document.getElementById('rpt-dl-bar');
-  const infoEl    = document.getElementById('rpt-row-info');
-
-  if (!rows || !rows.length) {
-    resultsEl.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:8px 0">No rows returned.</div>';
-    dlBar.style.display = 'none';
-    return;
-  }
-
-  const display = rows.slice(0, 500);
-  const cols    = Object.keys(rows[0]);
-  const warn    = count > 500
-    ? `<div class="rpt-warn">&#9888; Showing 500 of ${count} rows. Use LIMIT in your SQL, or download the full set.</div>`
-    : '';
-
-  const thead = `<thead><tr>${cols.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead>`;
-  const tbody = `<tbody>${display.map(row =>
-    `<tr>${cols.map(c => `<td>${v(row[c])}</td>`).join('')}</tr>`
-  ).join('')}</tbody>`;
-
-  resultsEl.innerHTML = warn + `<div class="tbl-wrap"><table>${thead}${tbody}</table></div>`;
-  infoEl.textContent  = `${count} row${count !== 1 ? 's' : ''}`;
-  dlBar.style.display = 'flex';
-}
-
-function rptToggleSaveForm() {
-  const form = document.getElementById('rpt-save-form');
-  const open = form.style.display === 'none' || form.style.display === '';
-  form.style.display = open ? 'block' : 'none';
-  if (!open) document.getElementById('rpt-save-msg').innerHTML = '';
-}
-
-async function rptSaveQuery() {
-  const sql  = document.getElementById('rpt-sql').value.trim();
-  const name = document.getElementById('rpt-save-name').value.trim();
-  const desc = document.getElementById('rpt-save-desc').value.trim();
-  const msgEl = document.getElementById('rpt-save-msg');
-
-  if (!name) { msgEl.innerHTML = '<span style="color:var(--red)">Name is required.</span>'; return; }
-  if (!sql)  { msgEl.innerHTML = '<span style="color:var(--red)">SQL is empty.</span>'; return; }
-
-  try {
-    const r = await fetch(API + '/reporter/queries', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ name, description: desc || null, sql }),
-    });
-    const d = await r.json();
-    if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
-    msgEl.innerHTML = `<span style="color:var(--green)">&#10003; Saved as &ldquo;${esc(name)}&rdquo;</span>`;
-    const ld = await fetchJSON('/reporter/queries');
-    _rptRenderQueryList(ld.queries || []);
-    setTimeout(() => {
-      document.getElementById('rpt-save-form').style.display = 'none';
-      document.getElementById('rpt-save-name').value = '';
-      document.getElementById('rpt-save-desc').value = '';
-      msgEl.innerHTML = '';
-    }, 1500);
-  } catch(e) {
-    msgEl.innerHTML = `<span style="color:var(--red)">&#10007; ${esc(e.message)}</span>`;
-  }
-}
-
-async function rptDownload(format) {
-  const sql    = document.getElementById('rpt-sql').value.trim();
-  const params = _rptCollectParams();
-  if (!sql) return;
-  const filename = 'nepse_query_export';
-  try {
-    const r = await fetch(API + `/reporter/download/${format}`, {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ sql, params, filename }),
-    });
-    if (!r.ok) { const d = await r.json(); throw new Error(d.detail || `HTTP ${r.status}`); }
-    const blob = await r.blob();
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement('a');
-    a.href = url; a.download = `${filename}.${format}`; a.click();
-    URL.revokeObjectURL(url);
-  } catch(e) {
-    document.getElementById('rpt-results').innerHTML +=
-      `<div class="error-box" style="margin-top:8px">&#9888; Download failed: ${esc(e.message)}</div>`;
-  }
-}
-
-/* ═══════════════════════════════════════════════════════════
-   NRB ENTRY  (prefixed nrb*)
-═══════════════════════════════════════════════════════════ */
-const NRB_API = `http://${window.location.hostname}:8765`;
-
-const NRB_FIELD_GROUPS = [
-  { label:'Monetary Policy', fields:[
-    {key:'policy_rate',type:'number'},{key:'bank_rate',type:'number'},
-    {key:'crr_percentage',type:'number'},{key:'slr_percentage',type:'number'},
-  ]},
-  { label:'Interest Rates', fields:[
-    {key:'lending_rate_pct',type:'number'},{key:'deposit_rate_pct',type:'number'},
-    {key:'interbank_rate_pct',type:'number'},{key:'tbill_91d_rate_pct',type:'number'},
-  ]},
-  { label:'Inflation & Credit', fields:[
-    {key:'cpi_inflation',type:'number'},{key:'credit_growth_rate',type:'number'},
-    {key:'private_sector_credit_growth_yoy_pct',type:'number'},{key:'m2_growth_yoy_pct',type:'number'},
-    {key:'deposit_growth_yoy_pct',type:'number'},{key:'npl_ratio_pct',type:'number'},
-  ]},
-  { label:'Liquidity', fields:[
-    {key:'liquidity_injected_billion',type:'number'},
-    {key:'liquidity_status',type:'enum',options:['SURPLUS','TIGHT','NEUTRAL']},
-  ]},
-  { label:'Remittance', fields:[
-    {key:'remittance_yoy_change_pct',type:'number'},
-    {key:'remittance_total_billion_npr',type:'number'},
-  ]},
-  { label:'Foreign Exchange', fields:[
-    {key:'fx_reserve_months',type:'number'},{key:'usd_npr_rate',type:'number'},
-  ]},
-  { label:'Balance of Payments', fields:[
-    {key:'bop_overall_balance_usd_m',type:'number'},{key:'bop_current_account_usd_m',type:'number'},
-    {key:'bop_capital_account_usd_m',type:'number'},{key:'bop_trade_deficit_usd_m',type:'number'},
-    {key:'bop_status',type:'enum',options:['SURPLUS','DEFICIT']},
-    {key:'bop_trend',type:'enum',options:['IMPROVING','DETERIORATING','STABLE']},
-    {key:'bop_impact_on_nepse',type:'text'},
-  ]},
-  { label:'Capital Market', fields:[
-    {key:'nepse_index_value',type:'number'},{key:'market_cap_billion_npr',type:'number'},
-  ]},
-  { label:'Macro Sentiment', fields:[
-    {key:'overall_sentiment',type:'enum',options:['BULLISH','NEUTRAL','BEARISH']},
-    {key:'forward_guidance',type:'text'},{key:'key_risks',type:'text'},
-  ]},
-];
-
-let nrbParsed = {}, nrbOriginal = {}, nrbExistingPeriods = [];
-
-function nrbBuildPeriodKey() {
-  const fy  = document.getElementById('fiscalYear').value;
-  const mn  = document.getElementById('monthNumber').value;
-  const ann = document.getElementById('isAnnual').value;
-  return ann === 'true' ? `fy${fy}-annual` : `fy${fy}-month${mn}`;
-}
-
-function nrbUpdatePeriodPreview() {
-  const key = nrbBuildPeriodKey();
-  document.getElementById('periodPreview').textContent = key;
-  const badge = document.getElementById('existingBadge');
-  badge.style.display = nrbExistingPeriods.includes(key) ? 'inline-flex' : 'none';
-}
-
-['fiscalYear','monthNumber','isAnnual'].forEach(id => {
-  document.getElementById(id).addEventListener('change', nrbUpdatePeriodPreview);
-});
-
-async function nrbCheckAPI() {
-  try {
-    const r = await fetch(`${NRB_API}/health`, { signal: AbortSignal.timeout(2500) });
-    if (r.ok) {
-      document.getElementById('apiDot').className = 'api-dot online';
-      document.getElementById('apiStatusText').textContent = 'api online :8765';
-      nrbLoadExistingPeriods();
-    } else throw new Error();
-  } catch {
-    document.getElementById('apiDot').className = 'api-dot offline';
-    document.getElementById('apiStatusText').textContent = 'api offline';
-  }
-}
-
-async function nrbLoadExistingPeriods() {
-  try {
-    const r = await fetch(`${NRB_API}/nrb/periods`);
-    const d = await r.json();
-    nrbExistingPeriods = (d.periods||[]).map(p => p.period);
-    nrbUpdatePeriodPreview();
-  } catch {}
-}
-
-function nrbParseJSON() {
-  const raw   = document.getElementById('jsonInput').value.trim();
-  const errEl = document.getElementById('jsonError');
-  if (!raw) { errEl.textContent = 'Paste JSON first.'; errEl.style.display = 'block'; return; }
-  let data;
-  try { data = JSON.parse(raw); }
-  catch(e) { errEl.textContent = `JSON parse error: ${e.message}`; errEl.style.display = 'block'; return; }
-  errEl.style.display = 'none';
-  nrbParsed   = data;
-  nrbOriginal = JSON.parse(JSON.stringify(data));
-  nrbRenderFields(data);
-  document.getElementById('saveBtn').disabled = false;
-}
-
-function nrbRenderFields(data) {
-  const container = document.getElementById('fieldsContainer');
-  container.innerHTML = '';
-
-  NRB_FIELD_GROUPS.forEach(group => {
-    const section = document.createElement('div');
-    section.className = 'nrb-field-section';
-
-    const filled = group.fields.filter(f => data[f.key]!==null && data[f.key]!==undefined).length;
-    const hdr = document.createElement('div');
-    hdr.className = 'nrb-section-hdr';
-    hdr.innerHTML = `${group.label}<span class="nrb-section-count"><span class="nrb-section-filled">${filled}</span>/${group.fields.length}</span>`;
-    section.appendChild(hdr);
-
-    group.fields.forEach(fd => {
-      const val    = data[fd.key];
-      const isNull = val === null || val === undefined;
-
-      const row = document.createElement('div');
-      row.className = 'nrb-field-row';
-
-      const nameEl = document.createElement('div');
-      nameEl.className = 'nrb-field-name';
-      nameEl.textContent = fd.key;
-      nameEl.title = fd.key;
-
-      const wrap = document.createElement('div');
-      wrap.className = 'nrb-field-input-wrap';
-
-      let inp;
-      if (fd.type === 'enum') {
-        inp = document.createElement('select');
-        inp.className = 'nrb-field-input' + (isNull ? ' is-null' : '');
-        const nullOpt = document.createElement('option');
-        nullOpt.value = ''; nullOpt.textContent = '— null —';
-        inp.appendChild(nullOpt);
-        fd.options.forEach(opt => {
-          const o = document.createElement('option');
-          o.value = opt; o.textContent = opt;
-          if (String(val) === opt) o.selected = true;
-          inp.appendChild(o);
-        });
-        if (isNull) inp.value = '';
-      } else {
-        inp = document.createElement('input');
-        inp.type = 'text';
-        inp.className = 'nrb-field-input' + (isNull ? ' is-null' : '');
-        inp.value = isNull ? '' : String(val);
-        inp.placeholder = 'null';
-      }
-      inp.dataset.key = fd.key;
-
-      const statusEl = document.createElement('div');
-      statusEl.className = 'nrb-field-status ' + (isNull ? 'null' : 'ok');
-      statusEl.id = `nrb-status-${fd.key}`;
-      statusEl.textContent = isNull ? 'null' : '✓';
-
-      inp.addEventListener('input', () => {
-        const newVal  = inp.value.trim();
-        const origVal = nrbOriginal[fd.key];
-        const wasNull = origVal === null || origVal === undefined;
-        const nowNull = newVal === '' || newVal === '— null —';
-        inp.classList.toggle('is-null', nowNull);
-        if (nowNull) {
-          nrbParsed[fd.key] = null;
-          statusEl.textContent = 'null'; statusEl.className = 'nrb-field-status null';
+        } else if (name.includes('sector')) {
+          const opts = sectors.map(s =>
+            `<option value="${esc(s)}"${s === cur ? ' selected' : ''}>${esc(s)}</option>`).join('');
+          inp = `<select class="rpt-select" data-param="${name}"><option value=""></option>${opts}</select>`;
+        } else if (name.includes('status')) {
+          const vals = ['ALL', 'BUY', 'WAIT', 'AVOID', 'WIN', 'LOSS', 'OPEN', 'CLOSED'];
+          const opts = vals.map(s =>
+            `<option value="${s}"${s === cur ? ' selected' : ''}>${s}</option>`).join('');
+          inp = `<select class="rpt-select" data-param="${name}"><option value=""></option>${opts}</select>`;
+        } else if (name.includes('flag') || name.includes('mode')) {
+          const opts = ['true', 'false'].map(s =>
+            `<option value="${s}"${s === cur ? ' selected' : ''}>${s}</option>`).join('');
+          inp = `<select class="rpt-select" data-param="${name}"><option value=""></option>${opts}</select>`;
+        } else if (name.includes('limit') || name.includes('count')) {
+          inp = `<input class="rpt-input" type="number" data-param="${name}" value="${esc(cur)}" placeholder="100" />`;
         } else {
-          nrbParsed[fd.key] = newVal;
-          const changed = !wasNull && String(origVal) !== newVal;
-          const recovered = wasNull && newVal;
-          statusEl.textContent = (changed || recovered) ? '~' : '✓';
-          statusEl.className = 'nrb-field-status ' + ((changed || recovered) ? 'modified' : 'ok');
+          inp = `<input class="rpt-input" type="text" data-param="${name}" value="${esc(cur)}" />`;
         }
-        nrbUpdateStats();
+        return `<div><div class="rpt-param-label">${esc(label)}</div>${inp}</div>`;
+      }).join('');
+    }
+
+    function _rptCollectParams() {
+      const params = {};
+      document.getElementById('rpt-params-grid').querySelectorAll('[data-param]').forEach(el => {
+        const val = el.value.trim();
+        if (val !== '') params[el.dataset.param] = val;
       });
+      return params;
+    }
 
-      wrap.appendChild(inp);
-      row.appendChild(nameEl); row.appendChild(wrap); row.appendChild(statusEl);
-      section.appendChild(row);
+    async function rptRun() {
+      const sql = document.getElementById('rpt-sql').value.trim();
+      if (!sql) return;
+      const resultsEl = document.getElementById('rpt-results');
+      const dlBar = document.getElementById('rpt-dl-bar');
+      resultsEl.innerHTML = '<div class="spinner">Running query…</div>';
+      dlBar.style.display = 'none';
+
+      const params = _rptCollectParams();
+      try {
+        const r = await fetch(API + '/reporter/run', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sql, params }),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+        _rptLastSQL = sql;
+        _rptLastParams = params;
+        _rptRenderResults(d.rows, d.count);
+      } catch (e) {
+        resultsEl.innerHTML = `<div class="error-box">&#9888; ${esc(e.message)}</div>`;
+      }
+    }
+
+    function _rptRenderResults(rows, count) {
+      const resultsEl = document.getElementById('rpt-results');
+      const dlBar = document.getElementById('rpt-dl-bar');
+      const infoEl = document.getElementById('rpt-row-info');
+
+      if (!rows || !rows.length) {
+        resultsEl.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:8px 0">No rows returned.</div>';
+        dlBar.style.display = 'none';
+        return;
+      }
+
+      const display = rows.slice(0, 500);
+      const cols = Object.keys(rows[0]);
+      const warn = count > 500
+        ? `<div class="rpt-warn">&#9888; Showing 500 of ${count} rows. Use LIMIT in your SQL, or download the full set.</div>`
+        : '';
+
+      const thead = `<thead><tr>${cols.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead>`;
+      const tbody = `<tbody>${display.map(row =>
+        `<tr>${cols.map(c => `<td>${v(row[c])}</td>`).join('')}</tr>`
+      ).join('')}</tbody>`;
+
+      resultsEl.innerHTML = warn + `<div class="tbl-wrap"><table>${thead}${tbody}</table></div>`;
+      infoEl.textContent = `${count} row${count !== 1 ? 's' : ''}`;
+      dlBar.style.display = 'flex';
+    }
+
+    function rptToggleSaveForm() {
+      const form = document.getElementById('rpt-save-form');
+      const open = form.style.display === 'none' || form.style.display === '';
+      form.style.display = open ? 'block' : 'none';
+      if (!open) document.getElementById('rpt-save-msg').innerHTML = '';
+    }
+
+    async function rptSaveQuery() {
+      const sql = document.getElementById('rpt-sql').value.trim();
+      const name = document.getElementById('rpt-save-name').value.trim();
+      const desc = document.getElementById('rpt-save-desc').value.trim();
+      const msgEl = document.getElementById('rpt-save-msg');
+
+      if (!name) { msgEl.innerHTML = '<span style="color:var(--red)">Name is required.</span>'; return; }
+      if (!sql) { msgEl.innerHTML = '<span style="color:var(--red)">SQL is empty.</span>'; return; }
+
+      try {
+        const r = await fetch(API + '/reporter/queries', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, description: desc || null, sql }),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+        msgEl.innerHTML = `<span style="color:var(--green)">&#10003; Saved as &ldquo;${esc(name)}&rdquo;</span>`;
+        const ld = await fetchJSON('/reporter/queries');
+        _rptRenderQueryList(ld.queries || []);
+        setTimeout(() => {
+          document.getElementById('rpt-save-form').style.display = 'none';
+          document.getElementById('rpt-save-name').value = '';
+          document.getElementById('rpt-save-desc').value = '';
+          msgEl.innerHTML = '';
+        }, 1500);
+      } catch (e) {
+        msgEl.innerHTML = `<span style="color:var(--red)">&#10007; ${esc(e.message)}</span>`;
+      }
+    }
+
+    async function rptDownload(format) {
+      const sql = document.getElementById('rpt-sql').value.trim();
+      const params = _rptCollectParams();
+      if (!sql) return;
+      const filename = 'nepse_query_export';
+      try {
+        const r = await fetch(API + `/reporter/download/${format}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sql, params, filename }),
+        });
+        if (!r.ok) { const d = await r.json(); throw new Error(d.detail || `HTTP ${r.status}`); }
+        const blob = await r.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = `${filename}.${format}`; a.click();
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        document.getElementById('rpt-results').innerHTML +=
+          `<div class="error-box" style="margin-top:8px">&#9888; Download failed: ${esc(e.message)}</div>`;
+      }
+    }
+
+    /* ═══════════════════════════════════════════════════════════
+       NRB ENTRY  (prefixed nrb*)
+    ═══════════════════════════════════════════════════════════ */
+    const NRB_API = `http://${window.location.hostname}:8766`;
+
+    const NRB_FIELD_GROUPS = [
+      {
+        label: 'Monetary Policy', fields: [
+          { key: 'policy_rate', type: 'number' }, { key: 'bank_rate', type: 'number' },
+          { key: 'crr_percentage', type: 'number' }, { key: 'slr_percentage', type: 'number' },
+        ]
+      },
+      {
+        label: 'Interest Rates', fields: [
+          { key: 'lending_rate_pct', type: 'number' }, { key: 'deposit_rate_pct', type: 'number' },
+          { key: 'interbank_rate_pct', type: 'number' }, { key: 'tbill_91d_rate_pct', type: 'number' },
+        ]
+      },
+      {
+        label: 'Inflation & Credit', fields: [
+          { key: 'cpi_inflation', type: 'number' }, { key: 'credit_growth_rate', type: 'number' },
+          { key: 'private_sector_credit_growth_yoy_pct', type: 'number' }, { key: 'm2_growth_yoy_pct', type: 'number' },
+          { key: 'deposit_growth_yoy_pct', type: 'number' }, { key: 'npl_ratio_pct', type: 'number' },
+        ]
+      },
+      {
+        label: 'Liquidity', fields: [
+          { key: 'liquidity_injected_billion', type: 'number' },
+          { key: 'liquidity_status', type: 'enum', options: ['SURPLUS', 'TIGHT', 'NEUTRAL'] },
+        ]
+      },
+      {
+        label: 'Remittance', fields: [
+          { key: 'remittance_yoy_change_pct', type: 'number' },
+          { key: 'remittance_total_billion_npr', type: 'number' },
+        ]
+      },
+      {
+        label: 'Foreign Exchange', fields: [
+          { key: 'fx_reserve_months', type: 'number' }, { key: 'usd_npr_rate', type: 'number' },
+        ]
+      },
+      {
+        label: 'Balance of Payments', fields: [
+          { key: 'bop_overall_balance_usd_m', type: 'number' }, { key: 'bop_current_account_usd_m', type: 'number' },
+          { key: 'bop_capital_account_usd_m', type: 'number' }, { key: 'bop_trade_deficit_usd_m', type: 'number' },
+          { key: 'bop_status', type: 'enum', options: ['SURPLUS', 'DEFICIT'] },
+          { key: 'bop_trend', type: 'enum', options: ['IMPROVING', 'DETERIORATING', 'STABLE'] },
+          { key: 'bop_impact_on_nepse', type: 'text' },
+        ]
+      },
+      {
+        label: 'Capital Market', fields: [
+          { key: 'nepse_index_value', type: 'number' }, { key: 'market_cap_billion_npr', type: 'number' },
+        ]
+      },
+      {
+        label: 'Macro Sentiment', fields: [
+          { key: 'overall_sentiment', type: 'enum', options: ['BULLISH', 'NEUTRAL', 'BEARISH'] },
+          { key: 'forward_guidance', type: 'text' }, { key: 'key_risks', type: 'text' },
+        ]
+      },
+    ];
+
+    let nrbParsed = {}, nrbOriginal = {}, nrbExistingPeriods = [];
+
+    function nrbBuildPeriodKey() {
+      const fy = document.getElementById('fiscalYear').value;
+      const mn = document.getElementById('monthNumber').value;
+      const ann = document.getElementById('isAnnual').value;
+      return ann === 'true' ? `fy${fy}-annual` : `fy${fy}-month${mn}`;
+    }
+
+    function nrbUpdatePeriodPreview() {
+      const key = nrbBuildPeriodKey();
+      document.getElementById('periodPreview').textContent = key;
+      const badge = document.getElementById('existingBadge');
+      badge.style.display = nrbExistingPeriods.includes(key) ? 'inline-flex' : 'none';
+    }
+
+    ['fiscalYear', 'monthNumber', 'isAnnual'].forEach(id => {
+      document.getElementById(id).addEventListener('change', nrbUpdatePeriodPreview);
     });
-    container.appendChild(section);
-  });
-  nrbUpdateStats();
-}
 
-function nrbUpdateStats() {
-  let total=0, filled=0, nullCount=0, modified=0;
-  NRB_FIELD_GROUPS.forEach(g => g.fields.forEach(f => {
-    total++;
-    const val  = nrbParsed[f.key];
-    const orig = nrbOriginal[f.key];
-    const isNull = val === null || val === undefined || val === '';
-    if (!isNull) filled++; else nullCount++;
-    if (String(val) !== String(orig)) modified++;
-  }));
-  document.getElementById('statTotal').textContent    = total;
-  document.getElementById('statFilled').textContent   = filled;
-  document.getElementById('statNull').textContent     = nullCount;
-  document.getElementById('statModified').textContent = modified;
-}
+    async function nrbCheckAPI() {
+      try {
+        const r = await fetch(`${NRB_API}/health`, { signal: AbortSignal.timeout(2500) });
+        if (r.ok) {
+          document.getElementById('apiDot').className = 'api-dot online';
+          document.getElementById('apiStatusText').textContent = 'api online :8766';
+          nrbLoadExistingPeriods();
+        } else throw new Error();
+      } catch {
+        document.getElementById('apiDot').className = 'api-dot offline';
+        document.getElementById('apiStatusText').textContent = 'api offline';
+      }
+    }
 
-async function nrbSaveToDatabase() {
-  const banner = document.getElementById('statusBanner');
-  const btn    = document.getElementById('saveBtn');
-  banner.className = 'nrb-status-banner loading';
-  banner.innerHTML = '<span class="nrb-inline-spin"></span>&nbsp;Saving…';
-  btn.disabled = true;
+    async function nrbLoadExistingPeriods() {
+      try {
+        const r = await fetch(`${NRB_API}/nrb/periods`);
+        const d = await r.json();
+        nrbExistingPeriods = (d.periods || []).map(p => p.period);
+        nrbUpdatePeriodPreview();
+      } catch { }
+    }
 
-  const period = nrbBuildPeriodKey();
-  const payload = {
-    period,
-    fiscal_year:  document.getElementById('fiscalYear').value,
-    month_number: document.getElementById('monthNumber').value,
-    is_annual:    document.getElementById('isAnnual').value,
-  };
-  NRB_FIELD_GROUPS.forEach(g => g.fields.forEach(f => {
-    const val = nrbParsed[f.key];
-    payload[f.key] = (val===null||val===undefined||val==='') ? null : String(val);
-  }));
+    function nrbParseJSON() {
+      const raw = document.getElementById('jsonInput').value.trim();
+      const errEl = document.getElementById('jsonError');
+      if (!raw) { errEl.textContent = 'Paste JSON first.'; errEl.style.display = 'block'; return; }
+      let data;
+      try { data = JSON.parse(raw); }
+      catch (e) { errEl.textContent = `JSON parse error: ${e.message}`; errEl.style.display = 'block'; return; }
+      errEl.style.display = 'none';
+      nrbParsed = data;
+      nrbOriginal = JSON.parse(JSON.stringify(data));
+      nrbRenderFields(data);
+      document.getElementById('saveBtn').disabled = false;
+    }
 
-  try {
-    const r = await fetch(`${NRB_API}/nrb/upsert`, {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify(payload),
-    });
-    const d = await r.json();
-    if (r.ok) {
-      banner.className = 'nrb-status-banner success';
-      banner.innerHTML = `&#10003; Saved <strong>${period}</strong> — ${d.fields_written} fields`;
-      nrbExistingPeriods = [...new Set([...nrbExistingPeriods, period])];
-      nrbUpdatePeriodPreview();
-    } else throw new Error(d.detail || 'Unknown error');
-  } catch(e) {
-    banner.className = 'nrb-status-banner error';
-    banner.innerHTML = `&#10007; Failed: ${e.message}`;
-  }
-  btn.disabled = false;
-}
+    function nrbRenderFields(data) {
+      const container = document.getElementById('fieldsContainer');
+      container.innerHTML = '';
 
-function nrbClearAll() {
-  document.getElementById('jsonInput').value = '';
-  document.getElementById('jsonError').style.display = 'none';
-  document.getElementById('fieldsContainer').innerHTML = '<div class="nrb-empty">Paste JSON on the left and click Parse →</div>';
-  const b = document.getElementById('statusBanner');
-  b.className = 'nrb-status-banner'; b.style.display = 'none';
-  document.getElementById('saveBtn').disabled = true;
-  ['statTotal','statFilled','statNull'].forEach(id => document.getElementById(id).textContent = '—');
-  document.getElementById('statModified').textContent = '0';
-  nrbParsed = {}; nrbOriginal = {};
-}
+      NRB_FIELD_GROUPS.forEach(group => {
+        const section = document.createElement('div');
+        section.className = 'nrb-field-section';
 
-nrbUpdatePeriodPreview();
-</script>
+        const filled = group.fields.filter(f => data[f.key] !== null && data[f.key] !== undefined).length;
+        const hdr = document.createElement('div');
+        hdr.className = 'nrb-section-hdr';
+        hdr.innerHTML = `${group.label}<span class="nrb-section-count"><span class="nrb-section-filled">${filled}</span>/${group.fields.length}</span>`;
+        section.appendChild(hdr);
+
+        group.fields.forEach(fd => {
+          const val = data[fd.key];
+          const isNull = val === null || val === undefined;
+
+          const row = document.createElement('div');
+          row.className = 'nrb-field-row';
+
+          const nameEl = document.createElement('div');
+          nameEl.className = 'nrb-field-name';
+          nameEl.textContent = fd.key;
+          nameEl.title = fd.key;
+
+          const wrap = document.createElement('div');
+          wrap.className = 'nrb-field-input-wrap';
+
+          let inp;
+          if (fd.type === 'enum') {
+            inp = document.createElement('select');
+            inp.className = 'nrb-field-input' + (isNull ? ' is-null' : '');
+            const nullOpt = document.createElement('option');
+            nullOpt.value = ''; nullOpt.textContent = '— null —';
+            inp.appendChild(nullOpt);
+            fd.options.forEach(opt => {
+              const o = document.createElement('option');
+              o.value = opt; o.textContent = opt;
+              if (String(val) === opt) o.selected = true;
+              inp.appendChild(o);
+            });
+            if (isNull) inp.value = '';
+          } else {
+            inp = document.createElement('input');
+            inp.type = 'text';
+            inp.className = 'nrb-field-input' + (isNull ? ' is-null' : '');
+            inp.value = isNull ? '' : String(val);
+            inp.placeholder = 'null';
+          }
+          inp.dataset.key = fd.key;
+
+          const statusEl = document.createElement('div');
+          statusEl.className = 'nrb-field-status ' + (isNull ? 'null' : 'ok');
+          statusEl.id = `nrb-status-${fd.key}`;
+          statusEl.textContent = isNull ? 'null' : '✓';
+
+          inp.addEventListener('input', () => {
+            const newVal = inp.value.trim();
+            const origVal = nrbOriginal[fd.key];
+            const wasNull = origVal === null || origVal === undefined;
+            const nowNull = newVal === '' || newVal === '— null —';
+            inp.classList.toggle('is-null', nowNull);
+            if (nowNull) {
+              nrbParsed[fd.key] = null;
+              statusEl.textContent = 'null'; statusEl.className = 'nrb-field-status null';
+            } else {
+              nrbParsed[fd.key] = newVal;
+              const changed = !wasNull && String(origVal) !== newVal;
+              const recovered = wasNull && newVal;
+              statusEl.textContent = (changed || recovered) ? '~' : '✓';
+              statusEl.className = 'nrb-field-status ' + ((changed || recovered) ? 'modified' : 'ok');
+            }
+            nrbUpdateStats();
+          });
+
+          wrap.appendChild(inp);
+          row.appendChild(nameEl); row.appendChild(wrap); row.appendChild(statusEl);
+          section.appendChild(row);
+        });
+        container.appendChild(section);
+      });
+      nrbUpdateStats();
+    }
+
+    function nrbUpdateStats() {
+      let total = 0, filled = 0, nullCount = 0, modified = 0;
+      NRB_FIELD_GROUPS.forEach(g => g.fields.forEach(f => {
+        total++;
+        const val = nrbParsed[f.key];
+        const orig = nrbOriginal[f.key];
+        const isNull = val === null || val === undefined || val === '';
+        if (!isNull) filled++; else nullCount++;
+        if (String(val) !== String(orig)) modified++;
+      }));
+      document.getElementById('statTotal').textContent = total;
+      document.getElementById('statFilled').textContent = filled;
+      document.getElementById('statNull').textContent = nullCount;
+      document.getElementById('statModified').textContent = modified;
+    }
+
+    async function nrbSaveToDatabase() {
+      const banner = document.getElementById('statusBanner');
+      const btn = document.getElementById('saveBtn');
+      banner.className = 'nrb-status-banner loading';
+      banner.innerHTML = '<span class="nrb-inline-spin"></span>&nbsp;Saving…';
+      btn.disabled = true;
+
+      const period = nrbBuildPeriodKey();
+      const payload = {
+        period,
+        fiscal_year: document.getElementById('fiscalYear').value,
+        month_number: document.getElementById('monthNumber').value,
+        is_annual: document.getElementById('isAnnual').value,
+      };
+      NRB_FIELD_GROUPS.forEach(g => g.fields.forEach(f => {
+        const val = nrbParsed[f.key];
+        payload[f.key] = (val === null || val === undefined || val === '') ? null : String(val);
+      }));
+
+      try {
+        const r = await fetch(`${NRB_API}/nrb/upsert`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const d = await r.json();
+        if (r.ok) {
+          banner.className = 'nrb-status-banner success';
+          banner.innerHTML = `&#10003; Saved <strong>${period}</strong> — ${d.fields_written} fields`;
+          nrbExistingPeriods = [...new Set([...nrbExistingPeriods, period])];
+          nrbUpdatePeriodPreview();
+        } else throw new Error(d.detail || 'Unknown error');
+      } catch (e) {
+        banner.className = 'nrb-status-banner error';
+        banner.innerHTML = `&#10007; Failed: ${e.message}`;
+      }
+      btn.disabled = false;
+    }
+
+    function nrbClearAll() {
+      document.getElementById('jsonInput').value = '';
+      document.getElementById('jsonError').style.display = 'none';
+      document.getElementById('fieldsContainer').innerHTML = '<div class="nrb-empty">Paste JSON on the left and click Parse →</div>';
+      const b = document.getElementById('statusBanner');
+      b.className = 'nrb-status-banner'; b.style.display = 'none';
+      document.getElementById('saveBtn').disabled = true;
+      ['statTotal', 'statFilled', 'statNull'].forEach(id => document.getElementById(id).textContent = '—');
+      document.getElementById('statModified').textContent = '0';
+      nrbParsed = {}; nrbOriginal = {};
+    }
+
+    nrbUpdatePeriodPreview();
+  </script>
 </body>
+
 </html>
