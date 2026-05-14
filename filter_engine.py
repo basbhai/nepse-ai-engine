@@ -238,6 +238,7 @@ class FilterCandidate:
 
     fundamental_adj:  float = 0.0
     fundamental_reason: str   = ""
+    broker_flow_adj:  float = 0.0
 
     vwap_dev:         float = 0.0
     bid_ask_ratio:    float = 0.0
@@ -295,6 +296,7 @@ def _categorize_gate_reason(reason: str) -> str:
     if "MUTUAL_FUND" in r:              return "MUTUAL_FUND"
     if "NON_EQUITY" in r:               return "NON_EQUITY"
     if "VOS=" in r and "<" in r:        return "ILLIQUID"
+    if r.startswith("BROKER_FLOW"):     return "BROKER_FLOW"
     return "OTHER"
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 1 — CONTEXT LOADER
@@ -548,10 +550,11 @@ def _check_hard_gates(ctx: dict) -> tuple[bool, str]:
 
 
 def _check_symbol_gates(
-    symbol:    str,
-    ind:       dict,
+    symbol:     str,
+    ind:        dict,
     price_row,
-    ctx:       dict,
+    ctx:        dict,
+    flow_cache: dict = None,
 ) -> tuple[bool, str]:
     """Per-symbol gates. Returns (passed, reason)."""
     ltp = float(price_row.ltp or price_row.close or 0)
@@ -597,6 +600,12 @@ def _check_symbol_gates(
             bb_signal  = str(ind.get("bb_signal", "NEUTRAL"))
             if macd_cross != "BULLISH" and bb_signal not in ("LOWER_TOUCH", "SQUEEZE"):
                 return False, f"RSI={rsi:.1f} OVERSOLD_NO_MOMENTUM — no direction improvement"
+
+    flow_class, _, _ = _get_broker_flow_classification(symbol, flow_cache or {})
+    if flow_class == "NET_DISTRIBUTION":
+        return False, "BROKER_FLOW=NET_DISTRIBUTION"
+    if flow_class == "CHURN":
+        return False, "BROKER_FLOW=CHURN"
 
     return True, ""
 
@@ -1190,6 +1199,124 @@ def _get_fundamental_adj(
     return round(adj, 2), reason_str
  
 
+def _load_broker_flow_cache(date: str) -> tuple[dict, dict]:
+    """
+    Load broker_flow and broker_holdings for the given date.
+    Returns (flow_cache, holdings_cache) keyed by uppercase symbol.
+    Both dicts are empty on any failure — never raises.
+    """
+    flow_cache:     dict = {}
+    holdings_cache: dict = {}
+    try:
+        from sheets import run_raw_sql
+        flow_rows = run_raw_sql(
+            "SELECT * FROM broker_flow WHERE date = %s",
+            (date,)
+        )
+        for r in (flow_rows or []):
+            sym = str(r.get("symbol", "")).upper()
+            if sym:
+                flow_cache[sym] = r
+
+        holdings_rows = run_raw_sql(
+            "SELECT * FROM broker_holdings WHERE date = %s",
+            (date,)
+        )
+        for r in (holdings_rows or []):
+            sym = str(r.get("symbol", "")).upper()
+            if sym:
+                holdings_cache[sym] = r
+    except Exception as exc:
+        logger.warning("_load_broker_flow_cache failed (%s) — broker flow skipped", exc)
+
+    logger.info(
+        "Broker flow cache: %d flow + %d holdings symbols",
+        len(flow_cache), len(holdings_cache),
+    )
+    return flow_cache, holdings_cache
+
+
+def _get_broker_flow_classification(sym: str, flow_cache: dict) -> tuple[str, int, float]:
+    """
+    Classify broker flow for a symbol.
+
+    Returns (classification, net_broker_count, net_amount):
+      NET_ACCUMULATION — acc_count dominates and dist_count < acc_count * churn_threshold
+      NET_DISTRIBUTION — dist_count dominates and acc_count < dist_count * churn_threshold
+      CHURN            — both sides heavy (above churn threshold)
+      NO_DATA          — symbol not in cache or parse error
+    """
+    if not flow_cache:
+        return ("NO_DATA", 0, 0.0)
+
+    row = flow_cache.get(str(sym).upper())
+    if not row:
+        return ("NO_DATA", 0, 0.0)
+
+    try:
+        from sheets import get_setting
+        churn_threshold = float(get_setting("BROKER_FLOW_CHURN_THRESHOLD", "0.6"))
+    except Exception:
+        churn_threshold = 0.6
+
+    try:
+        acc_count  = int(float(row.get("acc_broker_count_1d", 0) or 0))
+        dist_count = int(float(row.get("dist_broker_count_1d", 0) or 0))
+        acc_amt    = float(row.get("acc_amount_1d", 0) or 0)
+        dist_amt   = float(row.get("dist_amount_1d", 0) or 0)
+        net_amount = acc_amt - dist_amt
+        net_count  = acc_count - dist_count
+    except (TypeError, ValueError):
+        return ("NO_DATA", 0, 0.0)
+
+    if acc_count > dist_count and dist_count < acc_count * churn_threshold:
+        return ("NET_ACCUMULATION", net_count, net_amount)
+    if dist_count > acc_count and acc_count < dist_count * churn_threshold:
+        return ("NET_DISTRIBUTION", net_count, net_amount)
+    if acc_count > 0 and dist_count > 0:
+        return ("CHURN", net_count, net_amount)
+    return ("NO_DATA", 0, 0.0)
+
+
+def _compute_broker_flow_adj(sym: str, flow_cache: dict, holdings_cache: dict) -> float:
+    """
+    Composite score bonus from broker flow and stealth concentration.
+    Never negative — gate handles the downside.
+    Bonus values read from settings with hard-coded fallbacks.
+    """
+    try:
+        from sheets import get_setting
+        acc_bonus          = float(get_setting("BROKER_FLOW_ACC_BONUS",          "5.0"))
+        stealth_high_bonus = float(get_setting("BROKER_FLOW_STEALTH_HIGH_BONUS", "3.0"))
+        stealth_med_bonus  = float(get_setting("BROKER_FLOW_STEALTH_MED_BONUS",  "1.5"))
+    except Exception:
+        acc_bonus          = 5.0
+        stealth_high_bonus = 3.0
+        stealth_med_bonus  = 1.5
+
+    flow_class, _, _ = _get_broker_flow_classification(sym, flow_cache)
+
+    if flow_class in ("NO_DATA", "CHURN"):
+        return 0.0
+
+    adj = 0.0
+    if flow_class == "NET_ACCUMULATION":
+        adj += acc_bonus
+
+    holdings_row = (holdings_cache or {}).get(str(sym).upper())
+    if holdings_row:
+        try:
+            stealth = float(holdings_row.get("stealth_score", 0) or 0)
+            if stealth > 80:
+                adj += stealth_high_bonus
+            elif stealth > 60:
+                adj += stealth_med_bonus
+        except (TypeError, ValueError):
+            pass
+
+    return max(0.0, adj)
+
+
 def _compute_vos_adj(vos: float) -> float:
     """
     Score adjustment based on volume/outstanding-shares ratio.
@@ -1220,9 +1347,10 @@ def _compute_composite_score(
     conf_score:      float,
     geo_combined:    int,
     ipo_drain:       str,
-    fundamental_adj: float = 0.0,
-    vos_adj:         float = 0.0,   # volume/OS ratio adjustment
-    min_conf_score:  float = MIN_CONF_SCORE,  # dynamic — read from settings via ctx
+    fundamental_adj:  float = 0.0,
+    vos_adj:          float = 0.0,   # volume/OS ratio adjustment
+    broker_flow_adj:  float = 0.0,   # broker accumulation/distribution bonus
+    min_conf_score:   float = MIN_CONF_SCORE,  # dynamic — read from settings via ctx
 ) -> float:
     """
     Final composite score for candidate ranking.
@@ -1254,7 +1382,7 @@ def _compute_composite_score(
  
     return round(
         max(0.0, base + candle_bonus + cstar_b + conf_bonus
-                 + geo_adj + ipo_pen + fundamental_adj + vos_adj),
+                 + geo_adj + ipo_pen + fundamental_adj + vos_adj + broker_flow_adj),
         2,
     )
  
@@ -1342,6 +1470,9 @@ def run_filter(
     # ── Fundamental data (loaded ONCE for all symbols) ────────────────────────
     fund_map, beta_map = _load_fundamental_data()
 
+    # ── Broker flow cache (loaded ONCE for all symbols) ───────────────────────
+    flow_cache, holdings_cache = _load_broker_flow_cache(date)
+
     # ── Sector info from watchlist ────────────────────────────────────────────
     sector_map: dict[str, str] = {}
     try:
@@ -1385,7 +1516,7 @@ def run_filter(
         momentum = _compute_momentum(recent_map.get(sym, []))
         ctx["_sym_momentum"] = momentum   # consumed by _check_symbol_gates
 
-        sym_ok, sym_reason = _check_symbol_gates(sym, ind, price_row, ctx)
+        sym_ok, sym_reason = _check_symbol_gates(sym, ind, price_row, ctx, flow_cache=flow_cache)
         if not sym_ok:
             skipped_gate += 1
             logger.debug("GATE: %s — %s", sym, sym_reason)
@@ -1464,6 +1595,10 @@ def run_filter(
         vos_adj = _compute_vos_adj(volume_os_ratio)
         logger.debug("VOS_ADJ: %s vos=%.3f%% adj=%+.1f", sym, volume_os_ratio, vos_adj)
 
+        # ── Broker flow scoring adjustment ────────────────────────────────────
+        broker_flow_adj = _compute_broker_flow_adj(sym, flow_cache, holdings_cache)
+        logger.debug("BROKER_FLOW_ADJ: %s adj=%+.1f", sym, broker_flow_adj)
+
         composite = _compute_composite_score(
             indicator_score = ind_score,
             sector_mult     = sect_mult,
@@ -1474,6 +1609,7 @@ def run_filter(
             ipo_drain       = ctx["ipo_drain"],
             fundamental_adj = fund_adj,
             vos_adj         = vos_adj,
+            broker_flow_adj = broker_flow_adj,
             min_conf_score  = ctx.get("min_conf_score", MIN_CONF_SCORE),
         )
         logger.debug("VOS_ADJ: %s composite=%.1f", sym, composite)
@@ -1533,6 +1669,7 @@ def run_filter(
 
             fundamental_adj    = fund_adj,
             fundamental_reason = fund_reason,
+            broker_flow_adj    = broker_flow_adj,
 
             vwap_dev        = float(getattr(price_row, "vwap_dev",       0) or 0),
             bid_ask_ratio   = float(getattr(price_row, "bid_ask_ratio",  0) or 0),

@@ -606,6 +606,127 @@ def _format_fundamental_section(fund_ctx: dict) -> str:
     return "\n".join(lines)
 
 
+def _load_broker_flow_context(symbol: str) -> dict:
+    """
+    Query broker_flow and broker_holdings for symbol on today's date.
+    Returns dict with 'flow' and 'holdings' keys, or empty dict on any failure.
+    Never raises.
+    """
+    try:
+        from sheets import run_raw_sql
+        today = datetime.now(tz=NST).strftime("%Y-%m-%d")
+
+        flow_rows = run_raw_sql(
+            "SELECT * FROM broker_flow WHERE symbol = %s AND date = %s LIMIT 1",
+            (symbol.upper(), today),
+        )
+        holdings_rows = run_raw_sql(
+            "SELECT * FROM broker_holdings WHERE symbol = %s AND date = %s LIMIT 1",
+            (symbol.upper(), today),
+        )
+
+        flow     = dict(flow_rows[0])     if flow_rows     else {}
+        holdings = dict(holdings_rows[0]) if holdings_rows else {}
+
+        if not flow and not holdings:
+            return {}
+        return {"flow": flow, "holdings": holdings}
+    except Exception as exc:
+        logger.debug("_load_broker_flow_context(%s) failed: %s", symbol, exc)
+        return {}
+
+
+def _format_broker_flow_section(broker_ctx: dict) -> str:
+    """
+    Format broker flow data for Claude prompt.
+    Returns empty string if no data — never shows noise when table is empty.
+    """
+    if not broker_ctx:
+        return ""
+
+    flow     = broker_ctx.get("flow", {})
+    holdings = broker_ctx.get("holdings", {})
+
+    if not flow and not holdings:
+        return ""
+
+    def _cr(amount: float) -> str:
+        if amount >= 1_00_00_000:
+            return f"{amount / 1_00_00_000:.1f}Cr"
+        elif amount >= 1_00_000:
+            return f"{amount / 1_00_000:.1f}L"
+        return f"{amount:,.0f}"
+
+    def _fv(row: dict, key: str) -> float:
+        try:
+            v = row.get(key)
+            return float(v) if v not in (None, "", "None") else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+
+    today = datetime.now(tz=NST).strftime("%Y-%m-%d")
+    sep   = "═" * 47
+    lines = [sep, f"BROKER FLOW — {today}", sep]
+
+    if flow:
+        acc_count  = int(_fv(flow, "acc_broker_count_1d"))
+        dist_count = int(_fv(flow, "dist_broker_count_1d"))
+        acc_amt    = _fv(flow, "acc_amount_1d")
+        dist_amt   = _fv(flow, "dist_amount_1d")
+        net_amt    = acc_amt - dist_amt
+        net_sign   = "+" if net_amt >= 0 else "-"
+
+        if acc_count > dist_count:
+            flow_class = "NET_ACCUMULATION"
+        elif dist_count > acc_count:
+            flow_class = "NET_DISTRIBUTION"
+        else:
+            flow_class = "NEUTRAL"
+
+        lines.append(f"Daily Flow:    {flow_class}")
+        lines.append(f"  Buying:      {acc_count} brokers | NPR {_cr(acc_amt)}")
+        lines.append(f"  Selling:     {dist_count} brokers  | NPR {_cr(dist_amt)}")
+        lines.append(f"  Net:         {net_sign}NPR {_cr(abs(net_amt))}")
+
+        acc_1w_count = int(_fv(flow, "acc_broker_count_1w"))
+        acc_1w_amt   = _fv(flow, "acc_amount_1w")
+        if acc_1w_count > 0:
+            lines.append(
+                f"Weekly:        {acc_1w_count} brokers accumulated | NPR {_cr(acc_1w_amt)} this week"
+            )
+
+    if holdings:
+        stealth    = _fv(holdings, "stealth_score")
+        top3_pct   = _fv(holdings, "top3_holding_pct")
+        public_pct = _fv(holdings, "public_trade_pct")
+
+        lines.append("")
+        lines.append(
+            f"Stealth Score: {stealth:.1f} "
+            f"(top 3 hold {top3_pct:.1f}% | only {public_pct:.1f}% public leakage)"
+        )
+
+        b1_name = holdings.get("top_broker_1_name", "")
+        b1_pct  = _fv(holdings, "top_broker_1_pct")
+        b2_name = holdings.get("top_broker_2_name", "")
+        b2_pct  = _fv(holdings, "top_broker_2_pct")
+        b3_name = holdings.get("top_broker_3_name", "")
+        b3_pct  = _fv(holdings, "top_broker_3_pct")
+
+        if b1_name:
+            lines.append(f"  #1 {b1_name}: {b1_pct:.1f}%")
+        if b2_name:
+            lines.append(f"  #2 {b2_name}: {b2_pct:.1f}%")
+        if b3_name:
+            lines.append(f"  #3 {b3_name}: {b3_pct:.1f}%")
+
+    lines.append(sep)
+    lines.append(
+        "NOTE: Broker flow is supporting context. Primary signal must be technical."
+    )
+    return "\n".join(lines)
+
+
 # =============================================================================
 # SECTION 3 - HELPER CONTEXTS
 # =============================================================================
@@ -670,6 +791,7 @@ def _build_prompt(
     market_state: str,
     loss_streak:  int,
     fund_ctx:     dict = None,
+    broker_ctx:   dict = None,
 ) -> str:
     nst_now = datetime.now(tz=NST)
     LESSON_ACTION_GLOSSARY = """LESSON ACTION CODES — apply these exactly when a lesson fires:
@@ -694,7 +816,8 @@ def _build_prompt(
     herding_alert    = _herding_context(flag, market_state)
     candle_str       = f"{flag.best_candle} (Tier {flag.candle_tier})" if flag.best_candle else "None"
     hold_days        = getattr(flag, "suggested_hold", 17)
-    fund_section_str = _format_fundamental_section(fund_ctx) if fund_ctx else ""
+    fund_section_str         = _format_fundamental_section(fund_ctx)   if fund_ctx   else ""
+    broker_flow_section_str  = _format_broker_flow_section(broker_ctx) if broker_ctx else ""
 
     # Political event context block (empty string if nothing active)
     _event_ctx = ""
@@ -778,6 +901,7 @@ PRICE LEVELS (20-day range):
   LTP vs Support:  {((flag.ltp - flag.support_level) / flag.support_level * 100) if flag.support_level else 0:+.1f}%
   LTP vs Resist:   {((flag.resistance_level - flag.ltp) / flag.ltp * 100) if flag.resistance_level else 0:+.1f}%
 {fund_section_str}
+{broker_flow_section_str}
 ==============================================
 MARKET CONTEXT
 ==============================================
@@ -1160,8 +1284,9 @@ def run_analysis(flags: list) -> list[AnalystResult]:
             logger.info("%s: portfolio full after earlier BUYs -- skipping", sym)
             continue
 
-        lessons  = _load_lessons(sym, getattr(flag, "sector", ""))
-        fund_ctx = _load_fundamentals_context(sym, getattr(flag, "sector", ""))
+        lessons     = _load_lessons(sym, getattr(flag, "sector", ""))
+        fund_ctx    = _load_fundamentals_context(sym, getattr(flag, "sector", ""))
+        broker_ctx  = _load_broker_flow_context(sym)
 
         logger.info(
             "Fundamentals for %s: found=%s | beta=%s | notes=%d",
@@ -1170,10 +1295,17 @@ def run_analysis(flags: list) -> list[AnalystResult]:
             fund_ctx.get("beta", "N/A"),
             len(fund_ctx.get("trend_notes", [])),
         )
+        logger.info(
+            "Broker flow for %s: flow=%s holdings=%s",
+            sym,
+            "yes" if broker_ctx.get("flow") else "no",
+            "yes" if broker_ctx.get("holdings") else "no",
+        )
 
         prompt      = _build_prompt(
             flag, portfolio, geo, macro, lessons, market_state, loss_streak,
             fund_ctx=fund_ctx,
+            broker_ctx=broker_ctx,
         )
         claude_json = ask_claude(prompt, context="claude_analyst")
 
@@ -1291,11 +1423,13 @@ if __name__ == "__main__":
         loss_streak  = _load_loss_streak()
 
         for i, flag in enumerate(flags, 1):
-            lessons  = _load_lessons(flag.symbol, getattr(flag, "sector", ""))
-            fund_ctx = _load_fundamentals_context(flag.symbol, getattr(flag, "sector", ""))
-            prompt   = _build_prompt(
+            lessons    = _load_lessons(flag.symbol, getattr(flag, "sector", ""))
+            fund_ctx   = _load_fundamentals_context(flag.symbol, getattr(flag, "sector", ""))
+            broker_ctx = _load_broker_flow_context(flag.symbol)
+            prompt     = _build_prompt(
                 flag, portfolio, geo, macro, lessons, market_state, loss_streak,
                 fund_ctx=fund_ctx,
+                broker_ctx=broker_ctx,
             )
             char_count = len(prompt)
             token_est  = char_count // 4
