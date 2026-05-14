@@ -8,7 +8,8 @@
       "Bash(nepse_env/Scripts/python.exe -c ':*)",
       "Bash(python -c ' *)",
       "Bash(python -m db.codegen)",
-      "Bash(python -m db.migrations)"
+      "Bash(python -m db.migrations)",
+      "Bash(dir /s /b \"d:\\\\project\\\\nepse-engine\\\\*claude_analyst*\")"
     ]
   }
 }
