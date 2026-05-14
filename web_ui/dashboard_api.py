@@ -13,9 +13,17 @@ import datetime
 import decimal
 from datetime import date
 
+import re as _re
+import io as _io
+import csv as _csv
+
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from pydantic import BaseModel
+from typing import Optional
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -27,7 +35,25 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-app = FastAPI(title="NEPSE AI — Dashboard API", version="1.0.0")
+@asynccontextmanager
+async def lifespan(app):
+    try:
+        with _db() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS saved_queries (
+                  id SERIAL PRIMARY KEY,
+                  name TEXT NOT NULL,
+                  description TEXT,
+                  sql TEXT NOT NULL,
+                  created_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+        log.info("saved_queries table ensured")
+    except Exception as e:
+        log.exception("Failed to ensure saved_queries table: %s", e)
+    yield
+
+app = FastAPI(title="NEPSE AI — Dashboard API", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -353,4 +379,208 @@ def get_portfolio():
         return {"open_positions": open_positions, "cash_balance": cash}
     except Exception as e:
         log.exception("portfolio failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Reporter ───────────────────────────────────────────────────────────────────
+
+_SQL_DANGER = _re.compile(r'\b(INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER)\b', _re.IGNORECASE)
+_PARAM_RE   = _re.compile(r':([a-zA-Z_][a-zA-Z0-9_]*)')
+
+
+def _check_sql(sql: str):
+    if _SQL_DANGER.search(sql):
+        raise HTTPException(status_code=400, detail="Only SELECT queries allowed.")
+
+
+def _build_psycopg2_sql(sql: str) -> str:
+    return _PARAM_RE.sub(r'%(\1)s', sql)
+
+
+class _SaveQueryBody(BaseModel):
+    name: str
+    description: Optional[str] = None
+    sql: str
+
+
+class _RunQueryBody(BaseModel):
+    sql: str
+    params: dict = {}
+
+
+class _DownloadBody(BaseModel):
+    sql: str
+    params: dict = {}
+    filename: str = "export"
+
+
+@app.get("/reporter/tables")
+def reporter_tables():
+    try:
+        with _db() as cur:
+            cur.execute("""
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_schema = 'public'
+                ORDER BY table_name
+            """)
+            tables = [r["table_name"] for r in (cur.fetchall() or [])]
+        return {"tables": tables}
+    except Exception as e:
+        log.exception("reporter_tables failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/reporter/sectors")
+def reporter_sectors():
+    try:
+        with _db() as cur:
+            cur.execute(
+                "SELECT DISTINCT sector FROM stocks WHERE sector IS NOT NULL ORDER BY sector"
+            )
+            rows = [r["sector"] for r in (cur.fetchall() or [])]
+        return {"sectors": rows}
+    except Exception as e:
+        log.exception("reporter_sectors failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/reporter/queries")
+def reporter_list_queries():
+    try:
+        with _db() as cur:
+            cur.execute(
+                "SELECT id, name, description, created_at FROM saved_queries ORDER BY id DESC"
+            )
+            rows = _rows(cur)
+        return {"queries": rows}
+    except Exception as e:
+        log.exception("reporter_list_queries failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/reporter/queries")
+def reporter_save_query(body: _SaveQueryBody):
+    _check_sql(body.sql)
+    try:
+        with _db() as cur:
+            cur.execute(
+                "INSERT INTO saved_queries (name, description, sql) VALUES (%s, %s, %s) RETURNING id",
+                (body.name, body.description, body.sql),
+            )
+            row = cur.fetchone()
+        return {"id": row["id"], "name": body.name}
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("reporter_save_query failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/reporter/queries/{query_id}")
+def reporter_get_query(query_id: int):
+    try:
+        with _db() as cur:
+            cur.execute("SELECT * FROM saved_queries WHERE id = %s", (query_id,))
+            row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Query not found")
+        return dict(row)
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("reporter_get_query failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/reporter/run")
+def reporter_run(body: _RunQueryBody):
+    _check_sql(body.sql)
+    try:
+        psql = _build_psycopg2_sql(body.sql)
+        params = {k: v for k, v in body.params.items() if v not in (None, "", [])}
+        with _db() as cur:
+            cur.execute(psql, params or None)
+            rows = _rows(cur)
+        return {"rows": rows, "count": len(rows)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("reporter_run failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/reporter/download/csv")
+def reporter_download_csv(body: _DownloadBody):
+    _check_sql(body.sql)
+    try:
+        psql = _build_psycopg2_sql(body.sql)
+        params = {k: v for k, v in body.params.items() if v not in (None, "", [])}
+        with _db() as cur:
+            cur.execute(psql, params or None)
+            rows = _rows(cur)
+
+        if not rows:
+            raise HTTPException(status_code=404, detail="No rows returned")
+
+        buf = _io.StringIO()
+        writer = _csv.DictWriter(buf, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+        buf.seek(0)
+
+        filename = (body.filename or "export").strip()
+        if not filename.endswith(".csv"):
+            filename += ".csv"
+
+        return StreamingResponse(
+            iter([buf.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("reporter_download_csv failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/reporter/download/xlsx")
+def reporter_download_xlsx(body: _DownloadBody):
+    _check_sql(body.sql)
+    try:
+        import openpyxl
+        psql = _build_psycopg2_sql(body.sql)
+        params = {k: v for k, v in body.params.items() if v not in (None, "", [])}
+        with _db() as cur:
+            cur.execute(psql, params or None)
+            rows = _rows(cur)
+
+        if not rows:
+            raise HTTPException(status_code=404, detail="No rows returned")
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        headers = list(rows[0].keys())
+        ws.append(headers)
+        for row in rows:
+            ws.append([row.get(h) for h in headers])
+
+        buf = _io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+
+        filename = (body.filename or "export").strip()
+        if not filename.endswith(".xlsx"):
+            filename += ".xlsx"
+
+        return StreamingResponse(
+            iter([buf.read()]),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("reporter_download_xlsx failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
