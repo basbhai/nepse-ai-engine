@@ -30,13 +30,14 @@ _POLITICAL_KEYWORDS: list[tuple[str, str]] = [
     ("supreme court|sc ruling|court order",        "SC_RULING"),
     ("prime minister|pm sworn|new government|cabinet formed", "GOVT_FORMATION"),
     ("coalition|alliance shifted|new majority",    "COALITION_CHANGE"),
-    ("cib|probe|investigation|inquiry|fraud",      "CORRUPTION_PROBE"),
+    ("cib|ciaa|probe|investigation|inquiry|fraud|asset detail|property detail|सम्पत्ति छानबिन|सम्पत्ति विवरण", "CORRUPTION_PROBE"),
+    ("anti-corruption|acc|property audit|property investigation|commission|abuse of authority|सम्पत्ति आयोग", "ANTI_CORRUPTION"),
     ("arrested|detained|held",                     "CORRUPTION_ARREST"),
     ("china|border encroach|boundary",             "CHINA_RELATIONS"),
     ("india|blockade|trade restrict",              "INDIA_RELATIONS"),
     ("election|voting|polling",                    "ELECTION"),
     ("president|vice president",                   "PRESIDENTIAL"),
-    ("anti-corruption|acc|property audit",         "ANTI_CORRUPTION"),
+
     ("pledge fee|collateral|margin rule",          "ADMIN"),
 ]
 
