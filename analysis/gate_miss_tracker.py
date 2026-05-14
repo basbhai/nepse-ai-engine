@@ -67,6 +67,7 @@ TRACKABLE_CATEGORIES = {
     "RSI_NO_CONFIRM",
     "HISTORY",
     "ILLIQUID",
+    "BROKER_FLOW",
 }
 
 # Minimum sample size before a proposal is surfaced
@@ -541,16 +542,18 @@ def get_summary_for_gpt(days: int = 90) -> dict:
         "RSI_NO_CONFIRM": "RSI_CONFIRM_REQUIRED",
         "HISTORY":        "MIN_HISTORY_DAYS",
         "ILLIQUID":       "MIN_VOS_PCT",
+        "BROKER_FLOW":    "BROKER_FLOW_CHURN_THRESHOLD",
     }
 
     # Current threshold values (read from settings for context)
     CURRENT_DEFAULTS = {
-        "MIN_CONF_SCORE":           50,
-        "TECH_SCORE_THRESHOLDS":    "varies by market state",
-        "RSI_OVERBOUGHT_THRESHOLD": 75,
-        "RSI_CONFIRM_REQUIRED":     "MACD or BB required",
-        "MIN_HISTORY_DAYS":         20,
-        "MIN_VOS_PCT":              0.05,
+        "MIN_CONF_SCORE":              50,
+        "TECH_SCORE_THRESHOLDS":       "varies by market state",
+        "RSI_OVERBOUGHT_THRESHOLD":    75,
+        "RSI_CONFIRM_REQUIRED":        "MACD or BB required",
+        "MIN_HISTORY_DAYS":            20,
+        "MIN_VOS_PCT":                 0.05,
+        "BROKER_FLOW_CHURN_THRESHOLD": 0.6,
     }
 
     for cat, stats in by_category.items():

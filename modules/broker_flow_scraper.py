@@ -453,30 +453,6 @@ def build_telegram_message(
             lines.append(f"   _{names}_")
     lines.append("")
 
-    # ── Distribution by broker count ────────────────────────────────────────
-    lines.append("🔴 *Distribution — Top Broker Count*")
-    for i, r in enumerate(_top_flow_by_broker_count(flow_records, "DISTRIBUTION"), 1):
-        names = _broker_names_short(r["dist_brokers_1d_json"])
-        lines.append(
-            f"{i}. *{r['symbol']}* — {r['dist_broker_count_1d']} brokers | "
-            f"NPR {_cr(float(r['dist_amount_1d']))}"
-        )
-        if names:
-            lines.append(f"   _{names}_")
-    lines.append("")
-
-    # ── Distribution by volume ───────────────────────────────────────────────
-    lines.append("🔴 *Distribution — Top Volume*")
-    for i, r in enumerate(_top_flow_by_volume(flow_records, "DISTRIBUTION"), 1):
-        names = _broker_names_short(r["dist_brokers_1d_json"])
-        lines.append(
-            f"{i}. *{r['symbol']}* — NPR {_cr(float(r['dist_amount_1d']))} | "
-            f"{r['dist_broker_count_1d']} brokers"
-        )
-        if names:
-            lines.append(f"   _{names}_")
-    lines.append("")
-
     # ── Stealth holdings ─────────────────────────────────────────────────────
     if holdings_records:
         lines.append("🔵 *Stealth — Highest Broker Concentration*")
