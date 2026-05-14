@@ -229,7 +229,7 @@ def get_summary():
 def get_market_log():
     try:
         with _db() as cur:
-            cur.execute("SELECT * FROM market_log ORDER BY date DESC, id DESC LIMIT 200")
+            cur.execute("SELECT * FROM market_log ORDER BY date DESC, id DESC LIMIT 10")
             rows = _rows(cur)
         return {"rows": rows, "count": len(rows)}
     except Exception as e:
