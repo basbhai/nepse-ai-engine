@@ -400,6 +400,42 @@ tr.row-pending td { background: rgba(245,158,11,.04); }
 ═══════════════════════════════════════════════════════════ */
 #main, .section { max-width: 100%; overflow-x: hidden; }
 .card, .chart-box, .lesson-card { max-width: 100%; }
+
+/* ═══════════════════════════════════════════════════════════
+   REPORTER
+═══════════════════════════════════════════════════════════ */
+.rpt-layout { display: grid; grid-template-columns: 260px 1fr; gap: 14px; align-items: start; }
+.rpt-panel { background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.rpt-panel-hdr { padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 10px; letter-spacing: .1em; color: var(--muted); text-transform: uppercase; display: flex; align-items: center; justify-content: space-between; min-height: 40px; }
+.rpt-panel-hdr > span { color: var(--text); font-size: 11px; letter-spacing: 0; text-transform: none; }
+.rpt-query-list { max-height: 60vh; overflow-y: auto; }
+.rpt-query-item { padding: 10px 14px; border-bottom: 1px solid var(--border); cursor: pointer; transition: background .12s; border-left: 2px solid transparent; }
+.rpt-query-item:last-child { border-bottom: none; }
+.rpt-query-item:hover { background: var(--bg3); }
+.rpt-query-item.active { background: rgba(0,217,126,.06); border-left-color: var(--green); }
+.rpt-query-name { font-size: 12px; font-weight: 600; color: var(--text); }
+.rpt-query-desc { font-size: 10px; color: var(--muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rpt-empty { padding: 24px 14px; color: var(--muted); font-size: 11px; text-align: center; }
+.rpt-btn { font-family: inherit; font-size: 11px; letter-spacing: .05em; text-transform: uppercase; padding: 5px 11px; border-radius: 4px; border: 1px solid; cursor: pointer; transition: all .15s; min-height: 30px; white-space: nowrap; }
+.rpt-btn-green { background: transparent; border-color: var(--green); color: var(--green); }
+.rpt-btn-green:hover { background: rgba(0,217,126,.1); }
+.rpt-btn-blue  { background: transparent; border-color: var(--blue);  color: var(--blue);  }
+.rpt-btn-blue:hover  { background: rgba(96,165,250,.1); }
+.rpt-btn-amber { background: transparent; border-color: var(--amber); color: var(--amber); }
+.rpt-btn-amber:hover { background: rgba(245,158,11,.1); }
+.rpt-btn-dim   { background: transparent; border-color: var(--border); color: var(--muted); }
+.rpt-btn-dim:hover   { border-color: var(--muted); color: var(--text); }
+.rpt-btn:disabled { opacity: .35; cursor: not-allowed; }
+.rpt-textarea { width: 100%; background: var(--bg3); border: 1px solid var(--border); color: var(--text); font-family: 'JetBrains Mono', monospace; font-size: 12px; padding: 10px 12px; border-radius: 4px; resize: vertical; outline: none; line-height: 1.7; }
+.rpt-textarea:focus { border-color: var(--green); }
+.rpt-input, .rpt-select { background: var(--bg3); border: 1px solid var(--border); color: var(--text); font-family: inherit; font-size: 12px; padding: 6px 10px; border-radius: 4px; outline: none; min-height: 34px; width: 100%; }
+.rpt-input:focus, .rpt-select:focus { border-color: var(--green); }
+.rpt-select option { background: var(--bg3); }
+.rpt-param-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+.rpt-param-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 4px; }
+.rpt-save-box { background: var(--bg3); border: 1px solid var(--border); border-radius: 4px; padding: 12px 14px; }
+.rpt-warn { background: rgba(245,158,11,.1); border: 1px solid rgba(245,158,11,.3); color: var(--amber); font-size: 11px; padding: 6px 12px; border-radius: 4px; margin-bottom: 8px; }
+@media (max-width: 767px) { .rpt-layout { grid-template-columns: 1fr; } .rpt-query-list { max-height: 200px; } }
 </style>
 </head>
 <body>
@@ -420,6 +456,7 @@ tr.row-pending td { background: rgba(245,158,11,.04); }
     <a href="#s-portfolio">&#9632; Portfolio</a>
     <div class="divider"></div>
     <a href="#s-nrb">&#9632; NRB Entry</a>
+    <a href="#s-reporter">&#9632; Query</a>
   </nav>
   <div class="refresh-info">
     Auto-refresh: <span>5 min</span><br/>
@@ -576,6 +613,81 @@ tr.row-pending td { background: rgba(245,158,11,.04); }
     </div><!-- /nrb-layout -->
   </div><!-- /s-nrb -->
 
+  <!-- 9. Query Reporter -->
+  <div class="section" id="s-reporter">
+    <div class="section-header"><h2>Query Reporter</h2><span class="tag">SQL</span></div>
+    <div class="rpt-layout">
+
+      <!-- LEFT: Saved Queries list -->
+      <div class="rpt-panel">
+        <div class="rpt-panel-hdr">
+          <span>Saved Queries</span>
+          <button class="rpt-btn rpt-btn-dim" onclick="rptNewQuery()">+ New</button>
+        </div>
+        <div class="rpt-query-list" id="rpt-query-list">
+          <div class="spinner">Loading…</div>
+        </div>
+      </div>
+
+      <!-- RIGHT: Editor + Params + Results -->
+      <div class="rpt-panel">
+        <div class="rpt-panel-hdr">
+          <span>SQL Editor</span>
+          <div style="display:flex;gap:6px">
+            <button class="rpt-btn rpt-btn-green" onclick="rptRun()">&#9654; Run</button>
+            <button class="rpt-btn rpt-btn-dim" id="rpt-save-toggle" onclick="rptToggleSaveForm()">Save</button>
+          </div>
+        </div>
+
+        <!-- SQL textarea -->
+        <div style="padding:12px 14px;border-bottom:1px solid var(--border)">
+          <textarea class="rpt-textarea" id="rpt-sql" rows="8"
+            placeholder="SELECT * FROM market_log WHERE date >= :from_date LIMIT :limit"></textarea>
+        </div>
+
+        <!-- Inline save form (hidden by default) -->
+        <div id="rpt-save-form" style="display:none;padding:12px 14px;border-bottom:1px solid var(--border)">
+          <div class="rpt-save-box">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+              <div>
+                <div class="rpt-param-label">Name *</div>
+                <input class="rpt-input" id="rpt-save-name" type="text" placeholder="My Query" />
+              </div>
+              <div>
+                <div class="rpt-param-label">Description</div>
+                <input class="rpt-input" id="rpt-save-desc" type="text" placeholder="Optional…" />
+              </div>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center">
+              <button class="rpt-btn rpt-btn-green" onclick="rptSaveQuery()">Save Query</button>
+              <button class="rpt-btn rpt-btn-dim" onclick="rptToggleSaveForm()">Cancel</button>
+              <span id="rpt-save-msg" style="font-size:11px;margin-left:4px"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Dynamic param inputs -->
+        <div id="rpt-params-area" style="display:none;padding:12px 14px;border-bottom:1px solid var(--border)">
+          <div class="rpt-param-label" style="margin-bottom:8px">Parameters</div>
+          <div class="rpt-param-grid" id="rpt-params-grid"></div>
+        </div>
+
+        <!-- Download bar (shown after successful run) -->
+        <div id="rpt-dl-bar" style="display:none;padding:8px 14px;border-bottom:1px solid var(--border);align-items:center;gap:8px">
+          <span id="rpt-row-info" style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;flex:1"></span>
+          <button class="rpt-btn rpt-btn-blue" onclick="rptDownload('csv')">&#8595; CSV</button>
+          <button class="rpt-btn rpt-btn-blue" onclick="rptDownload('xlsx')">&#8595; XLSX</button>
+        </div>
+
+        <!-- Results table -->
+        <div style="padding:14px">
+          <div id="rpt-results"></div>
+        </div>
+      </div><!-- /rpt-right -->
+
+    </div><!-- /rpt-layout -->
+  </div><!-- /s-reporter -->
+
 </div><!-- /main -->
 
 <!-- ═══════════════════════ BOTTOM NAV (mobile) ═══════════════ -->
@@ -589,6 +701,7 @@ tr.row-pending td { background: rgba(245,158,11,.04); }
     <a href="#s-trades"><span class="bico">◉</span>Trades</a>
     <a href="#s-portfolio"><span class="bico">◎</span>Port</a>
     <a href="#s-nrb"><span class="bico">⊞</span>NRB</a>
+    <a href="#s-reporter"><span class="bico">⊟</span>Query</a>
   </div>
 </nav>
 
@@ -1148,7 +1261,7 @@ function renderPortfolio(positions, cash) {
 }
 
 /* ── Sidebar / bottom-nav active tracking ────────────────────────── */
-const NAV_SECTIONS = ['s-dashboard','s-marketlog','s-learning','s-audit','s-council','s-trades','s-portfolio','s-nrb'];
+const NAV_SECTIONS = ['s-dashboard','s-marketlog','s-learning','s-audit','s-council','s-trades','s-portfolio','s-nrb','s-reporter'];
 
 function updateActiveNav() {
   let current = NAV_SECTIONS[0];
@@ -1175,10 +1288,351 @@ async function refreshAll() {
 document.addEventListener('DOMContentLoaded', () => {
   refreshAll();
   nrbCheckAPI();
+  loadReporter();
   setInterval(refreshAll, 5 * 60 * 1000);
   setInterval(nrbCheckAPI, 15000);
 });
 
+
+/* ═══════════════════════════════════════════════════════════
+   REPORTER  (prefixed rpt*)
+═══════════════════════════════════════════════════════════ */
+
+let _rptSectors    = null;
+let _rptParamTimer = null;
+let _rptLastSQL    = '';
+let _rptLastParams = {};
+
+async function loadReporter() {
+  try {
+    const d = await fetchJSON('/reporter/queries');
+    _rptRenderQueryList(d.queries || []);
+  } catch(e) {
+    document.getElementById('rpt-query-list').innerHTML =
+      `<div class="error-box">&#9888; ${esc(e.message)}</div>`;
+  }
+  _rptLoadTables();
+  const sqlEl = document.getElementById('rpt-sql');
+  sqlEl.addEventListener('input', () => {
+    clearTimeout(_rptParamTimer);
+    _rptParamTimer = setTimeout(_rptRenderParams, 400);
+    _rptShowTableSuggest(sqlEl);
+  });
+  sqlEl.addEventListener('keydown', e => {
+    if (e.key === 'Escape') {
+      const box = document.getElementById('rpt-suggest-box');
+      if (box) box.style.display = 'none';
+    }
+  });
+}
+
+let _rptTables = [];
+
+async function _rptLoadTables() {
+  try {
+    const d = await fetchJSON('/reporter/tables');
+    _rptTables = d.tables || [];
+  } catch {}
+}
+
+function _rptShowTableSuggest(textarea) {
+  let box = document.getElementById('rpt-suggest-box');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'rpt-suggest-box';
+    box.style.cssText = [
+      'position:absolute',
+      'background:var(--bg3)',
+      'border:1px solid var(--border)',
+      'border-radius:4px',
+      'z-index:999',
+      'max-height:180px',
+      'overflow-y:auto',
+      "font-family:'JetBrains Mono',monospace",
+      'font-size:12px',
+      'min-width:200px',
+      'box-shadow:0 4px 12px rgba(0,0,0,.4)',
+    ].join(';');
+    document.body.appendChild(box);
+  }
+
+  const val    = textarea.value;
+  const cursor = textarea.selectionStart;
+  const before = val.substring(0, cursor);
+  const match  = before.match(/(?:FROM|JOIN|UPDATE|INTO)\s+(\w*)$/i);
+
+  if (!match) { box.style.display = 'none'; return; }
+
+  const typed   = match[1].toLowerCase();
+  const matches = _rptTables.filter(t => t.startsWith(typed));
+
+  if (!matches.length) { box.style.display = 'none'; return; }
+
+  const rect = textarea.getBoundingClientRect();
+  box.style.left    = (rect.left + window.scrollX + 12) + 'px';
+  box.style.top     = (rect.bottom + window.scrollY + 4) + 'px';
+  box.style.display = 'block';
+
+  box.innerHTML = matches.map(t => `
+    <div style="padding:7px 12px;cursor:pointer;border-bottom:1px solid var(--border)"
+      onmouseenter="this.style.background='var(--bg4)'"
+      onmouseleave="this.style.background=''"
+      onmousedown="event.preventDefault();_rptInsertTable('${t}')">
+      ${t}
+    </div>
+  `).join('');
+}
+
+function _rptInsertTable(tableName) {
+  const textarea = document.getElementById('rpt-sql');
+  const cursor   = textarea.selectionStart;
+  const val      = textarea.value;
+  const before   = val.substring(0, cursor);
+  const after    = val.substring(cursor);
+  const replaced = before.replace(/(\b(?:FROM|JOIN|UPDATE|INTO)\s+)\w*$/i, `$1${tableName}`);
+  textarea.value = replaced + after;
+  textarea.focus();
+  const newPos = replaced.length;
+  textarea.setSelectionRange(newPos, newPos);
+  const box = document.getElementById('rpt-suggest-box');
+  if (box) box.style.display = 'none';
+  _rptRenderParams();
+}
+
+document.addEventListener('click', e => {
+  const box = document.getElementById('rpt-suggest-box');
+  if (box && !box.contains(e.target) && e.target.id !== 'rpt-sql')
+    box.style.display = 'none';
+});
+
+function _rptRenderQueryList(queries) {
+  const el = document.getElementById('rpt-query-list');
+  if (!queries.length) {
+    el.innerHTML = '<div class="rpt-empty">No saved queries yet.<br/>Write a query and click Save.</div>';
+    return;
+  }
+  el.innerHTML = queries.map(q => `
+    <div class="rpt-query-item" data-id="${q.id}" onclick="rptLoadQuery(${q.id})">
+      <div class="rpt-query-name">${esc(q.name)}</div>
+      ${q.description ? `<div class="rpt-query-desc">${esc(q.description)}</div>` : ''}
+    </div>
+  `).join('');
+}
+
+async function rptLoadQuery(id) {
+  try {
+    const q = await fetchJSON(`/reporter/queries/${id}`);
+    document.getElementById('rpt-sql').value = q.sql || '';
+    document.querySelectorAll('.rpt-query-item').forEach(el =>
+      el.classList.toggle('active', +el.dataset.id === id));
+    _rptRenderParams();
+    document.getElementById('rpt-results').innerHTML = '';
+    document.getElementById('rpt-dl-bar').style.display = 'none';
+  } catch(e) {
+    document.getElementById('rpt-results').innerHTML =
+      `<div class="error-box">&#9888; ${esc(e.message)}</div>`;
+  }
+}
+
+function rptNewQuery() {
+  document.getElementById('rpt-sql').value = '';
+  document.querySelectorAll('.rpt-query-item').forEach(el => el.classList.remove('active'));
+  _rptRenderParams();
+  document.getElementById('rpt-results').innerHTML = '';
+  document.getElementById('rpt-dl-bar').style.display = 'none';
+  _rptLastSQL = ''; _rptLastParams = {};
+  document.getElementById('rpt-sql').focus();
+}
+
+function _rptExtractParams(sql) {
+  const re = /:([a-zA-Z_][a-zA-Z0-9_]*)/g;
+  const seen = new Set(), out = [];
+  let m;
+  while ((m = re.exec(sql)) !== null)
+    if (!seen.has(m[1])) { seen.add(m[1]); out.push(m[1]); }
+  return out;
+}
+
+function _rptParamLabel(name) {
+  return name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+async function _rptGetSectors() {
+  if (_rptSectors) return _rptSectors;
+  try { const d = await fetchJSON('/reporter/sectors'); _rptSectors = d.sectors || []; }
+  catch { _rptSectors = []; }
+  return _rptSectors;
+}
+
+async function _rptRenderParams() {
+  const sql    = document.getElementById('rpt-sql').value;
+  const params = _rptExtractParams(sql);
+  const area   = document.getElementById('rpt-params-area');
+  const grid   = document.getElementById('rpt-params-grid');
+
+  if (!params.length) { area.style.display = 'none'; grid.innerHTML = ''; return; }
+  area.style.display = 'block';
+
+  // Preserve existing input values
+  const prev = {};
+  grid.querySelectorAll('[data-param]').forEach(el => { prev[el.dataset.param] = el.value; });
+
+  const needSectors = params.some(p => p.includes('sector'));
+  const sectors = needSectors ? await _rptGetSectors() : [];
+
+  grid.innerHTML = params.map(name => {
+    const label = _rptParamLabel(name);
+    const cur   = prev[name] !== undefined ? prev[name] : '';
+    let inp = '';
+    if (name.includes('date')) {
+      inp = `<input class="rpt-input" type="date" data-param="${name}" value="${esc(cur)}" />`;
+    } else if (name.includes('symbol')) {
+      inp = `<input class="rpt-input" type="text" data-param="${name}" value="${esc(cur)}"
+               placeholder="e.g. NABIL" style="text-transform:uppercase"
+               oninput="this.value=this.value.toUpperCase()" />`;
+    } else if (name.includes('sector')) {
+      const opts = sectors.map(s =>
+        `<option value="${esc(s)}"${s===cur?' selected':''}>${esc(s)}</option>`).join('');
+      inp = `<select class="rpt-select" data-param="${name}"><option value=""></option>${opts}</select>`;
+    } else if (name.includes('status')) {
+      const vals = ['ALL','BUY','WAIT','AVOID','WIN','LOSS','OPEN','CLOSED'];
+      const opts = vals.map(s =>
+        `<option value="${s}"${s===cur?' selected':''}>${s}</option>`).join('');
+      inp = `<select class="rpt-select" data-param="${name}"><option value=""></option>${opts}</select>`;
+    } else if (name.includes('flag') || name.includes('mode')) {
+      const opts = ['true','false'].map(s =>
+        `<option value="${s}"${s===cur?' selected':''}>${s}</option>`).join('');
+      inp = `<select class="rpt-select" data-param="${name}"><option value=""></option>${opts}</select>`;
+    } else if (name.includes('limit') || name.includes('count')) {
+      inp = `<input class="rpt-input" type="number" data-param="${name}" value="${esc(cur)}" placeholder="100" />`;
+    } else {
+      inp = `<input class="rpt-input" type="text" data-param="${name}" value="${esc(cur)}" />`;
+    }
+    return `<div><div class="rpt-param-label">${esc(label)}</div>${inp}</div>`;
+  }).join('');
+}
+
+function _rptCollectParams() {
+  const params = {};
+  document.getElementById('rpt-params-grid').querySelectorAll('[data-param]').forEach(el => {
+    const val = el.value.trim();
+    if (val !== '') params[el.dataset.param] = val;
+  });
+  return params;
+}
+
+async function rptRun() {
+  const sql = document.getElementById('rpt-sql').value.trim();
+  if (!sql) return;
+  const resultsEl = document.getElementById('rpt-results');
+  const dlBar     = document.getElementById('rpt-dl-bar');
+  resultsEl.innerHTML = '<div class="spinner">Running query…</div>';
+  dlBar.style.display = 'none';
+
+  const params = _rptCollectParams();
+  try {
+    const r = await fetch(API + '/reporter/run', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ sql, params }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+    _rptLastSQL = sql;
+    _rptLastParams = params;
+    _rptRenderResults(d.rows, d.count);
+  } catch(e) {
+    resultsEl.innerHTML = `<div class="error-box">&#9888; ${esc(e.message)}</div>`;
+  }
+}
+
+function _rptRenderResults(rows, count) {
+  const resultsEl = document.getElementById('rpt-results');
+  const dlBar     = document.getElementById('rpt-dl-bar');
+  const infoEl    = document.getElementById('rpt-row-info');
+
+  if (!rows || !rows.length) {
+    resultsEl.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:8px 0">No rows returned.</div>';
+    dlBar.style.display = 'none';
+    return;
+  }
+
+  const display = rows.slice(0, 500);
+  const cols    = Object.keys(rows[0]);
+  const warn    = count > 500
+    ? `<div class="rpt-warn">&#9888; Showing 500 of ${count} rows. Use LIMIT in your SQL, or download the full set.</div>`
+    : '';
+
+  const thead = `<thead><tr>${cols.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead>`;
+  const tbody = `<tbody>${display.map(row =>
+    `<tr>${cols.map(c => `<td>${v(row[c])}</td>`).join('')}</tr>`
+  ).join('')}</tbody>`;
+
+  resultsEl.innerHTML = warn + `<div class="tbl-wrap"><table>${thead}${tbody}</table></div>`;
+  infoEl.textContent  = `${count} row${count !== 1 ? 's' : ''}`;
+  dlBar.style.display = 'flex';
+}
+
+function rptToggleSaveForm() {
+  const form = document.getElementById('rpt-save-form');
+  const open = form.style.display === 'none' || form.style.display === '';
+  form.style.display = open ? 'block' : 'none';
+  if (!open) document.getElementById('rpt-save-msg').innerHTML = '';
+}
+
+async function rptSaveQuery() {
+  const sql  = document.getElementById('rpt-sql').value.trim();
+  const name = document.getElementById('rpt-save-name').value.trim();
+  const desc = document.getElementById('rpt-save-desc').value.trim();
+  const msgEl = document.getElementById('rpt-save-msg');
+
+  if (!name) { msgEl.innerHTML = '<span style="color:var(--red)">Name is required.</span>'; return; }
+  if (!sql)  { msgEl.innerHTML = '<span style="color:var(--red)">SQL is empty.</span>'; return; }
+
+  try {
+    const r = await fetch(API + '/reporter/queries', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ name, description: desc || null, sql }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+    msgEl.innerHTML = `<span style="color:var(--green)">&#10003; Saved as &ldquo;${esc(name)}&rdquo;</span>`;
+    const ld = await fetchJSON('/reporter/queries');
+    _rptRenderQueryList(ld.queries || []);
+    setTimeout(() => {
+      document.getElementById('rpt-save-form').style.display = 'none';
+      document.getElementById('rpt-save-name').value = '';
+      document.getElementById('rpt-save-desc').value = '';
+      msgEl.innerHTML = '';
+    }, 1500);
+  } catch(e) {
+    msgEl.innerHTML = `<span style="color:var(--red)">&#10007; ${esc(e.message)}</span>`;
+  }
+}
+
+async function rptDownload(format) {
+  const sql    = document.getElementById('rpt-sql').value.trim();
+  const params = _rptCollectParams();
+  if (!sql) return;
+  const filename = 'nepse_query_export';
+  try {
+    const r = await fetch(API + `/reporter/download/${format}`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ sql, params, filename }),
+    });
+    if (!r.ok) { const d = await r.json(); throw new Error(d.detail || `HTTP ${r.status}`); }
+    const blob = await r.blob();
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = `${filename}.${format}`; a.click();
+    URL.revokeObjectURL(url);
+  } catch(e) {
+    document.getElementById('rpt-results').innerHTML +=
+      `<div class="error-box" style="margin-top:8px">&#9888; Download failed: ${esc(e.message)}</div>`;
+  }
+}
 
 /* ═══════════════════════════════════════════════════════════
    NRB ENTRY  (prefixed nrb*)
