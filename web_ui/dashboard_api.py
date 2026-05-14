@@ -498,7 +498,7 @@ def reporter_run(body: _RunQueryBody):
     _check_sql(body.sql)
     try:
         psql = _build_psycopg2_sql(body.sql)
-        params = {k: v for k, v in body.params.items() if v not in (None, "", [])}
+        params = {k: (v if v not in (None, "", []) else None) for k, v in body.params.items()}
         with _db() as cur:
             cur.execute(psql, params or None)
             rows = _rows(cur)
