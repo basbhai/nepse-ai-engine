@@ -7,13 +7,12 @@ Called by systemd timer: nepse-morning.timer
 Sequence (in order, each step fail-safe):
     1. calendar_guard      → exit if today is holiday
     2. meroshare.sync()    → sync real portfolio (live mode only)
-    3. history_bootstrap   → append yesterday OHLCV to price_history
-    4. indicators.py       → compute RSI/EMA/MACD/BB for all symbols (FROZEN)
-    5. candle_detector.py  → detect 15 patterns → candle_signals
-    6. geo_sentiment.run() → DXY → geo_score
-    7. nepal_pulse.run()   → news + Gemini → nepal_score
-    8. capital_allocator   → wealth management advice
-    9. briefing.run()      → morning Telegram message
+    3. indicators.py       → compute RSI/EMA/MACD/BB for all symbols (FROZEN)
+    4. candle_detector.py  → detect 15 patterns → candle_signals
+    5. geo_sentiment.run() → DXY → geo_score
+    6. nepal_pulse.run()   → news + Gemini → nepal_score
+    7. capital_allocator   → wealth management advice
+    8. briefing.run()      → morning Telegram message
 
 Any step failure is logged but does NOT abort the rest.
 ─────────────────────────────────────────────────────────────────────────────
@@ -96,13 +95,7 @@ def run(dry_run: bool = False, skip_guard: bool = False) -> int:
     else:
         log.info("── meroshare.sync() — skipped (paper mode)")
 
-    # ── Step 2: History bootstrap ─────────────────────────────────────────────
-    def _bootstrap():
-        from modules.history_bootstrap import scrape_and_upsert
-        scrape_and_upsert(dry_run=False)
-    results["history"] = _step("history_bootstrap", _bootstrap, dry_run)
-
-    # ── Step 3: Indicators (frozen daily) ─────────────────────────────────────
+    # ── Step 2: Indicators (frozen daily) ────────────────────────────────────
     def _indicators():
         from modules.indicators import run as run_indicators
         run_indicators()

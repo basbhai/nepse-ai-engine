@@ -42,8 +42,8 @@ from agent import agent_tools
 
 log = logging.getLogger(__name__)
 
-PIPELINE_MODEL_PRIMARY  = "openai/gpt-4o-mini:free"
-PIPELINE_MODEL_FALLBACK = "openai/gpt-oss-20b:free"
+PIPELINE_MODEL_FALLBACK  = "openai/gpt-oss-120b:free"
+PIPELINE_MODEL_PRIMARY = "openai/gpt-oss-20b:free"
 
 
 # ══════════════════════════════════════════════════════════════════════════════

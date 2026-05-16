@@ -1159,6 +1159,9 @@ model gate_misses {
   tech_score               Text
   conf_score               Text
   volume_os_ratio          Text      // today_volume / outstanding_shares %
+  vwap_dev                 Text      // % LTP deviation from VWAP at time of block
+  bid_ask_ratio            Text      // 0–1 order book pressure at time of block
+  dpr_proximity            Text      // 0–1 position in daily price range at time of block
   composite_score_would_be Text
   tracking_days            Text  @default("0")
   outcome                  Text      // NULL until stamped: FALSE_BLOCK | CORRECT_BLOCK | NEUTRAL
