@@ -912,9 +912,9 @@ TECHNICAL INDICATORS (frozen at 10:30 AM NST):
   Candle Pattern:  {candle_str}
   C* Signal:       {'YES -- excess return above C*=0.129 (SIM paper)' if getattr(flag, 'cstar_signal', False) else 'NO'}
   Fundamental Adj: {getattr(flag, 'fundamental_adj', 0.0):+.2f} pts [{getattr(flag, 'fundamental_reason', 'n/a')}]
-  VWAP Dev:        {getattr(flag, 'vwap_dev', 0.0):+.2f}%  (+ = above fair value)
-  Bid/Ask Ratio:   {getattr(flag, 'bid_ask_ratio', 0.0):.2f}  (>0.5 = buy pressure)
-  DPR Proximity:   {getattr(flag, 'dpr_proximity', 0.0):.2f}  (0=near low circuit, 1=near high circuit)
+  VWAP Dev:        {getattr(flag, 'vwap_dev', 0.0):+.2f}%  (+ = above fair value, its live data)
+  Bid/Ask Ratio:   {getattr(flag, 'bid_ask_ratio', 0.0):.2f}  (>0.5 = buy pressure and it is live data)
+  DPR Proximity:   {getattr(flag, 'dpr_proximity', 0.0):.2f}  (0=near low circuit, 1=near high circuit and it is live data)
   Volume/OS Ratio: {getattr(flag, 'volume_os_ratio', 0.0):.2f}%  (>1% = smart money signal, >3% = operator/institutional)
 
 Primary Signal:  {flag.primary_signal}
