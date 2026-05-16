@@ -284,6 +284,9 @@ class NearMiss:
     conf_score:               float = 0.0
     composite_score_would_be: float = 0.0
     volume_os_ratio:          float = 0.0
+    vwap_dev:                 float = 0.0
+    bid_ask_ratio:            float = 0.0
+    dpr_proximity:            float = 0.0
 
 
 def _categorize_gate_reason(reason: str) -> str:
@@ -297,6 +300,7 @@ def _categorize_gate_reason(reason: str) -> str:
     if "NON_EQUITY" in r:               return "NON_EQUITY"
     if "VOS=" in r and "<" in r:        return "ILLIQUID"
     if r.startswith("BROKER_FLOW"):     return "BROKER_FLOW"
+    if "DPR_PROXIMITY" in r:           return "DPR_UPPER"
     return "OTHER"
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 1 — CONTEXT LOADER
@@ -606,6 +610,16 @@ def _check_symbol_gates(
         return False, "BROKER_FLOW=NET_DISTRIBUTION"
     if flow_class == "CHURN":
         return False, "BROKER_FLOW=CHURN"
+
+    # ── DPR proximity gate — no upside room near upper circuit ───────────────
+    dpr_prox = float(getattr(price_row, "dpr_proximity", 0) or 0)
+    try:
+        from sheets import get_setting
+        dpr_upper_gate = float(get_setting("LIVE_ADJ_DPR_UPPER_GATE", "0.85"))
+    except Exception:
+        dpr_upper_gate = 0.85
+    if dpr_prox > dpr_upper_gate:
+        return False, f"DPR_PROXIMITY={dpr_prox:.2f}>{dpr_upper_gate} — near upper circuit"
 
     return True, ""
 
@@ -1335,6 +1349,76 @@ def _compute_vos_adj(vos: float) -> float:
         return +4.0       # exceptional — operator/institutional signal
 
 
+def _compute_live_adj(price_row) -> float:
+    """
+    Intraday live signal adjustment from ATrad real-time data.
+    Scores vwap_dev, bid_ask_ratio, and dpr_proximity (lower penalty).
+
+    Range: -1.5 to +2.0 (small — never dominates frozen indicator score)
+
+    REVIEW FLAG: Thresholds are experience-based, not NEPSE-study-backed.
+    Review after 6 months of live trading data (target: 2026-11-01).
+    Tunable via settings: LIVE_ADJ_VWAP_HIGH, LIVE_ADJ_VWAP_LOW,
+    LIVE_ADJ_VWAP_HIGH_SCORE, LIVE_ADJ_VWAP_MILD_SCORE, LIVE_ADJ_VWAP_WEAK_SCORE,
+    LIVE_ADJ_BAR_HIGH, LIVE_ADJ_BAR_LOW,
+    LIVE_ADJ_BAR_HIGH_SCORE, LIVE_ADJ_BAR_MILD_SCORE, LIVE_ADJ_BAR_WEAK_SCORE,
+    LIVE_ADJ_DPR_LOW_GATE, LIVE_ADJ_DPR_LOW_PENALTY.
+    """
+    try:
+        from sheets import get_setting
+
+        # ── Thresholds from settings ──────────────────────────────────────────
+        vwap_high       = float(get_setting("LIVE_ADJ_VWAP_HIGH",        "2.0"))
+        vwap_low        = float(get_setting("LIVE_ADJ_VWAP_LOW",         "2.0"))
+        vwap_high_score = float(get_setting("LIVE_ADJ_VWAP_HIGH_SCORE",  "1.0"))
+        vwap_mild_score = float(get_setting("LIVE_ADJ_VWAP_MILD_SCORE",  "0.5"))
+        vwap_weak_score = float(get_setting("LIVE_ADJ_VWAP_WEAK_SCORE",  "1.0"))
+
+        bar_high        = float(get_setting("LIVE_ADJ_BAR_HIGH",         "0.65"))
+        bar_low         = float(get_setting("LIVE_ADJ_BAR_LOW",          "0.35"))
+        bar_high_score  = float(get_setting("LIVE_ADJ_BAR_HIGH_SCORE",   "1.0"))
+        bar_mild_score  = float(get_setting("LIVE_ADJ_BAR_MILD_SCORE",   "0.5"))
+        bar_weak_score  = float(get_setting("LIVE_ADJ_BAR_WEAK_SCORE",   "1.0"))
+
+        dpr_low_gate    = float(get_setting("LIVE_ADJ_DPR_LOW_GATE",     "0.10"))
+        dpr_low_penalty = float(get_setting("LIVE_ADJ_DPR_LOW_PENALTY",  "0.5"))
+
+    except Exception:
+        # Hard-coded fallbacks if settings unreachable — safe defaults
+        vwap_high = vwap_low = 2.0
+        vwap_high_score = vwap_mild_score = vwap_weak_score = 1.0
+        bar_high = 0.65; bar_low = 0.35
+        bar_high_score = bar_mild_score = bar_weak_score = 1.0
+        dpr_low_gate = 0.10; dpr_low_penalty = 0.5
+
+    adj = 0.0
+
+    # ── vwap_dev: % LTP above/below VWAP (already in % from scraper) ─────────
+    vwap_dev = float(getattr(price_row, "vwap_dev", 0) or 0)
+    if vwap_dev > vwap_high:
+        adj += vwap_high_score        # strong buy-side momentum
+    elif vwap_dev > 0.5:
+        adj += vwap_mild_score        # mild above VWAP
+    elif vwap_dev < -vwap_low:
+        adj -= vwap_weak_score        # meaningfully below VWAP — weakness
+
+    # ── bid_ask_ratio: 0–1 normalized (bid_qty / total depth) ────────────────
+    bar = float(getattr(price_row, "bid_ask_ratio", 0) or 0)
+    if bar > bar_high:
+        adj += bar_high_score         # strong buy-side order book
+    elif bar > 0.55:
+        adj += bar_mild_score         # mild buy pressure
+    elif bar < bar_low:
+        adj -= bar_weak_score         # heavy sell-side depth
+
+    # ── dpr_proximity: lower end penalty (upper end is gated, not scored) ────
+    dpr_prox = float(getattr(price_row, "dpr_proximity", 0) or 0)
+    if dpr_prox < dpr_low_gate:
+        adj -= dpr_low_penalty        # near lower circuit — risk signal
+
+    return round(max(-1.5, min(2.0, adj)), 2)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 6 — COMPOSITE SCORE
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1350,18 +1434,20 @@ def _compute_composite_score(
     fundamental_adj:  float = 0.0,
     vos_adj:          float = 0.0,   # volume/OS ratio adjustment
     broker_flow_adj:  float = 0.0,   # broker accumulation/distribution bonus
+    live_adj:         float = 0.0,   # intraday live signal (vwap_dev, bid_ask_ratio, dpr_proximity)
     min_conf_score:   float = MIN_CONF_SCORE,  # dynamic — read from settings via ctx
 ) -> float:
     """
     Final composite score for candidate ranking.
- 
+
     base      = indicator_score × sector_mult
     + candle  = 0 to +10
     + cstar   = +5 if excess return > C*
     + conf    = 0 to +5 (ShareSansar momentum above 50)
     + geo_adj = -5 to +3 (asymmetric: downside hurts more)
     - ipo_pen = -3 if IPO drain active
-    + fund_adj= -3 to +3 (fundamental quality, sector-aware)  ← NEW
+    + fund_adj= -3 to +3 (fundamental quality, sector-aware)
+    + live_adj= -1.5 to +2.0 (intraday: vwap_dev, bid_ask_ratio, dpr_proximity)
     """
     base       = indicator_score * sector_mult
     conf_bonus = min((conf_score - min_conf_score) / 10, 5.0) if conf_score > min_conf_score else 0.0
@@ -1382,7 +1468,7 @@ def _compute_composite_score(
  
     return round(
         max(0.0, base + candle_bonus + cstar_b + conf_bonus
-                 + geo_adj + ipo_pen + fundamental_adj + vos_adj + broker_flow_adj),
+                 + geo_adj + ipo_pen + fundamental_adj + vos_adj + broker_flow_adj + live_adj),
         2,
     )
  
@@ -1533,6 +1619,9 @@ def run_filter(
                 conf_score               = float(getattr(price_row, "conf_score", 0) or 0),
                 composite_score_would_be = 0.0,
                 volume_os_ratio          = volume_os_ratio,
+                vwap_dev                 = float(getattr(price_row, "vwap_dev",       0) or 0),
+                bid_ask_ratio            = float(getattr(price_row, "bid_ask_ratio",  0) or 0),
+                dpr_proximity            = float(getattr(price_row, "dpr_proximity",  0) or 0),
             ))
             continue
 
@@ -1552,6 +1641,9 @@ def run_filter(
                 tech_score      = int(ind.get("tech_score", 0) or 0),
                 conf_score      = float(getattr(price_row, "conf_score", 0) or 0),
                 volume_os_ratio = volume_os_ratio,
+                vwap_dev        = float(getattr(price_row, "vwap_dev",       0) or 0),
+                bid_ask_ratio   = float(getattr(price_row, "bid_ask_ratio",  0) or 0),
+                dpr_proximity   = float(getattr(price_row, "dpr_proximity",  0) or 0),
             ))
             continue
 
@@ -1573,6 +1665,9 @@ def run_filter(
                 conf_score               = float(getattr(price_row, "conf_score", 0) or 0),
                 composite_score_would_be = 0.0,
                 volume_os_ratio          = volume_os_ratio,
+                vwap_dev                 = float(getattr(price_row, "vwap_dev",       0) or 0),
+                bid_ask_ratio            = float(getattr(price_row, "bid_ask_ratio",  0) or 0),
+                dpr_proximity            = float(getattr(price_row, "dpr_proximity",  0) or 0),
             ))
             continue
 
@@ -1595,6 +1690,15 @@ def run_filter(
         vos_adj = _compute_vos_adj(volume_os_ratio)
         logger.debug("VOS_ADJ: %s vos=%.3f%% adj=%+.1f", sym, volume_os_ratio, vos_adj)
 
+        # ── Live intraday adjustment ──────────────────────────────────────────────
+        live_adj = _compute_live_adj(price_row)
+        logger.debug("LIVE_ADJ: %s vwap=%.2f%% bar=%.2f dpr=%.2f adj=%+.2f",
+                     sym,
+                     float(getattr(price_row, "vwap_dev",       0) or 0),
+                     float(getattr(price_row, "bid_ask_ratio",  0) or 0),
+                     float(getattr(price_row, "dpr_proximity",  0) or 0),
+                     live_adj)
+
         # ── Broker flow scoring adjustment ────────────────────────────────────
         broker_flow_adj = _compute_broker_flow_adj(sym, flow_cache, holdings_cache)
         logger.debug("BROKER_FLOW_ADJ: %s adj=%+.1f", sym, broker_flow_adj)
@@ -1610,6 +1714,7 @@ def run_filter(
             fundamental_adj = fund_adj,
             vos_adj         = vos_adj,
             broker_flow_adj = broker_flow_adj,
+            live_adj        = live_adj,
             min_conf_score  = ctx.get("min_conf_score", MIN_CONF_SCORE),
         )
         logger.debug("VOS_ADJ: %s composite=%.1f", sym, composite)
