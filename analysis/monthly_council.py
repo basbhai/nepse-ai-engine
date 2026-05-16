@@ -374,6 +374,63 @@ def _load_pattern_validation_data() -> list[dict]:
         return []
 
 
+def _load_momentum_signal_summary() -> list[dict]:
+    """
+    Aggregate momentum_status_entry performance from trade_journal (30-day window).
+    Returns empty list on failure — fail silently, never break council run.
+    """
+    try:
+        rows = run_raw_sql(
+            """
+            SELECT
+                momentum_status_entry AS momentum_status,
+                COUNT(*) AS total,
+                SUM(CASE WHEN result = 'WIN'  THEN 1 ELSE 0 END) AS wins,
+                SUM(CASE WHEN result = 'LOSS' THEN 1 ELSE 0 END) AS losses,
+                ROUND(AVG(CAST(NULLIF(return_pct, '') AS FLOAT))::numeric, 2) AS avg_return
+            FROM trade_journal
+            WHERE momentum_status_entry IS NOT NULL
+              AND momentum_status_entry != ''
+              AND result IN ('WIN', 'LOSS')
+              AND entry_date >= %s
+            GROUP BY momentum_status_entry
+            ORDER BY total DESC
+            """,
+            (_cutoff(),),
+        ) or []
+        log.info("momentum_signal_summary loaded: %d rows", len(rows))
+        return [dict(r) for r in rows]
+    except Exception as e:
+        log.warning("_load_momentum_signal_summary failed (non-fatal): %s", e)
+        return []
+
+
+def _load_bounce_failed_summary() -> list[dict]:
+    """Aggregate bounce_failed_entry breakdown from trade_journal."""
+    try:
+        rows = run_raw_sql(
+            """
+            SELECT
+                bounce_failed_entry AS bounce_failed,
+                COUNT(*) AS total,
+                SUM(CASE WHEN result = 'WIN'  THEN 1 ELSE 0 END) AS wins,
+                SUM(CASE WHEN result = 'LOSS' THEN 1 ELSE 0 END) AS losses
+            FROM trade_journal
+            WHERE bounce_failed_entry IS NOT NULL
+              AND bounce_failed_entry != ''
+              AND result IN ('WIN', 'LOSS')
+              AND entry_date >= %s
+            GROUP BY bounce_failed_entry
+            ORDER BY total DESC
+            """,
+            (_cutoff(),),
+        ) or []
+        return [dict(r) for r in rows]
+    except Exception as e:
+        log.warning("_load_bounce_failed_summary failed (non-fatal): %s", e)
+        return []
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # TOKEN BUDGET HELPERS
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -430,12 +487,40 @@ def _build_data_context(
     if lesson_rows: parts.append(_section("ACTIVE LEARNING LESSONS (top 20)",     lesson_rows, lesson_omit))
     if pv_rows:     parts.append(_section("POLITICAL EVENT PATTERN ACCURACY",     pv_rows,     pv_omit))
 
+    # Momentum signal performance (new May 2026 — compact, no trimming needed)
+    momentum_rows  = _load_momentum_signal_summary()
+    bounce_rows    = _load_bounce_failed_summary()
+    if momentum_rows or bounce_rows:
+        mom_lines = ["=== MOMENTUM SIGNAL PERFORMANCE (entry momentum vs outcome) ==="]
+        if momentum_rows:
+            for r in momentum_rows:
+                mom_lines.append(json.dumps(
+                    {k: v for k, v in r.items() if v is not None},
+                    ensure_ascii=False, default=str,
+                ))
+        else:
+            mom_lines.append("Insufficient data (new feature May 2026)")
+        if bounce_rows:
+            mom_lines.append("--- bounce_failed breakdown ---")
+            for r in bounce_rows:
+                mom_lines.append(json.dumps(
+                    {k: v for k, v in r.items() if v is not None},
+                    ensure_ascii=False, default=str,
+                ))
+        parts.append("\n".join(mom_lines))
+    else:
+        parts.append(
+            "=== MOMENTUM SIGNAL PERFORMANCE (entry momentum vs outcome) ===\n"
+            "Insufficient data (new feature May 2026)"
+        )
+
     context = "\n\n".join(parts)
     counts  = {
         "daily_context": len(dc_rows), "trade_journal": len(tj_rows),
         "gate_misses":   len(gm_rows), "nrb":           len(nrb_rows),
         "audit":         len(audit_rows), "lessons":    len(lesson_rows),
         "pattern_validation": len(pv_rows),
+        "momentum_summary": len(momentum_rows),
         "est_tokens":    len(context) // 4,
     }
     return context, counts

@@ -329,6 +329,46 @@ def _write_trade_journal(position: dict, deltas: dict,
             "lesson_ids":           "",
         }
 
+        # Pull momentum/live fields from market_log BUY row at entry time
+        _momentum_defaults = {
+            "momentum_status_entry": "", "rsi_slope_3d_entry":    "",
+            "macd_hist_slope_entry": "", "bb_pct_b_slope_entry":  "",
+            "bounce_failed_entry":   "", "reversal_days_entry":   "",
+            "vwap_dev_entry":        "", "bid_ask_ratio_entry":   "",
+            "dpr_proximity_entry":   "",
+        }
+        try:
+            entry_date_str = str(position.get("entry_date", ""))[:10]
+            with _conn() as _cur:
+                _cur.execute(
+                    """
+                    SELECT momentum_status, rsi_slope_3d, macd_hist_slope,
+                           bb_pct_b_slope, bounce_failed, reversal_days,
+                           vwap_dev, bid_ask_ratio, dpr_proximity
+                    FROM market_log
+                    WHERE symbol = %s AND action = 'BUY'
+                      AND date::date = %s::date
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (symbol, entry_date_str),
+                )
+                _ml = _cur.fetchone() or {}
+            row.update({
+                "momentum_status_entry": str(_ml.get("momentum_status") or ""),
+                "rsi_slope_3d_entry":    str(_ml.get("rsi_slope_3d")    or ""),
+                "macd_hist_slope_entry": str(_ml.get("macd_hist_slope") or ""),
+                "bb_pct_b_slope_entry":  str(_ml.get("bb_pct_b_slope")  or ""),
+                "bounce_failed_entry":   str(_ml.get("bounce_failed")    or ""),
+                "reversal_days_entry":   str(_ml.get("reversal_days")   or ""),
+                "vwap_dev_entry":        str(_ml.get("vwap_dev")         or ""),
+                "bid_ask_ratio_entry":   str(_ml.get("bid_ask_ratio")   or ""),
+                "dpr_proximity_entry":   str(_ml.get("dpr_proximity")   or ""),
+            })
+        except Exception as _me:
+            log.warning("momentum field lookup failed for %s — defaulting empty: %s", symbol, _me)
+            row.update(_momentum_defaults)
+
         trade_id = write_row("trade_journal", row)
         log.info("trade_journal written — %s | %s | return=%.2f%% | NPR %.0f | cause=%s | paper=%s",
                  symbol, result, return_pct, pnl_npr, loss_cause, paper)
