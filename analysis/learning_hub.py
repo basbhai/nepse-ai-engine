@@ -131,7 +131,10 @@ def _load_wait_avoid_outcomes() -> list[dict]:
                    eval_fd_rate_pct, eval_geo_delta, eval_nepal_delta,
                    eval_price_change_pct, eval_nepse_change_pct, eval_alpha,
                    eval_key_news,
-                   entry_price, stop_loss, target, primary_signal
+                   entry_price, stop_loss, target, primary_signal,
+                   momentum_status, rsi_slope_3d, macd_hist_slope,
+                   bb_pct_b_slope, bounce_failed, reversal_days,
+                   vwap_dev, bid_ask_ratio, dpr_proximity
             FROM market_log
             WHERE action IN ('WAIT', 'AVOID', 'BUY')
             ORDER BY date DESC
@@ -194,6 +197,15 @@ def _load_buy_decisions() -> list[dict]:
                 ml.gemini_reason,
                 ml.gemini_risk,
                 ml.outcome,
+                ml.momentum_status,
+                ml.rsi_slope_3d,
+                ml.macd_hist_slope,
+                ml.bb_pct_b_slope,
+                ml.bounce_failed,
+                ml.reversal_days,
+                ml.vwap_dev,
+                ml.bid_ask_ratio,
+                ml.dpr_proximity,
                 -- cross-reference trade_journal for final outcome
                 tj.result          AS tj_result,
                 tj.return_pct      AS tj_return_pct,
@@ -431,6 +443,9 @@ _WAIT_AVOID_KEYS = (
     "eval_price_change_pct", "eval_nepse_change_pct", "eval_alpha",
     "geo_score", "macro_score", "eval_geo_delta", "eval_nepal_delta",
     "eval_market_state", "eval_key_news", "reasoning",
+    "momentum_status", "rsi_slope_3d", "macd_hist_slope",
+    "bb_pct_b_slope", "bounce_failed", "reversal_days",
+    "vwap_dev", "bid_ask_ratio", "dpr_proximity",
 )
 
 _DAILY_CONTEXT_KEYS = (
@@ -482,6 +497,9 @@ _BUY_DECISION_KEYS = (
     "fundamental_score", "pe_ratio", "eps", "roe", "npl_pct",
     "sector_mult", "cstar_signal", "candle_pattern", "market_state",
     "gemini_reason", "gemini_risk", "outcome",
+    "momentum_status", "rsi_slope_3d", "macd_hist_slope",
+    "bb_pct_b_slope", "bounce_failed", "reversal_days",
+    "vwap_dev", "bid_ask_ratio", "dpr_proximity",
     "tj_result", "tj_return_pct", "tj_pnl_npr", "tj_hold_days_actual",
     "tj_exit_date", "tj_exit_reason", "tj_loss_cause", "tj_alpha",
 )
@@ -694,6 +712,19 @@ Add this block to your JSON output (after claude_audit):
       "reasoning": "<one sentence>"
     }
   ]
+
+MOMENTUM & INTRADAY SIGNAL REVIEW:
+For BUY decisions and WAIT/AVOID outcomes, analyse the momentum_status, rsi_slope_3d,
+macd_hist_slope, bb_pct_b_slope, bounce_failed, reversal_days, vwap_dev, bid_ask_ratio,
+dpr_proximity fields (added May 2026 — low evidence, treat cautiously):
+
+- momentum_status at signal time vs actual outcome (WIN/LOSS/CORRECT_WAIT etc.):
+  Does FALLING_KNIFE correctly predict losses? Does CONFIRMED_REVERSAL predict wins?
+- bounce_failed=true: what % resulted in loss?
+- vwap_dev > 2%: does it correlate with better win rate?
+- Write a lesson if any pattern has ≥8 trade observations with clear directional signal.
+- These are new fields (May 2026) — low evidence. Prefer MONITOR or ADD_TO_REASONING.
+  Never BLOCK_ENTRY on momentum alone until 25+ trades.
 """
 
 def _build_user_prompt(
@@ -805,6 +836,10 @@ Are macro calls consistently off? Trend direction matters more than any single w
 
 === POLITICAL EVENT PATTERN ACCURACY (since system inception) ===
 {_serialize_compact(pattern_accuracy or [], ("event_type","pattern_status","evidence_quality","total","pending","correct","wrong_direction","wrong_timing","weighted_accuracy")) if pattern_accuracy else "No pattern predictions logged yet."}
+
+=== MOMENTUM & INTRADAY FIELDS (added May 2026 — may be empty for older rows) ===
+momentum_status: FALLING_KNIFE|OVERSOLD_WATCH|EARLY_REVERSAL|CONFIRMED_REVERSAL|NEUTRAL at BUY time.
+bounce_failed: true=dead-cat bounce detected. vwap_dev: % deviation from VWAP. bid_ask_ratio: buy vs sell pressure. dpr_proximity: nearness to daily price range limit.
 
 === YOUR TASK ===
 1. Analyse trade + WAIT/AVOID outcomes + daily context.

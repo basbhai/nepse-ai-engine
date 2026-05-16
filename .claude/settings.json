@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"from analysis.auditor import _write_trade_journal; print\\('auditor import OK'\\)\")",
+      "Bash(python -m py_compile analysis/auditor.py)",
+      "Bash(python -m py_compile analysis/learning_hub.py)",
+      "Bash(python -m py_compile analysis/monthly_council.py)",
+      "Bash(python -m py_compile db/schema.py)"
+    ]
+  }
+}
