@@ -1,20 +1,24 @@
-import requests, json
+from modules.atrad_scraper import login, fetch_order_book
 
-s = requests.Session()
-r = s.post(
-    "https://sharehubnepal.com/account/api/v1/auth/login/email",
-    json={"email": "basbhai2026@gmail.com", "password": "Mahanatma@021"},
-    headers={"Content-Type": "application/json", "referer": "https://sharehubnepal.com"},
-    timeout=10,
-)
-token = r.json()["data"]["accessToken"]
+symbol = "USHEC"
 
-r2 = s.get(
-    "https://sharehubnepal.com/data/api/v1/floorsheet-analysis/broker-distribution",
-    params={"duration": "1D"},
-    headers={"Authorization": f"Bearer {token}", "referer": "https://sharehubnepal.com"},
-    timeout=20,
-)
-data = r2.json()["data"]["content"]
-print("Total rows:", len(data))
-print("First item:", json.dumps(data[0], indent=2))
+if not login():
+    print("Login failed")
+    exit()
+
+print("Login OK")
+
+r = fetch_order_book(symbol)
+print("\nfetch_order_book result:")
+print(r)
+
+if r:
+    tb  = r.get("total_bid_qty", 0)
+    ta  = r.get("total_ask_qty", 0)
+    imb = r.get("imbalance", 0)
+    print(f"\ntotal_bid_qty: {tb}")
+    print(f"total_ask_qty: {ta}")
+    print(f"imbalance:     {imb}  ({'buy pressure' if imb > 0.5 else 'sell pressure'})")
+    print(f"top-of-book ratio would have been: {round(tb / (tb + ta), 4) if tb + ta else 'n/a'}")
+else:
+    print("Empty result")
