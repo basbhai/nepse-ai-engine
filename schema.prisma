@@ -27,6 +27,13 @@
 //          macd_hist_slope, bb_pct_b_slope, bounce_failed, reversal_days)
 //   FIXED: daily_context_log headline columns (SQL type annotation corrected)
 //   FIXED: nrb_monthly closing brace typo
+//
+// Updated: May 16, 2026
+//   ADDED: trade_journal — 9 entry-snapshot columns so auditor carries momentum/live
+//          context through to trade close (momentum_status_entry, rsi_slope_3d_entry,
+//          macd_hist_slope_entry, bb_pct_b_slope_entry, bounce_failed_entry,
+//          reversal_days_entry, vwap_dev_entry, bid_ask_ratio_entry, dpr_proximity_entry)
+//   SOURCE: auditor.py looks up market_log BUY row at entry_date to populate these.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PRICE & MARKET DATA
@@ -684,6 +691,23 @@ model trade_journal {
 
   // Learning link
   lesson_ids             Text
+
+  // ── Momentum / Reversal context at entry — added May 16, 2026
+  // Copied from market_log BUY row by auditor.py at trade close.
+  // Mirrors the 6 momentum columns in market_log so council/hub can correlate
+  // entry momentum status with final trade outcome.
+  momentum_status_entry  Text   // FALLING_KNIFE | OVERSOLD_WATCH | EARLY_REVERSAL | CONFIRMED_REVERSAL | NEUTRAL — at BUY signal time
+  rsi_slope_3d_entry     Text   // RSI slope over 3 days at entry
+  macd_hist_slope_entry  Text   // MACD histogram slope at entry
+  bb_pct_b_slope_entry   Text   // BB %B slope at entry
+  bounce_failed_entry    Text   // "true" | "false" — dead-cat bounce at entry
+  reversal_days_entry    Text   // consecutive RSI improvement days at entry
+
+  // ── Live intraday signals at entry — added May 16, 2026
+  // Also copied from market_log BUY row (written from ATrad intraday scraper).
+  vwap_dev_entry         Text   // (ltp - vwap) / vwap deviation from fair value at entry
+  bid_ask_ratio_entry    Text   // bid_qty / (bid_qty + ask_qty) demand pressure 0-1 at entry
+  dpr_proximity_entry    Text   // (ltp - low_dpr) / (high_dpr - low_dpr) circuit range position at entry
 
   @@index([symbol])
   @@index([result])
