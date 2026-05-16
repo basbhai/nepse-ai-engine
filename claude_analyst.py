@@ -27,6 +27,7 @@ from datetime import datetime
 from typing import Optional
 from AI import ask_claude
 from config import NST
+from modules.atrad_scraper import fetch_order_book
 
 logger = logging.getLogger(__name__)
 
@@ -913,7 +914,7 @@ TECHNICAL INDICATORS (frozen at 10:30 AM NST):
   C* Signal:       {'YES -- excess return above C*=0.129 (SIM paper)' if getattr(flag, 'cstar_signal', False) else 'NO'}
   Fundamental Adj: {getattr(flag, 'fundamental_adj', 0.0):+.2f} pts [{getattr(flag, 'fundamental_reason', 'n/a')}]
   VWAP Dev:        {getattr(flag, 'vwap_dev', 0.0):+.2f}%  (+ = above fair value, its live data)
-  Bid/Ask Ratio:   {getattr(flag, 'bid_ask_ratio', 0.0):.2f}  (>0.5 = buy pressure and it is live data)
+  Bid/Ask Ratio:   {getattr(flag, 'bid_ask_ratio', 0.0):.2f}  (full depth order book; >0.5 = buy pressure)
   DPR Proximity:   {getattr(flag, 'dpr_proximity', 0.0):.2f}  (0=near low circuit, 1=near high circuit and it is live data)
   Volume/OS Ratio: {getattr(flag, 'volume_os_ratio', 0.0):.2f}%  (>1% = smart money signal, >3% = operator/institutional)
 
@@ -1334,6 +1335,16 @@ def run_analysis(flags: list) -> list[AnalystResult]:
             "yes" if broker_ctx.get("holdings") else "no",
         )
 
+        try:
+            _ob = fetch_order_book(flag.symbol)
+            print(f"DEBUG ORDER_BOOK {flag.symbol}: {_ob}")
+            if _ob and "imbalance" in _ob:
+                _new_imb = float(_ob.get("imbalance", flag.bid_ask_ratio))
+                flag.bid_ask_ratio = _new_imb
+                print(f"DEBUG OVERRIDDEN to {_new_imb}")
+        except Exception as e:
+            print(f"DEBUG ORDER_BOOK EXCEPTION: {e}")
+
         prompt      = _build_prompt(
             flag, portfolio, geo, macro, lessons, market_state, loss_streak,
             fund_ctx=fund_ctx,
@@ -1458,6 +1469,14 @@ if __name__ == "__main__":
             lessons    = _load_lessons(flag.symbol, getattr(flag, "sector", ""))
             fund_ctx   = _load_fundamentals_context(flag.symbol, getattr(flag, "sector", ""))
             broker_ctx = _load_broker_flow_context(flag.symbol)
+            try:
+                _ob = fetch_order_book(flag.symbol)
+                print(f"DEBUG ORDER_BOOK {flag.symbol}: imbalance={_ob.get('imbalance')}")
+                if _ob and "imbalance" in _ob:
+                    flag.bid_ask_ratio = float(_ob["imbalance"])
+                    print(f"DEBUG OVERRIDDEN bid_ask_ratio={flag.bid_ask_ratio:.4f}")
+            except Exception as e:
+                print(f"DEBUG ORDER_BOOK EXCEPTION: {e}")
             prompt     = _build_prompt(
                 flag, portfolio, geo, macro, lessons, market_state, loss_streak,
                 fund_ctx=fund_ctx,
