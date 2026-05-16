@@ -60,7 +60,7 @@ model price_history {
 
 model market_breadth {
   id                 Serial
-  date               Text!  @unique
+  date               Text!
   advancing          Text
   declining          Text
   unchanged          Text
@@ -74,7 +74,9 @@ model market_breadth {
   nepse_change_pct   Text
   timestamp          Text
 
+  @@unique([date, timestamp])
   @@index([date])
+  @@index([timestamp])
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

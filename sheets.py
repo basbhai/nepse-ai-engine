@@ -719,7 +719,8 @@ def get_watchlist_symbols() -> list[str]:
 
 def write_market_breadth(breadth_data: dict) -> bool:
     """
-    Write market breadth snapshot. Upserts on date to avoid duplicates.
+    Write market breadth snapshot. Plain insert every cycle — one row per scrape.
+    The unique constraint is (date, timestamp) so each intraday snapshot is kept.
 
     Example:
         write_market_breadth({
@@ -730,7 +731,32 @@ def write_market_breadth(breadth_data: dict) -> bool:
             "market_signal": "BULLISH",
         })
     """
-    return upsert_row("market_breadth", breadth_data, conflict_columns=["date"])
+    return write_row("market_breadth", breadth_data)
+
+
+def get_intraday_breadth(date: str = None) -> list[dict]:
+    """
+    Return all intraday breadth snapshots for today ordered by timestamp ASC.
+    Used by gemini_filter to pass breadth momentum timeline to Gemini and Claude.
+    Returns empty list on any failure — never raises.
+    """
+    if date is None:
+        from datetime import timezone, timedelta
+        nst  = timezone(timedelta(hours=5, minutes=45))
+        date = datetime.now(tz=nst).strftime("%Y-%m-%d")
+    try:
+        with _db() as cur:
+            cur.execute("""
+                SELECT timestamp, advancing, declining, unchanged,
+                       breadth_score, market_signal, nepse_index, nepse_change_pct
+                FROM market_breadth
+                WHERE date = %s
+                ORDER BY timestamp ASC
+            """, (date,))
+            return [dict(r) for r in cur.fetchall()]
+    except Exception as e:
+        log.warning("get_intraday_breadth failed: %s", e)
+        return []
 
 
 def write_indicators_batch(indicator_rows: list[dict]) -> int:
