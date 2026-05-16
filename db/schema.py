@@ -107,10 +107,12 @@ TABLE_DDL: dict[str, str] = {
         nepse_change_pct TEXT,
         timestamp TEXT,
         inserted_at TIMESTAMPTZ DEFAULT NOW(),
-        CONSTRAINT ux_market_breadth_date UNIQUE (date)
+        CONSTRAINT ux_market_breadth_date_timestamp UNIQUE (date, timestamp)
     );
     CREATE INDEX IF NOT EXISTS ix_market_breadth_date
         ON "market_breadth" (date);
+    CREATE INDEX IF NOT EXISTS ix_market_breadth_timestamp
+        ON "market_breadth" (timestamp);
     """,
 
     "portfolio": """

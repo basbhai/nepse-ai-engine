@@ -857,6 +857,33 @@ def _build_prompt(
         "  bounce_failed=YES → AVOID regardless of other indicators. Dead-cat trap.\n"
     )
 
+    # ── Intraday breadth context ──────────────────────────────────────────────
+    try:
+        from sheets import get_intraday_breadth
+        breadth_rows = get_intraday_breadth()
+    except Exception:
+        breadth_rows = []
+
+    if breadth_rows:
+        breadth_lines = []
+        for r in breadth_rows:
+            ts    = str(r.get("timestamp", ""))[11:16]
+            adv   = r.get("advancing",     "?")
+            dec   = r.get("declining",     "?")
+            score = r.get("breadth_score", "?")
+            sig   = r.get("market_signal", "?")
+            breadth_lines.append(f"  {ts}  adv={adv:<4} dec={dec:<4} score={str(score):>7}  {sig}")
+        breadth_section = (
+            "INTRADAY BREADTH TIMELINE:\n"
+            + "\n".join(breadth_lines)
+            + f"\nGemini breadth classification: {getattr(flag, 'intraday_trend', 'UNKNOWN')}"
+        )
+    else:
+        breadth_section = (
+            f"INTRADAY BREADTH: no snapshots yet\n"
+            f"Gemini breadth classification: {getattr(flag, 'intraday_trend', 'UNKNOWN')}"
+        )
+
     return f"""You are a senior NEPSE quantitative analyst with deep knowledge of Nepal market research.
 Analyze this specific stock and produce a precise trading recommendation.
 
@@ -913,6 +940,8 @@ IPO Drain:       {geo.get('ipo_drain', 'NO')}
 Key Geo Event:   {geo.get('key_geo_event', 'None')}
 Key Nepal Event: {geo.get('key_nepal_event', 'None')}
 
+{breadth_section}
+
 TODAY'S NEPAL HEADLINES (from nepal_pulse — untruncated):
   Politics: {geo.get('headlines_politics', 'None') or 'None'}
   Economy:  {geo.get('headlines_economy',  'None') or 'None'}
@@ -966,6 +995,9 @@ NEPAL FEE MATH (use for all price calculations)
 TASK
 ==============================================
 Produce a precise BUY / WAIT / AVOID recommendation.
+- Consider INTRADAY BREADTH TIMELINE: if breadth is FADING or DISTRIBUTING at time of analysis,
+  raise your confidence threshold by 5 points before issuing BUY. If ACCUMULATING or RECOVERING,
+  breadth supports the entry — note this in reasoning.
 - BUY: only if primary signal is MACD/BB/SMA (RSI alone is never enough)
 - Stop loss: always 3% below entry (hard rule)
 - Target: use resistance level as reference, must exceed breakeven by >1%

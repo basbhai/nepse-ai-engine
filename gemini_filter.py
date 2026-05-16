@@ -152,6 +152,7 @@ class GeminiFlag:
     support_level:   float      = 0.0
     resistance_level:float      = 0.0
     market_log_id:   int        = None
+    intraday_trend:  str        = ""  # Gemini breadth-based trend: ACCUMULATING|DISTRIBUTING|RECOVERING|FADING|CHOPPY|EARLY_SESSION
 
     # ── Full FilterCandidate passthrough ──────────────────────────────────────
     change_pct:       float      = 0.0
@@ -288,6 +289,33 @@ def _build_prompt(
     bandh        = context.get("bandh_today", "NO")
     ipo_drain    = context.get("ipo_drain", "NO")
     crisis       = context.get("crisis_detected", "NO")
+    today_date   = nst_now.strftime("%Y-%m-%d")
+
+    # ── Intraday breadth timeline ─────────────────────────────────────────────
+    try:
+        from sheets import get_intraday_breadth
+        breadth_rows = get_intraday_breadth(today_date)
+    except Exception:
+        breadth_rows = []
+
+    if breadth_rows:
+        breadth_lines = []
+        for r in breadth_rows:
+            ts    = str(r.get("timestamp", ""))[11:16]   # HH:MM
+            adv   = r.get("advancing",     "?")
+            dec   = r.get("declining",     "?")
+            score = r.get("breadth_score", "?")
+            sig   = r.get("market_signal", "?")
+            nepse = r.get("nepse_index",   "?")
+            breadth_lines.append(
+                f"  {ts}  adv={adv:<4} dec={dec:<4} score={str(score):>7}  {sig:<18}  NEPSE={nepse}"
+            )
+        breadth_block = (
+            "INTRADAY BREADTH TIMELINE (oldest → newest):\n"
+            + "\n".join(breadth_lines)
+        )
+    else:
+        breadth_block = "INTRADAY BREADTH TIMELINE: no snapshots yet this session"
 
     positions_str   = ", ".join(open_positions) if open_positions else "None"
     max_positions   = context.get("max_positions", 3)
@@ -317,6 +345,8 @@ Bandh Today:     {bandh}
 IPO Drain:       {ipo_drain}
 Crisis:          {crisis}
 Time NST:        {nst_now.strftime('%H:%M')}
+
+{breadth_block}
 
 ═══════════════════════════════════════
 PORTFOLIO STATUS
@@ -372,11 +402,17 @@ TASK
 2. For each candidate decide: ANALYZE or SKIP based on rules above.
 3. If ANALYZE: assign urgency NORMAL or HIGH or URGENT.
 
+- Study the INTRADAY BREADTH TIMELINE. Identify whether breadth_score is trending up, down, or oscillating.
+  Set intraday_trend accordingly. If breadth is FADING or DISTRIBUTING, be more conservative with
+  urgency — prefer NORMAL over HIGH. If ACCUMULATING or RECOVERING, urgency can be elevated if
+  signals are otherwise strong.
+
 Return ONLY this JSON — no markdown, no explanation, no extra text:
 {{
   "run_time": "{nst_now.strftime('%Y-%m-%d %H:%M')}",
   "market_state": "{market_state}",
   "slots_remaining": {slots_remaining},
+  "intraday_trend": "Classify breadth pattern as one of: ACCUMULATING (breadth consistently improving across snapshots) | DISTRIBUTING (consistently worsening) | RECOVERING (started weak, now strengthening) | FADING (started strong, now weakening) | CHOPPY (no clear direction, oscillating) | EARLY_SESSION (fewer than 3 snapshots, cannot classify). A stock flagged during ACCUMULATING or RECOVERING carries lower timing risk than one flagged during FADING or DISTRIBUTING — factor this into urgency decisions.",
   "flags": [
     {{
       "symbol": "SYMBOL",
@@ -465,6 +501,7 @@ def _keyword_fallback(
         "run_time":        datetime.now(tz=NST).strftime("%Y-%m-%d %H:%M"),
         "market_state":    candidates[0].market_state if candidates else "UNKNOWN",
         "slots_remaining": slots_remaining,
+        "intraday_trend":  "EARLY_SESSION",
         "flags":           flags,
         "skipped":         skipped,
         "market_comment":  "Gemini unavailable — keyword fallback used",
@@ -507,6 +544,7 @@ def _assemble_flags(
             gemini_reason    = str(f.get("reason", "")),
             gemini_risk      = str(f.get("risk",   "")),
             primary_signal   = str(f.get("primary_signal", c.primary_signal)),
+            intraday_trend   = str(gemini_result.get("intraday_trend", "")),
             composite_score  = c.composite_score,
             tech_score       = c.tech_score,
             obv_trend        = c.obv_trend,
@@ -613,7 +651,8 @@ def _write_log(
                 "reasoning":      (
                     f"[Gemini] {flag.gemini_reason} | "
                     f"Risk: {flag.gemini_risk} | "
-                    f"Signal: {flag.primary_signal}"
+                    f"Signal: {flag.primary_signal} | "
+                    f"Breadth: {flag.intraday_trend}"
                 ),
                 "outcome":        "PENDING_CLAUDE",
                 "geo_score":      str(flag.geo_combined),
@@ -798,6 +837,7 @@ def format_flag_for_claude(flag: GeminiFlag) -> str:
         f"TECH:{flag.tech_score} RSI:{flag.rsi_14:.1f} MACD:{flag.macd_cross} "
         f"BB:{flag.bb_signal} CANDLE:{candle} GEO:{flag.geo_combined:+d} "
         f"REASON:{flag.gemini_reason} RISK:{flag.gemini_risk}"
+        f" BREADTH_TREND:{flag.intraday_trend}"
     )
 
 
