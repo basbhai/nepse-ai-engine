@@ -356,6 +356,7 @@ def _build_prompt(
     max_candidates:       int  = MAX_CANDIDATES_TO_GEMINI,
     max_flags:            int  = MAX_FLAGS_FOR_CLAUDE,
     market_data:          dict = None,
+    sector_momentum_map:  dict = None,
 ) -> str:
     from filter_engine import format_candidate_for_gemini
 
@@ -395,7 +396,11 @@ def _build_prompt(
 
     # ── Sector momentum context ───────────────────────────────────────────────
     sector_momentum_block = ""
-    if market_data:
+    if sector_momentum_map:
+        lines = list(sector_momentum_map.values())
+        if lines:
+            sector_momentum_block = "\n".join(lines)
+    elif market_data:
         try:
             from sheets import read_tab
             share_sectors = read_tab("share_sectors")
@@ -483,6 +488,7 @@ SCREENING RULES (apply in order)
 7. DOWNGRADE if RSI is primary signal (lost money -4.81% standalone)
 8. UPGRADE if Tier 1 candle pattern with volume confirmed
 9. UPGRADE if CSTAR=Y (excess return above C*=0.129)
+   UPGRADE to URGENT if VOS > 1.0% AND primary_signal is VOLUME_BREAKOUT
 10. CHECK learning hub — if pattern has <40% win rate for this symbol, skip
 11. FLAG max {max_flags} stocks — quality over quantity
 12. If no stock is genuinely worth Claude analysis today, return empty flags
@@ -513,7 +519,7 @@ Return ONLY this JSON — no markdown, no explanation, no extra text:
       "urgency": "NORMAL or HIGH or URGENT",
       "reason": "3 sentence why it is worth watching citing specific volume (search web for history txn  if required)  or laggard setup. also take account of added technical details",
       "risk": "Key risk or support level (e.g., NHPC support at 300)",
-      "primary_signal": "VOLUME_BREAKOUT or LAGGARD_PLAY"
+      "primary_signal": "MACD or BB or SMA or RSI or OBV_MOMENTUM or VOLUME_BREAKOUT"
     }}
   ],
   "skipped": [
@@ -874,16 +880,39 @@ def run_gemini_filter(
         logger.info("Portfolio full (%d/%d positions) — no new signals needed", max_positions, max_positions)
         return []
 
+    # ── Sector momentum map (computed once, reused for prompt + flags) ────────
+    sector_momentum_map: dict = {}
+    if market_data:
+        try:
+            from sheets import read_tab as _read_tab
+            _ss = _read_tab("share_sectors")
+            _smap = {
+                r["symbol"].upper(): (r.get("sectorname") or "others").lower()
+                for r in _ss if r.get("symbol")
+            }
+            _block = _compute_sector_momentum(
+                market_data,
+                {c.sector for c in candidates[:max_candidates] if c.sector},
+                _smap,
+            )
+            for _line in _block.splitlines():
+                if _line.startswith("sector=") and " | " in _line:
+                    _sec = _line.split(" | ")[0].replace("sector=", "").strip()
+                    sector_momentum_map[_sec] = _line
+        except Exception as exc:
+            logger.warning("sector_momentum_map build failed (non-fatal): %s", exc)
+
     # ── Build prompt and call Gemini ──────────────────────────────────────────
     prompt = _build_prompt(
-        candidates     = candidates,
-        context        = context,
-        lessons        = lessons,
-        open_positions = open_positions,
-        total_capital  = total_capital,
-        max_candidates = max_candidates,
-        max_flags      = max_flags,
-        market_data    = market_data,   # NEW
+        candidates          = candidates,
+        context             = context,
+        lessons             = lessons,
+        open_positions      = open_positions,
+        total_capital       = total_capital,
+        max_candidates      = max_candidates,
+        max_flags           = max_flags,
+        market_data         = market_data,
+        sector_momentum_map = sector_momentum_map,
     )
 
     gemini_result = ask_gemini_json(
@@ -901,28 +930,6 @@ def run_gemini_filter(
     if gemini_result is None:
         logger.warning("Gemini unavailable — skipping Claude this cycle, no fallback")
         return []
-
-    # ── Sector momentum map (for per-flag population) ────────────────────────
-    sector_momentum_map: dict = {}
-    if market_data:
-        try:
-            from sheets import read_tab as _read_tab
-            _ss = _read_tab("share_sectors")
-            _smap = {
-                r["symbol"].upper(): (r.get("sectorname") or "others").lower()
-                for r in _ss if r.get("symbol")
-            }
-            _block = _compute_sector_momentum(
-                market_data,
-                {c.sector for c in candidates if c.sector},
-                _smap,
-            )
-            for _line in _block.splitlines():
-                if _line.startswith("sector=") and " | " in _line:
-                    _sec = _line.split(" | ")[0].replace("sector=", "").strip()
-                    sector_momentum_map[_sec] = _line
-        except Exception as exc:
-            logger.warning("sector_momentum_map build failed (non-fatal): %s", exc)
 
     # ── Assemble + log ────────────────────────────────────────────────────────
     flags = _assemble_flags(gemini_result, candidates, sector_momentum_map)
