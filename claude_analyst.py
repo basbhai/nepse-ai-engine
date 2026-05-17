@@ -885,6 +885,21 @@ def _build_prompt(
             f"Gemini breadth classification: {getattr(flag, 'intraday_trend', 'UNKNOWN')}"
         )
 
+    # ── Sector momentum context ───────────────────────────────────────────────
+    sector_momentum = getattr(flag, "sector_momentum", "") or ""
+    sector_momentum_section = f"""==============================================
+SECTOR MOMENTUM (context only — not a signal trigger)
+==============================================
+{sector_momentum if sector_momentum else "no sector data this cycle"}
+
+Use this to inform conviction:
+- Broad green sector (high pos, high vol_breadth, positive leader_gap) → supports entry
+- Sector distributing or leader_gap flat → raise caution even if stock looks strong
+- circuit_locked=YES on sector leader → capital trapped in leader, rotation likely
+"""
+
+    _hold_signal_str = f" for {flag.primary_signal}" if flag.primary_signal not in ("LAGGARD_PLAY", "") else ""
+
     return f"""You are a senior NEPSE quantitative analyst with deep knowledge of Nepal market research.
 Analyze this specific stock and produce a precise trading recommendation.
 
@@ -957,6 +972,7 @@ MACRO (NRB {macro.get('period', '?')} -- updated monthly):
   Lending Rate:    {macro.get('lending_rate', '?')}%
   FD Rate (1yr):   {macro.get('fd_rate', '?')}%  [{macro.get('fd_signal', 'NEUTRAL')}]
 
+{sector_momentum_section}
 ==============================================
 YOUR PORTFOLIO
 ==============================================
@@ -1002,7 +1018,7 @@ Produce a precise BUY / WAIT / AVOID recommendation.
 - BUY: only if primary signal is MACD/BB/SMA (RSI alone is never enough)
 - Stop loss: always 3% below entry (hard rule)
 - Target: use resistance level as reference, must exceed breakeven by >1%
-- Hold: use suggested hold from research ({hold_days} days for {flag.primary_signal})
+- Hold: use suggested hold from research ({hold_days} days{_hold_signal_str})
 - Use max 10% of total capital per position
 - Max {portfolio.get('max_positions', 3)} simultaneous positions — slots remaining: {portfolio.get('slots_remaining', 0)}
 - Include only ordinary shares, exclude mutual funds, debentures, promoter shares
@@ -1020,7 +1036,7 @@ Respond ONLY with this JSON -- no markdown, no explanation outside JSON:
   "breakeven": number,
   "risk_reward": number,
   "suggested_hold_days": number,
-  "primary_signal": "MACD or BB or SMA or OBV_MOMENTUM or RSI",
+  "primary_signal": "MACD or BB or SMA or OBV_MOMENTUM or RSI or VOLUME_BREAKOUT",
   "reasoning": "5-6 sentences covering: why this signal, what risks, what the Learning Hub says, sector context, and any fundamental quality flags",
   "lesson_applied": "which lesson from Learning Hub was most relevant, or NONE",
   "wait_condition": "if WAIT/AVOID: what specific condition would make this a BUY",
@@ -1034,6 +1050,16 @@ Respond ONLY with this JSON -- no markdown, no explanation outside JSON:
 # =============================================================================
 
 def _assemble_result(claude_json: dict, flag, geo: dict) -> AnalystResult:
+    primary_signal = claude_json.get("primary_signal", "")
+    # Sanitize — LAGGARD_PLAY is no longer a valid signal
+    VALID_PRIMARY_SIGNALS = {"MACD", "BB", "SMA", "OBV_MOMENTUM", "RSI", "VOLUME_BREAKOUT"}
+    if primary_signal not in VALID_PRIMARY_SIGNALS:
+        logger.warning(
+            "%s: invalid primary_signal '%s' from Claude — defaulting to MACD",
+            flag.symbol, primary_signal
+        )
+        primary_signal = "MACD"
+
     return AnalystResult(
         symbol             = flag.symbol,
         action             = claude_json.get("action",           "WAIT"),
@@ -1050,7 +1076,7 @@ def _assemble_result(claude_json: dict, flag, geo: dict) -> AnalystResult:
         lesson_applied     = claude_json.get("lesson_applied",   "NONE"),
         wait_condition     = claude_json.get("wait_condition",   ""),
         herding_note       = claude_json.get("herding_note",     "NONE"),
-        primary_signal     = claude_json.get("primary_signal",   ""),
+        primary_signal     = primary_signal,
         sector             = flag.sector,
         geo_score          = geo.get("combined", 0),
         rsi_14             = float(flag.rsi_14 or 0),
@@ -1448,7 +1474,9 @@ if __name__ == "__main__":
     if print_prompt:
         try:
             from gemini_filter import run_gemini_filter
-            flags = run_gemini_filter()
+            from modules.scraper import get_all_market_data as _get_md
+            _md = _get_md(write_breadth=False)
+            flags = run_gemini_filter(market_data=_md)
             if not flags:
                 print("  No flags from Gemini -- nothing to print")
                 sys.exit(0)
@@ -1495,7 +1523,9 @@ if __name__ == "__main__":
     print("\n[1/2] Running gemini_filter...")
     try:
         from gemini_filter import run_gemini_filter
-        flags = run_gemini_filter()
+        from modules.scraper import get_all_market_data as _get_md
+        _md = _get_md(write_breadth=False)
+        flags = run_gemini_filter(market_data=_md)
         if not flags:
             print("  No flags from Gemini -- nothing to analyze")
             sys.exit(0)
