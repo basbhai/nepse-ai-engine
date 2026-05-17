@@ -120,7 +120,12 @@ def fetch_all(token: str) -> tuple[list, list, list, list]:
 # SECTION 3 — AGGREGATE FLOW PER SYMBOL
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _aggregate_flow(rows: list) -> dict:
+def _aggregate_flow(
+    rows: list,
+    amount_key: str = "accumulationAmount",
+    qty_key: str = "accumulationQuantity",
+    pct_key: str = "accumulationPercentage",
+) -> dict:
     """
     Aggregate broker-level rows into per-symbol totals.
     Returns {symbol: {name, total_amount, total_qty, broker_count,
@@ -134,25 +139,25 @@ def _aggregate_flow(rows: list) -> dict:
 
     result = {}
     for sym, broker_rows in by_symbol.items():
-        total_amount = sum(r.get("accumulationAmount", 0) for r in broker_rows)
-        total_qty    = sum(r.get("accumulationQuantity", 0) for r in broker_rows)
+        total_amount = sum(r.get(amount_key, 0) for r in broker_rows)
+        total_qty    = sum(r.get(qty_key, 0) for r in broker_rows)
         broker_count = len(broker_rows)
 
-        top = max(broker_rows, key=lambda r: r.get("accumulationAmount", 0))
+        top = max(broker_rows, key=lambda r: r.get(amount_key, 0))
         top_broker_pct = round(
-            top.get("accumulationAmount", 0) / total_amount * 100, 2
+            top.get(amount_key, 0) / total_amount * 100, 2
         ) if total_amount > 0 else 0
 
         brokers_json = json.dumps([
             {
                 "broker":   r.get("brokerName", ""),
-                "amount":   round(r.get("accumulationAmount", 0), 2),
-                "qty":      r.get("accumulationQuantity", 0),
-                "acc_pct":  round(r.get("accumulationPercentage", 0), 2),
+                "amount":   round(r.get(amount_key, 0), 2),
+                "qty":      r.get(qty_key, 0),
+                "acc_pct":  round(r.get(pct_key, 0), 2),
                 "avg_rate": round(r.get("averageRate", 0), 2),
             }
             for r in sorted(broker_rows,
-                            key=lambda x: x.get("accumulationAmount", 0),
+                            key=lambda x: x.get(amount_key, 0),
                             reverse=True)
         ])
 
@@ -173,7 +178,12 @@ def build_flow_records(
 ) -> list[dict]:
     """Merge acc/dist data into per-symbol broker_flow rows."""
     agg_acc_1d  = _aggregate_flow(acc_1d)
-    agg_dist_1d = _aggregate_flow(dist_1d)
+    agg_dist_1d = _aggregate_flow(
+        dist_1d,
+        amount_key="distributionAmount",
+        qty_key="distributionQuantity",
+        pct_key="distributionPercentage",
+    )
     agg_acc_1w  = _aggregate_flow(acc_1w)
 
     all_symbols = set(agg_acc_1d.keys()) | set(agg_dist_1d.keys())
