@@ -272,6 +272,57 @@ def get_summary():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Broker Flow ───────────────────────────────────────────────────────────────
+
+@app.get("/dashboard/broker_flow")
+def get_broker_flow():
+    """Return top 8 accumulation and top 8 distribution rows from latest broker_flow date."""
+    try:
+        with _db() as cur:
+            cur.execute("SELECT MAX(date) as latest FROM broker_flow")
+            row = cur.fetchone()
+            latest = row["latest"] if row else None
+            if not latest:
+                return {"date": None, "accumulation": [], "distribution": []}
+
+            cur.execute("""
+                SELECT symbol, name,
+                       acc_broker_count_1d, acc_qty_1d, acc_amount_1d,
+                       acc_top_broker_1d, acc_top_broker_pct_1d,
+                       net_flow_1d, flow_bias_1d
+                FROM broker_flow
+                WHERE date = %s
+                  AND flow_bias_1d = 'ACCUMULATION'
+                  AND NULLIF(acc_qty_1d, '') IS NOT NULL
+                ORDER BY CAST(NULLIF(acc_qty_1d, '0') AS FLOAT) DESC NULLS LAST
+                LIMIT 8
+            """, (latest,))
+            acc_rows = [dict(r) for r in cur.fetchall()]
+
+            cur.execute("""
+                SELECT symbol, name,
+                       dist_broker_count_1d, dist_qty_1d, dist_amount_1d,
+                       dist_top_broker_1d, dist_top_broker_pct_1d,
+                       net_flow_1d, flow_bias_1d
+                FROM broker_flow
+                WHERE date = %s
+                  AND flow_bias_1d = 'DISTRIBUTION'
+                  AND NULLIF(dist_qty_1d, '') IS NOT NULL
+                ORDER BY CAST(NULLIF(dist_qty_1d, '0') AS FLOAT) DESC NULLS LAST
+                LIMIT 8
+            """, (latest,))
+            dist_rows = [dict(r) for r in cur.fetchall()]
+
+            return {
+                "date": latest,
+                "accumulation": [_safe(r) for r in acc_rows],
+                "distribution":  [_safe(r) for r in dist_rows],
+            }
+    except Exception as e:
+        log.exception("broker_flow endpoint failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ── Market Log ────────────────────────────────────────────────────────────────
 
 @app.get("/dashboard/market_log")

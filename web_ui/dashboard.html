@@ -1956,7 +1956,12 @@
     </table></div>
   </div>`;
 
-      document.getElementById('dash-content').innerHTML = cards + badges + charts + recent;
+      document.getElementById('dash-content').innerHTML = `
+        <div id="broker-flow-section" style="margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid var(--border)">
+          <div class="spinner" style="font-size:11px">Loading smart money flow…</div>
+        </div>` + cards + badges + charts + recent;
+
+      loadBrokerFlow();
 
       destroyChart('chart-nepse');
       const nepse = d.nepse_30d || [];
@@ -1971,6 +1976,98 @@
           options: { ...CHART_OPTS_BASE, plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ' ' + String(ctx.parsed.y || '') } } } }
         });
       }
+    }
+
+    /* ── Smart Money Flow ─────────────────────────────────────────────────────── */
+    async function loadBrokerFlow() {
+      try {
+        const d = await fetchJSON('/dashboard/broker_flow');
+        renderBrokerFlow(d);
+      } catch (e) {
+        document.getElementById('broker-flow-section').innerHTML =
+          '<div style="color:var(--muted);font-size:11px">Smart money data unavailable.</div>';
+      }
+    }
+
+    function renderBrokerFlow(d) {
+      const el = document.getElementById('broker-flow-section');
+      if (!d || (!d.accumulation?.length && !d.distribution?.length)) {
+        el.innerHTML = '<div style="color:var(--muted);font-size:11px">No broker flow data for today.</div>';
+        return;
+      }
+
+      const fmt = (val) => {
+        const n = parseFloat(val) || 0;
+        if (n >= 1e7) return (n / 1e7).toFixed(1) + 'Cr';
+        if (n >= 1e5) return (n / 1e5).toFixed(1) + 'L';
+        return n.toLocaleString();
+      };
+
+      const accRows = (d.accumulation || []).map(r => `
+        <tr>
+          <td style="color:var(--green);font-weight:600">${esc(r.symbol)}</td>
+          <td style="color:var(--muted);font-size:11px">${esc(r.name || '').substring(0, 18)}</td>
+          <td style="text-align:right">${v(r.acc_broker_count_1d)}</td>
+          <td style="text-align:right;color:var(--green)">${fmt(r.acc_qty_1d)}</td>
+          <td style="text-align:right;font-size:11px;color:var(--muted)">${fmt(r.acc_amount_1d)}</td>
+          <td style="font-size:10px;color:var(--muted)">${esc(r.acc_top_broker_1d || '—')}</td>
+        </tr>`).join('');
+
+      const distRows = (d.distribution || []).map(r => `
+        <tr>
+          <td style="color:var(--red);font-weight:600">${esc(r.symbol)}</td>
+          <td style="color:var(--muted);font-size:11px">${esc(r.name || '').substring(0, 18)}</td>
+          <td style="text-align:right">${v(r.dist_broker_count_1d)}</td>
+          <td style="text-align:right;color:var(--red)">${fmt(r.dist_qty_1d)}</td>
+          <td style="text-align:right;font-size:11px;color:var(--muted)">${fmt(r.dist_amount_1d)}</td>
+          <td style="font-size:10px;color:var(--muted)">${esc(r.dist_top_broker_1d || '—')}</td>
+        </tr>`).join('');
+
+      const tableStyle = `width:100%;border-collapse:collapse;font-size:12px`;
+      const thStyle = `font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;padding:4px 6px;border-bottom:1px solid var(--border);text-align:left`;
+
+      el.innerHTML = `
+        <div style="font-size:10px;color:var(--muted);margin-bottom:10px;letter-spacing:.06em">
+          SMART MONEY FLOW — ${esc(d.date || '—')}
+        </div>
+        <div class="g2s">
+          <div class="card" style="padding:12px;border-left:3px solid var(--green)">
+            <div style="font-size:10px;font-weight:700;color:var(--green);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">
+              ▲ Accumulation
+            </div>
+            <div class="tbl-wrap" style="overflow-x:auto">
+              <table style="${tableStyle}">
+                <thead><tr>
+                  <th style="${thStyle}">Symbol</th>
+                  <th style="${thStyle}">Name</th>
+                  <th style="${thStyle};text-align:right">Brokers</th>
+                  <th style="${thStyle};text-align:right">Qty</th>
+                  <th style="${thStyle};text-align:right">Amount</th>
+                  <th style="${thStyle}">Top Broker</th>
+                </tr></thead>
+                <tbody>${accRows || '<tr><td colspan="6" style="color:var(--muted);padding:8px">No data</td></tr>'}</tbody>
+              </table>
+            </div>
+          </div>
+          <div class="card" style="padding:12px;border-left:3px solid var(--red)">
+            <div style="font-size:10px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">
+              ▼ Distribution
+            </div>
+            <div class="tbl-wrap" style="overflow-x:auto">
+              <table style="${tableStyle}">
+                <thead><tr>
+                  <th style="${thStyle}">Symbol</th>
+                  <th style="${thStyle}">Name</th>
+                  <th style="${thStyle};text-align:right">Brokers</th>
+                  <th style="${thStyle};text-align:right">Qty</th>
+                  <th style="${thStyle};text-align:right">Amount</th>
+                  <th style="${thStyle}">Top Broker</th>
+                </tr></thead>
+                <tbody>${distRows || '<tr><td colspan="6" style="color:var(--muted);padding:8px">No data</td></tr>'}</tbody>
+              </table>
+            </div>
+          </div>
+        </div>`;
     }
 
     /* ── 2. Market Log ───────────────────────────────────────────────── */
