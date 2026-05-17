@@ -463,6 +463,30 @@ def build_telegram_message(
             lines.append(f"   _{names}_")
     lines.append("")
 
+    # ── Distribution by broker count ─────────────────────────────────────────
+    lines.append("🔴 *Distribution — Top Broker Count*")
+    for i, r in enumerate(_top_flow_by_broker_count(flow_records, "DISTRIBUTION"), 1):
+        names = _broker_names_short(r["dist_brokers_1d_json"])
+        lines.append(
+            f"{i}. *{r['symbol']}* — {r['dist_broker_count_1d']} brokers | "
+            f"NPR {_cr(float(r['dist_amount_1d']))}"
+        )
+        if names:
+            lines.append(f"   _{names}_")
+    lines.append("")
+
+    # ── Distribution by volume ────────────────────────────────────────────────
+    lines.append("🔴 *Distribution — Top Volume*")
+    for i, r in enumerate(_top_flow_by_volume(flow_records, "DISTRIBUTION"), 1):
+        names = _broker_names_short(r["dist_brokers_1d_json"])
+        lines.append(
+            f"{i}. *{r['symbol']}* — NPR {_cr(float(r['dist_amount_1d']))} | "
+            f"{r['dist_broker_count_1d']} brokers"
+        )
+        if names:
+            lines.append(f"   _{names}_")
+    lines.append("")
+
     # ── Stealth holdings ─────────────────────────────────────────────────────
     if holdings_records:
         lines.append("🔵 *Stealth — Highest Broker Concentration*")
@@ -666,6 +690,11 @@ def run(dry_run: bool = False) -> bool:
             log.info("  %s: %s brokers | NPR %s",
                      r["symbol"], r["acc_broker_count_1d"],
                      _cr(float(r["acc_amount_1d"])))
+        log.info("── Top 3 dist (broker count):")
+        for r in _top_flow_by_broker_count(flow_records, "DISTRIBUTION"):
+            log.info("  %s: %s brokers | NPR %s",
+                     r["symbol"], r["dist_broker_count_1d"],
+                     _cr(float(r["dist_amount_1d"])))
         log.info("── Top 3 stealth (holdings):")
         for h in _top_holdings_by_stealth(holdings_records):
             log.info("  %s: stealth=%.1f | top3=%.1f%% | public=%.2f%%",
