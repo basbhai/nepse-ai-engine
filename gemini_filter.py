@@ -153,6 +153,7 @@ class GeminiFlag:
     resistance_level:float      = 0.0
     market_log_id:   int        = None
     intraday_trend:  str        = ""  # Gemini breadth-based trend: ACCUMULATING|DISTRIBUTING|RECOVERING|FADING|CHOPPY|EARLY_SESSION
+    sector_momentum: str        = ""  # compact sector context line for this flag's sector
 
     # ── Full FilterCandidate passthrough ──────────────────────────────────────
     change_pct:       float      = 0.0
@@ -240,6 +241,80 @@ def _load_relevant_lessons(symbols: list[str], limit: int = 8) -> list[str]:
     except Exception as exc:
         logger.warning("Could not load Learning Hub lessons: %s", exc)
     return lessons
+
+
+def _compute_sector_momentum(
+    market_data: dict,
+    candidate_sectors: set,
+    sector_map: dict,
+) -> str:
+    """
+    Compute sector momentum context block from full market_data.
+    Only computes for sectors present in shortlisted candidates.
+    Returns compact pipe-delimited string for prompt injection.
+    No DB hits — pure in-memory computation from market_data.
+    """
+    try:
+        if not market_data or not candidate_sectors:
+            return "none — no candidate sectors identified"
+
+        nst_now = datetime.now(tz=NST)
+        total_min = nst_now.hour * 60 + nst_now.minute
+        if total_min < 11 * 60 + 30:
+            session_phase = "OPEN"
+        elif total_min <= 13 * 60 + 30:
+            session_phase = "MID"
+        else:
+            session_phase = "CLOSE"
+
+        sector_symbols: dict = {}
+        for sym, row in market_data.items():
+            sec = sector_map.get(sym.upper(), "others")
+            if sec not in sector_symbols:
+                sector_symbols[sec] = []
+            sector_symbols[sec].append((sym.upper(), row))
+
+        candidate_sectors_lower = {s.lower() for s in candidate_sectors if s}
+
+        lines = []
+        for sector in sorted(candidate_sectors_lower):
+            members = sector_symbols.get(sector, [])
+            if not members:
+                continue
+            total = len(members)
+            pos = sum(1 for _, r in members if (getattr(r, "change_pct", None) or 0.0) > 0)
+            avg_chg = (
+                sum((getattr(r, "change_pct", None) or 0.0) for _, r in members) / total
+            )
+            leader_sym = ""
+            l_chg = 0.0
+            best_comp = float("-inf")
+            for sym, r in members:
+                chg = getattr(r, "change_pct", None) or 0.0
+                vol = getattr(r, "volume", None) or 0
+                comp = chg * vol
+                if comp > best_comp:
+                    best_comp = comp
+                    leader_sym = sym
+                    l_chg = chg
+            leader_gap = l_chg - avg_chg
+            circuit_locked = "YES" if l_chg >= 9.5 else "NO"
+            lines.append(
+                f"sector={sector} | pos={pos}/{total} | avg_chg={avg_chg:+.2f}% | "
+                f"leader={leader_sym} | l_chg={l_chg:+.2f}% | "
+                f"leader_gap={leader_gap:+.2f}% | circuit_locked={circuit_locked} | "
+                f"session_phase={session_phase}"
+            )
+
+        if not lines:
+            return "none — no candidate sectors identified"
+        return "\n".join(lines)
+
+    except Exception as exc:
+        logger.warning("_compute_sector_momentum error (non-fatal): %s", exc)
+        return ""
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 2 — LOAD OPEN POSITIONS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -273,13 +348,14 @@ def _load_total_capital() -> float:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _build_prompt(
-    candidates:     list,
-    context:        dict,
-    lessons:        list[str],
-    open_positions: list[str],
-    total_capital:  float,
-    max_candidates: int = MAX_CANDIDATES_TO_GEMINI,
-    max_flags:      int = MAX_FLAGS_FOR_CLAUDE,
+    candidates:           list,
+    context:              dict,
+    lessons:              list[str],
+    open_positions:       list[str],
+    total_capital:        float,
+    max_candidates:       int  = MAX_CANDIDATES_TO_GEMINI,
+    max_flags:            int  = MAX_FLAGS_FOR_CLAUDE,
+    market_data:          dict = None,
 ) -> str:
     from filter_engine import format_candidate_for_gemini
 
@@ -316,6 +392,21 @@ def _build_prompt(
         )
     else:
         breadth_block = "INTRADAY BREADTH TIMELINE: no snapshots yet this session"
+
+    # ── Sector momentum context ───────────────────────────────────────────────
+    sector_momentum_block = ""
+    if market_data:
+        try:
+            from sheets import read_tab
+            share_sectors = read_tab("share_sectors")
+            sector_map = {
+                r["symbol"].upper(): (r.get("sectorname") or "others").lower()
+                for r in share_sectors if r.get("symbol")
+            }
+            candidate_sectors = {c.sector for c in candidates[:max_candidates] if c.sector}
+            sector_momentum_block = _compute_sector_momentum(market_data, candidate_sectors, sector_map)
+        except Exception as exc:
+            logger.warning("sector_momentum failed (non-fatal): %s", exc)
 
     positions_str   = ", ".join(open_positions) if open_positions else "None"
     max_positions   = context.get("max_positions", 3)
@@ -361,6 +452,14 @@ LEARNING HUB — RECENT LESSONS
 {lessons_str}
 
 ═══════════════════════════════════════
+SECTOR MOMENTUM  (context for your judgment — not a signal trigger)
+Each line = sector of one or more candidates above.
+Use this to strengthen or weaken conviction: if a candidate's sector
+is broadly distributing, be more conservative even if technicals look good.
+═══════════════════════════════════════
+{sector_momentum_block or "no sector data available this cycle"}
+
+═══════════════════════════════════════
 CANDIDATES (pre-filtered by filter_engine.py)
 ═══════════════════════════════════════
 Field key: SYM=symbol SEC=sector LTP=price CHG=daily% VOL=volume
@@ -376,31 +475,25 @@ SCREENING RULES (apply in order)
 ═══════════════════════════════════════
 1. Don't skip if symbol is already in open positions (evaluate EXIT/RE-ENTRY)
 2. Filter out if the stock's sector belongs to mutual fund or debentures
-2. SKIP if symbol already analyzed today (avoid duplicate flags)
-3. SKIP if market_state is BEAR and signal is not MACD or BB
+3. SKIP if symbol already analyzed today (avoid duplicate flags)
+4. SKIP if market_state is BEAR and signal is not MACD or BB
    (paper: only MACD/BB profitable in bear markets)
-4. PREFER MACD cross = BULLISH as primary signal (23.64% ann. return)
-5. PREFER BB = LOWER_TOUCH (PF=12.19, highest quality NEPSE signal)
-6. DOWNGRADE if RSI is primary signal (lost money -4.81% standalone)
-7. UPGRADE if Tier 1 candle pattern with volume confirmed
-8. UPGRADE if CSTAR=Y (excess return above C*=0.129)
-9. CHECK learning hub — if pattern has <40% win rate for this symbol, skip
-10. FLAG max {max_flags} stocks — quality over quantity
-11. If no stock is genuinely worth Claude analysis today, return empty flags
-12. search internet for potiential favourable or unfavourable news/conditions (must be creditable and renouned sources)
-13. APPLY LAGGARD LOGIC:
-    - Identify the 'Sector Leader' (highest % CHG and VOL in sector).
-    - If a candidate is in the same sector, has a lower RSI, but VOL > 1.5x avg,
-      UPGRADE to 'ANALYZE'. This is a 'Catch-up Play'.
-14. UPGRADE to URGENT if VOS > 1.0% AND primary_signal is LAGGARD_PLAY or VOLUME_BREAKOUT
-    (smart money / operator accumulation detected)
+5. PREFER MACD cross = BULLISH as primary signal (23.64% ann. return)
+6. PREFER BB = LOWER_TOUCH (PF=12.19, highest quality NEPSE signal)
+7. DOWNGRADE if RSI is primary signal (lost money -4.81% standalone)
+8. UPGRADE if Tier 1 candle pattern with volume confirmed
+9. UPGRADE if CSTAR=Y (excess return above C*=0.129)
+10. CHECK learning hub — if pattern has <40% win rate for this symbol, skip
+11. FLAG max {max_flags} stocks — quality over quantity
+12. If no stock is genuinely worth Claude analysis today, return empty flags
+
 
 ═══════════════════════════════════════
 TASK
 ═══════════════════════════════════════
-1. Search the internet for latest news/conditions on current candidates.
-2. For each candidate decide: ANALYZE or SKIP based on rules above.
-3. If ANALYZE: assign urgency NORMAL or HIGH or URGENT.
+
+1. For each candidate decide: ANALYZE or SKIP based on rules above.
+2. If ANALYZE: assign urgency NORMAL or HIGH or URGENT.
 
 - Study the INTRADAY BREADTH TIMELINE. Identify whether breadth_score is trending up, down, or oscillating.
   Set intraday_trend accordingly. If breadth is FADING or DISTRIBUTING, be more conservative with
@@ -514,8 +607,9 @@ def _keyword_fallback(
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _assemble_flags(
-    gemini_result: dict,
-    candidates:    list,
+    gemini_result:        dict,
+    candidates:           list,
+    sector_momentum_map:  dict = None,
 ) -> list[GeminiFlag]:
     """Convert Gemini JSON response into GeminiFlag objects."""
     cand_map = {c.symbol: c for c in candidates}
@@ -545,6 +639,8 @@ def _assemble_flags(
             gemini_risk      = str(f.get("risk",   "")),
             primary_signal   = str(f.get("primary_signal", c.primary_signal)),
             intraday_trend   = str(gemini_result.get("intraday_trend", "")),
+            sector_momentum  = (sector_momentum_map or {}).get(
+                                    c.sector.lower() if c.sector else "", ""),
             composite_score  = c.composite_score,
             tech_score       = c.tech_score,
             obv_trend        = c.obv_trend,
@@ -787,6 +883,7 @@ def run_gemini_filter(
         total_capital  = total_capital,
         max_candidates = max_candidates,
         max_flags      = max_flags,
+        market_data    = market_data,   # NEW
     )
 
     gemini_result = ask_gemini_json(
@@ -805,8 +902,30 @@ def run_gemini_filter(
         logger.warning("Gemini unavailable — skipping Claude this cycle, no fallback")
         return []
 
+    # ── Sector momentum map (for per-flag population) ────────────────────────
+    sector_momentum_map: dict = {}
+    if market_data:
+        try:
+            from sheets import read_tab as _read_tab
+            _ss = _read_tab("share_sectors")
+            _smap = {
+                r["symbol"].upper(): (r.get("sectorname") or "others").lower()
+                for r in _ss if r.get("symbol")
+            }
+            _block = _compute_sector_momentum(
+                market_data,
+                {c.sector for c in candidates if c.sector},
+                _smap,
+            )
+            for _line in _block.splitlines():
+                if _line.startswith("sector=") and " | " in _line:
+                    _sec = _line.split(" | ")[0].replace("sector=", "").strip()
+                    sector_momentum_map[_sec] = _line
+        except Exception as exc:
+            logger.warning("sector_momentum_map build failed (non-fatal): %s", exc)
+
     # ── Assemble + log ────────────────────────────────────────────────────────
-    flags = _assemble_flags(gemini_result, candidates)
+    flags = _assemble_flags(gemini_result, candidates, sector_momentum_map)
 
     if flags:
         _write_log(gemini_result, flags, candidates)
@@ -838,6 +957,7 @@ def format_flag_for_claude(flag: GeminiFlag) -> str:
         f"BB:{flag.bb_signal} CANDLE:{candle} GEO:{flag.geo_combined:+d} "
         f"REASON:{flag.gemini_reason} RISK:{flag.gemini_risk}"
         f" BREADTH_TREND:{flag.intraday_trend}"
+        + (f" SECTOR_MOMENTUM:{flag.sector_momentum}" if flag.sector_momentum else "")
     )
 
 
