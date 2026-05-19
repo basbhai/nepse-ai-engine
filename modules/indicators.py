@@ -420,16 +420,14 @@ def _calc_obv(closes: list[float], volumes: list[float]) -> Optional[dict]:
             slope = (n * sum_xy - sum_x * sum_y) / denominator
             # Use average of last 5 OBV as reference for relative threshold
             avg_y = sum_y / n
-            if avg_y != 0:
+            if abs(avg_y) > 1000:  # OBV values are cumulative volume, naturally large
                 slope_pct = slope / abs(avg_y) * 100
                 if slope_pct > 2.0:
                     trend = "RISING"
                 elif slope_pct < -2.0:
                     trend = "FALLING"
-                # else FLAT
             else:
-                # if avg_y is zero, use absolute slope threshold
-                if slope > 100:   # arbitrary, adjust as needed
+                if slope > 100:
                     trend = "RISING"
                 elif slope < -100:
                     trend = "FALLING"
@@ -643,12 +641,18 @@ def compute_indicators(
     today_low    = float(price_row.low   or price_row.ltp   or 0)
     today_vol    = float(price_row.volume or 0)
     if today_vol == 0 and hist_volumes:
-        today_vol = hist_volumes[-1]  # market not open yet — use yesterday's volume from price_history
+        today_vol = hist_volumes[-1]  # market not open yet ï¿½ use yesterday's volume from price_history
 
-    closes  = hist_closes  + [today_close]
-    highs   = hist_highs   + [today_high]   if hist_highs  else [today_high]
-    lows    = hist_lows    + [today_low]    if hist_lows   else [today_low]
-    volumes = hist_volumes + [today_vol]    if hist_volumes else [today_vol]
+    if today_close > 0 and (not hist_closes or today_close != hist_closes[-1]):
+        closes  = hist_closes  + [today_close]
+        highs   = hist_highs   + [today_high]
+        lows    = hist_lows    + [today_low]
+        volumes = hist_volumes + [today_vol]
+    else:
+        closes  = hist_closes
+        highs   = hist_highs
+        lows    = hist_lows
+        volumes = hist_volumes
 
     result.close        = str(today_close)
     result.volume       = str(int(today_vol))
@@ -809,16 +813,17 @@ def run() -> None:
         market_data = {}
         for sym, closes in cache.closes.items():
             if closes:
-                highs = cache.get_highs(sym)
-                lows  = cache.get_lows(sym)
+                highs   = cache.get_highs(sym)
+                lows    = cache.get_lows(sym)
+                volumes = cache.get_volumes(sym)
                 market_data[sym] = PriceRow(
                     symbol=sym, ltp=closes[-1],
                     open_price=closes[-2] if len(closes) > 1 else closes[-1],
                     close=closes[-1],
-                    high=highs[-1] if highs else closes[-1],
-                    low=lows[-1]   if lows  else closes[-1],
+                    high=highs[-1]   if highs   else closes[-1],
+                    low=lows[-1]     if lows    else closes[-1],
                     prev_close=closes[-2] if len(closes) > 1 else closes[-1],
-                    volume=hist_volumes[-1] if hist_volumes else 0,
+                    volume=volumes[-1] if volumes else 0,
                 )
     logger.info("Prices: %d symbols", len(market_data))
 
@@ -908,16 +913,17 @@ if __name__ == "__main__":
             market_data = {}
             for sym, closes in cache.closes.items():
                 if closes:
-                    highs = cache.get_highs(sym)
-                    lows  = cache.get_lows(sym)
+                    highs   = cache.get_highs(sym)
+                    lows    = cache.get_lows(sym)
+                    volumes = cache.get_volumes(sym)
                     market_data[sym] = PriceRow(
                         symbol=sym, ltp=closes[-1],
                         open_price=closes[-2] if len(closes) > 1 else closes[-1],
                         close=closes[-1],
-                        high=highs[-1] if highs else closes[-1],
-                        low=lows[-1]   if lows  else closes[-1],
+                        high=highs[-1]   if highs   else closes[-1],
+                        low=lows[-1]     if lows    else closes[-1],
                         prev_close=closes[-2] if len(closes) > 1 else closes[-1],
-                        volume=hist_volumes[-1] if hist_volumes else 0,
+                        volume=volumes[-1] if volumes else 0,
                     )
         print(f"  âœ… {len(market_data)} symbols")
     except Exception as e:
