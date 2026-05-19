@@ -1278,16 +1278,20 @@ def _get_broker_flow_classification(sym: str, flow_cache: dict) -> tuple[str, in
         dist_count = int(float(row.get("dist_broker_count_1d", 0) or 0))
         acc_amt    = float(row.get("acc_amount_1d", 0) or 0)
         dist_amt   = float(row.get("dist_amount_1d", 0) or 0)
+        acc_qty    = float(row.get("acc_qty_1d", 0) or 0)
+        dist_qty   = float(row.get("dist_qty_1d", 0) or 0)
         net_amount = acc_amt - dist_amt
         net_count  = acc_count - dist_count
+        acc_score  = (acc_amt * acc_qty)  / max(acc_count, 1)
+        dist_score = (dist_amt * dist_qty) / max(dist_count, 1)
     except (TypeError, ValueError):
         return ("NO_DATA", 0, 0.0)
 
-    if acc_count > dist_count and dist_count < acc_count * churn_threshold:
+    if acc_score > dist_score and dist_score < acc_score * churn_threshold:
         return ("NET_ACCUMULATION", net_count, net_amount)
-    if dist_count > acc_count and acc_count < dist_count * churn_threshold:
+    if dist_score > acc_score and acc_score < dist_score * churn_threshold:
         return ("NET_DISTRIBUTION", net_count, net_amount)
-    if acc_count > 0 and dist_count > 0:
+    if acc_score > 0 and dist_score > 0:
         return ("CHURN", net_count, net_amount)
     return ("NO_DATA", 0, 0.0)
 

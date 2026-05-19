@@ -677,9 +677,14 @@ def _format_broker_flow_section(broker_ctx: dict) -> str:
         net_amt    = acc_amt - dist_amt
         net_sign   = "+" if net_amt >= 0 else "-"
 
-        if acc_count > dist_count:
+        acc_qty    = _fv(flow, "acc_qty_1d")
+        dist_qty   = _fv(flow, "dist_qty_1d")
+        acc_score  = (acc_amt * acc_qty)  / max(acc_count, 1)
+        dist_score = (dist_amt * dist_qty) / max(dist_count, 1)
+
+        if acc_score > dist_score:
             flow_class = "NET_ACCUMULATION"
-        elif dist_count > acc_count:
+        elif dist_score > acc_score:
             flow_class = "NET_DISTRIBUTION"
         else:
             flow_class = "NEUTRAL"

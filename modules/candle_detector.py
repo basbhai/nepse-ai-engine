@@ -206,30 +206,56 @@ def _build_matrices(symbols: list, market_data: dict, cache) -> tuple:
         today_c = row.ltp        if row.ltp        > 0 else row.close
         today_v = float(row.volume)
 
-        # Approximate historical opens as prior close (OmitNomis has no open column)
-        o_hist = np.array(hist_c[-n_hist:], dtype=np.float64)
-        h_hist = np.array(hist_h[-n_hist:] if hist_h else hist_c[-n_hist:], dtype=np.float64)
-        l_hist = np.array(hist_l[-n_hist:] if hist_l else hist_c[-n_hist:], dtype=np.float64)
-        c_hist = np.array(hist_c[-n_hist:], dtype=np.float64)
-        v_hist = np.array(hist_v[-n_hist:] if hist_v else [today_v] * n_hist, dtype=np.float64)
+        is_new_candle = today_c > 0 and (not hist_c or today_c != hist_c[-1])
 
-        # Pad left with NaN if fewer than n_hist days available
-        pad = n_hist - len(c_hist)
-        if pad > 0:
-            nan_pad = np.full(pad, np.nan)
-            o_hist  = np.concatenate([nan_pad, o_hist])
-            h_hist  = np.concatenate([nan_pad, h_hist])
-            l_hist  = np.concatenate([nan_pad, l_hist])
-            c_hist  = np.concatenate([nan_pad, c_hist])
-            v_hist  = np.concatenate([nan_pad, v_hist])
+        if is_new_candle:
+            # Approximate historical opens as prior close (OmitNomis has no open column)
+            o_hist = np.array(hist_c[-n_hist:], dtype=np.float64)
+            h_hist = np.array(hist_h[-n_hist:] if hist_h else hist_c[-n_hist:], dtype=np.float64)
+            l_hist = np.array(hist_l[-n_hist:] if hist_l else hist_c[-n_hist:], dtype=np.float64)
+            c_hist = np.array(hist_c[-n_hist:], dtype=np.float64)
+            v_hist = np.array(hist_v[-n_hist:] if hist_v else [today_v] * n_hist, dtype=np.float64)
 
-        O_rows.append(np.append(o_hist, today_o))
-        H_rows.append(np.append(h_hist, today_h))
-        L_rows.append(np.append(l_hist, today_l))
-        C_rows.append(np.append(c_hist, today_c))
-        V_rows.append(np.append(v_hist, today_v))
+            # Pad left with NaN if fewer than n_hist days available
+            pad = n_hist - len(c_hist)
+            if pad > 0:
+                nan_pad = np.full(pad, np.nan)
+                o_hist  = np.concatenate([nan_pad, o_hist])
+                h_hist  = np.concatenate([nan_pad, h_hist])
+                l_hist  = np.concatenate([nan_pad, l_hist])
+                c_hist  = np.concatenate([nan_pad, c_hist])
+                v_hist  = np.concatenate([nan_pad, v_hist])
 
-        C_full_rows.append(np.array(hist_c + [today_c], dtype=np.float64))
+            O_rows.append(np.append(o_hist, today_o))
+            H_rows.append(np.append(h_hist, today_h))
+            L_rows.append(np.append(l_hist, today_l))
+            C_rows.append(np.append(c_hist, today_c))
+            V_rows.append(np.append(v_hist, today_v))
+            C_full_rows.append(np.array(hist_c + [today_c], dtype=np.float64))
+        else:
+            # Market closed — use last LOOKBACK historical candles, no duplicate append
+            o_hist = np.array(hist_c[-LOOKBACK:], dtype=np.float64)
+            h_hist = np.array(hist_h[-LOOKBACK:] if hist_h else hist_c[-LOOKBACK:], dtype=np.float64)
+            l_hist = np.array(hist_l[-LOOKBACK:] if hist_l else hist_c[-LOOKBACK:], dtype=np.float64)
+            c_hist = np.array(hist_c[-LOOKBACK:], dtype=np.float64)
+            v_hist = np.array(hist_v[-LOOKBACK:] if hist_v else [0.0] * LOOKBACK, dtype=np.float64)
+
+            pad = LOOKBACK - len(c_hist)
+            if pad > 0:
+                nan_pad = np.full(pad, np.nan)
+                o_hist  = np.concatenate([nan_pad, o_hist])
+                h_hist  = np.concatenate([nan_pad, h_hist])
+                l_hist  = np.concatenate([nan_pad, l_hist])
+                c_hist  = np.concatenate([nan_pad, c_hist])
+                v_hist  = np.concatenate([nan_pad, v_hist])
+
+            O_rows.append(o_hist)
+            H_rows.append(h_hist)
+            L_rows.append(l_hist)
+            C_rows.append(c_hist)
+            V_rows.append(v_hist)
+            C_full_rows.append(np.array(hist_c, dtype=np.float64))
+
         valid_symbols.append(sym)
 
     if not valid_symbols:
@@ -960,8 +986,9 @@ def run() -> None:
         market_data = {}
         for sym, closes in cache.closes.items():
             if closes:
-                highs = cache.get_highs(sym)
-                lows  = cache.get_lows(sym)
+                highs   = cache.get_highs(sym)
+                lows    = cache.get_lows(sym)
+                volumes = cache.get_volumes(sym)
                 market_data[sym] = PriceRow(
                     symbol=sym, ltp=closes[-1],
                     open_price=closes[-2] if len(closes) > 1 else closes[-1],
@@ -969,7 +996,7 @@ def run() -> None:
                     high=highs[-1] if highs else closes[-1],
                     low=lows[-1]   if lows  else closes[-1],
                     prev_close=closes[-2] if len(closes) > 1 else closes[-1],
-                    volume=10000,
+                    volume=volumes[-1] if volumes else 0,
                 )
     logger.info("Prices: %d symbols", len(market_data))
 
@@ -1024,8 +1051,9 @@ if __name__ == "__main__":
             market_data = {}
             for sym, closes in cache.closes.items():
                 if closes:
-                    highs = cache.get_highs(sym)
-                    lows  = cache.get_lows(sym)
+                    highs   = cache.get_highs(sym)
+                    lows    = cache.get_lows(sym)
+                    volumes = cache.get_volumes(sym)
                     market_data[sym] = PriceRow(
                         symbol=sym, ltp=closes[-1],
                         open_price=closes[-2] if len(closes) > 1 else closes[-1],
@@ -1033,7 +1061,7 @@ if __name__ == "__main__":
                         high=highs[-1] if highs else closes[-1],
                         low=lows[-1] if lows else closes[-1],
                         prev_close=closes[-2] if len(closes) > 1 else closes[-1],
-                        volume=10000,
+                        volume=volumes[-1] if volumes else 0,
                     )
         print(f"  {len(market_data)} symbols")
     except Exception as e:

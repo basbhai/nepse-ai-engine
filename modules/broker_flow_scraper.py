@@ -369,22 +369,20 @@ def _cr(amount: float) -> str:
     return f"{amount:,.0f}"
 
 
-def _top_flow_by_broker_count(records: list[dict], bias: str, n: int = TOP_N) -> list[dict]:
+def _top_flow_by_institutional_score(records: list[dict], bias: str, n: int = TOP_N) -> list[dict]:
+    """Rank by (amount * qty) / broker_count — institutional accumulation signal."""
     if bias == "ACCUMULATION":
         filtered = [r for r in records if float(r["acc_amount_1d"]) > 0]
-        return sorted(filtered, key=lambda r: int(r["acc_broker_count_1d"]), reverse=True)[:n]
+        def score(r):
+            brokers = max(int(r["acc_broker_count_1d"]), 1)
+            return (float(r["acc_amount_1d"]) * float(r["acc_qty_1d"])) / brokers
+        return sorted(filtered, key=score, reverse=True)[:n]
     else:
         filtered = [r for r in records if float(r["dist_amount_1d"]) > 0]
-        return sorted(filtered, key=lambda r: int(r["dist_broker_count_1d"]), reverse=True)[:n]
-
-
-def _top_flow_by_volume(records: list[dict], bias: str, n: int = TOP_N) -> list[dict]:
-    if bias == "ACCUMULATION":
-        filtered = [r for r in records if float(r["acc_amount_1d"]) > 0]
-        return sorted(filtered, key=lambda r: float(r["acc_amount_1d"]), reverse=True)[:n]
-    else:
-        filtered = [r for r in records if float(r["dist_amount_1d"]) > 0]
-        return sorted(filtered, key=lambda r: float(r["dist_amount_1d"]), reverse=True)[:n]
+        def score(r):
+            brokers = max(int(r["dist_broker_count_1d"]), 1)
+            return (float(r["dist_amount_1d"]) * float(r["dist_qty_1d"])) / brokers
+        return sorted(filtered, key=score, reverse=True)[:n]
 
 
 def _top_holdings_by_stealth(records: list[dict], n: int = TOP_N) -> list[dict]:
@@ -439,9 +437,9 @@ def build_telegram_message(
     sep = "▬" * 22
     lines = [sep, f"🏦 *Smart Money Flow — {trade_date}*", sep, ""]
 
-    # ── Accumulation by broker count ────────────────────────────────────────
-    lines.append("🟢 *Accumulation — Top Broker Count*")
-    for i, r in enumerate(_top_flow_by_broker_count(flow_records, "ACCUMULATION"), 1):
+    # ── Accumulation — institutional flow ────────────────────────────────────
+    lines.append("🟢 *Accumulation — Institutional Flow*")
+    for i, r in enumerate(_top_flow_by_institutional_score(flow_records, "ACCUMULATION"), 1):
         names = _broker_names_short(r["acc_brokers_1d_json"])
         lines.append(
             f"{i}. *{r['symbol']}* — {r['acc_broker_count_1d']} brokers | "
@@ -451,37 +449,13 @@ def build_telegram_message(
             lines.append(f"   _{names}_")
     lines.append("")
 
-    # ── Accumulation by volume ───────────────────────────────────────────────
-    lines.append("🟢 *Accumulation — Top Volume*")
-    for i, r in enumerate(_top_flow_by_volume(flow_records, "ACCUMULATION"), 1):
-        names = _broker_names_short(r["acc_brokers_1d_json"])
-        lines.append(
-            f"{i}. *{r['symbol']}* — NPR {_cr(float(r['acc_amount_1d']))} | "
-            f"{r['acc_broker_count_1d']} brokers"
-        )
-        if names:
-            lines.append(f"   _{names}_")
-    lines.append("")
-
-    # ── Distribution by broker count ─────────────────────────────────────────
-    lines.append("🔴 *Distribution — Top Broker Count*")
-    for i, r in enumerate(_top_flow_by_broker_count(flow_records, "DISTRIBUTION"), 1):
+    # ── Distribution — institutional flow ────────────────────────────────────
+    lines.append("🔴 *Distribution — Institutional Flow*")
+    for i, r in enumerate(_top_flow_by_institutional_score(flow_records, "DISTRIBUTION"), 1):
         names = _broker_names_short(r["dist_brokers_1d_json"])
         lines.append(
             f"{i}. *{r['symbol']}* — {r['dist_broker_count_1d']} brokers | "
             f"NPR {_cr(float(r['dist_amount_1d']))}"
-        )
-        if names:
-            lines.append(f"   _{names}_")
-    lines.append("")
-
-    # ── Distribution by volume ────────────────────────────────────────────────
-    lines.append("🔴 *Distribution — Top Volume*")
-    for i, r in enumerate(_top_flow_by_volume(flow_records, "DISTRIBUTION"), 1):
-        names = _broker_names_short(r["dist_brokers_1d_json"])
-        lines.append(
-            f"{i}. *{r['symbol']}* — NPR {_cr(float(r['dist_amount_1d']))} | "
-            f"{r['dist_broker_count_1d']} brokers"
         )
         if names:
             lines.append(f"   _{names}_")
@@ -527,17 +501,11 @@ def build_email_body(
 
     # Flow sections
     for title, top_recs, json_key, amount_key, count_key in [
-        ("ACCUMULATION — TOP BY BROKER COUNT",
-         _top_flow_by_broker_count(flow_records, "ACCUMULATION"),
+        ("ACCUMULATION — INSTITUTIONAL FLOW (amount × qty ÷ brokers)",
+         _top_flow_by_institutional_score(flow_records, "ACCUMULATION"),
          "acc_brokers_1d_json", "acc_amount_1d", "acc_broker_count_1d"),
-        ("ACCUMULATION — TOP BY VOLUME",
-         _top_flow_by_volume(flow_records, "ACCUMULATION"),
-         "acc_brokers_1d_json", "acc_amount_1d", "acc_broker_count_1d"),
-        ("DISTRIBUTION — TOP BY BROKER COUNT",
-         _top_flow_by_broker_count(flow_records, "DISTRIBUTION"),
-         "dist_brokers_1d_json", "dist_amount_1d", "dist_broker_count_1d"),
-        ("DISTRIBUTION — TOP BY VOLUME",
-         _top_flow_by_volume(flow_records, "DISTRIBUTION"),
+        ("DISTRIBUTION — INSTITUTIONAL FLOW (amount × qty ÷ brokers)",
+         _top_flow_by_institutional_score(flow_records, "DISTRIBUTION"),
          "dist_brokers_1d_json", "dist_amount_1d", "dist_broker_count_1d"),
     ]:
         lines += [sep2, f"  {title}", sep2]
@@ -685,13 +653,13 @@ def run(dry_run: bool = False) -> bool:
     if dry_run:
         log.info("[DRY-RUN] %d flow + %d holdings records",
                  len(flow_records), len(holdings_records))
-        log.info("── Top 3 acc (broker count):")
-        for r in _top_flow_by_broker_count(flow_records, "ACCUMULATION"):
+        log.info("── Top 3 acc (institutional score):")
+        for r in _top_flow_by_institutional_score(flow_records, "ACCUMULATION"):
             log.info("  %s: %s brokers | NPR %s",
                      r["symbol"], r["acc_broker_count_1d"],
                      _cr(float(r["acc_amount_1d"])))
-        log.info("── Top 3 dist (broker count):")
-        for r in _top_flow_by_broker_count(flow_records, "DISTRIBUTION"):
+        log.info("── Top 3 dist (institutional score):")
+        for r in _top_flow_by_institutional_score(flow_records, "DISTRIBUTION"):
             log.info("  %s: %s brokers | NPR %s",
                      r["symbol"], r["dist_broker_count_1d"],
                      _cr(float(r["dist_amount_1d"])))

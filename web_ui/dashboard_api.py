@@ -294,7 +294,11 @@ def get_broker_flow():
                 WHERE date = %s
                   AND flow_bias_1d = 'ACCUMULATION'
                   AND NULLIF(acc_qty_1d, '') IS NOT NULL
-                ORDER BY CAST(NULLIF(acc_qty_1d, '0') AS FLOAT) DESC NULLS LAST
+                ORDER BY (
+                    CAST(NULLIF(acc_amount_1d, '0') AS FLOAT) *
+                    CAST(NULLIF(acc_qty_1d, '0') AS FLOAT) /
+                    NULLIF(CAST(NULLIF(acc_broker_count_1d, '0') AS FLOAT), 0)
+                ) DESC NULLS LAST
                 LIMIT 8
             """, (latest,))
             acc_rows = [dict(r) for r in cur.fetchall()]
@@ -308,7 +312,11 @@ def get_broker_flow():
                 WHERE date = %s
                   AND flow_bias_1d = 'DISTRIBUTION'
                   AND NULLIF(dist_qty_1d, '') IS NOT NULL
-                ORDER BY CAST(NULLIF(dist_qty_1d, '0') AS FLOAT) DESC NULLS LAST
+                ORDER BY (
+                    CAST(NULLIF(dist_amount_1d, '0') AS FLOAT) *
+                    CAST(NULLIF(dist_qty_1d, '0') AS FLOAT) /
+                    NULLIF(CAST(NULLIF(dist_broker_count_1d, '0') AS FLOAT), 0)
+                ) DESC NULLS LAST
                 LIMIT 8
             """, (latest,))
             dist_rows = [dict(r) for r in cur.fetchall()]
