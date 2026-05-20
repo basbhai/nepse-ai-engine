@@ -55,6 +55,7 @@ TABS: dict[str, str] = {
     "news_effect_patterns": "news_effect_patterns",
     "pattern_validation_log": "pattern_validation_log",
     "agent_trace": "agent_trace",
+    "wait_parse_log": "wait_parse_log",
     "broker_flow": "broker_flow",
     "broker_holdings": "broker_holdings",
 }
@@ -202,6 +203,8 @@ TABLE_DDL: dict[str, str] = {
         gemini_risk TEXT,
         reasoning TEXT,
         wait_condition TEXT,
+        wait_condition_parsed TEXT,
+        last_reviewed_date TEXT,
         herding_note TEXT,
         lesson_applied TEXT,
         outcome TEXT DEFAULT 'PENDING',
@@ -1522,6 +1525,20 @@ TABLE_DDL: dict[str, str] = {
         ON "agent_trace" (decision);
     """,
 
+    "wait_parse_log": """
+    CREATE TABLE IF NOT EXISTS "wait_parse_log" (
+        id SERIAL PRIMARY KEY,
+        market_log_id TEXT NOT NULL,
+        parsed_at TEXT NOT NULL,
+        raw_condition TEXT,
+        parsed_json TEXT,
+        model_used TEXT,
+        inserted_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS ix_wait_parse_log_market_log_id
+        ON "wait_parse_log" (market_log_id);
+    """,
+
     "broker_flow": """
     CREATE TABLE IF NOT EXISTS "broker_flow" (
         id SERIAL PRIMARY KEY,
@@ -1613,7 +1630,7 @@ TABLE_COLUMNS: dict[str, list[str]] = {
     "price_history": ["date", "symbol", "open", "high", "low", "close", "ltp", "volume", "turnover", "vwap", "prev_close", "transactions", "conf_score", "avg_120d", "avg_180d", "week52_high", "week52_low", "source"],
     "market_breadth": ["date", "advancing", "declining", "unchanged", "new_52w_high", "new_52w_low", "total_turnover_npr", "total_volume", "breadth_score", "market_signal", "nepse_index", "nepse_change_pct", "timestamp"],
     "portfolio": ["symbol", "entry_date", "entry_price", "shares", "total_cost", "current_price", "current_value", "pnl_npr", "pnl_pct", "peak_price", "stop_type", "stop_level", "trail_active", "trail_stop", "status", "exit_date", "exit_price", "exit_reason"],
-    "market_log": ["date", "time", "symbol", "sector", "action", "confidence", "entry_price", "stop_loss", "target", "allocation_npr", "shares", "breakeven", "risk_reward", "rsi_14", "ema_20", "ema_50", "ema_200", "primary_signal", "macd_line", "macd_signal", "macd_histogram", "bb_pct_b", "bb_upper", "bb_lower", "bollinger_upper", "bollinger_lower", "ema_20_50_cross", "ema_50_200_cross", "volume", "volume_ratio", "obv_trend", "vwap", "vwap_dev", "bid_ask_ratio", "dpr_proximity", "volume_os_ratio", "atr_14", "support_level", "resistance_level", "candle_pattern", "conf_score", "pe_ratio", "eps", "roe", "npl_pct", "fundamental_score", "geo_score", "macro_score", "sector_mult", "cstar_signal", "market_state", "gemini_reason", "gemini_risk", "reasoning", "wait_condition", "herding_note", "lesson_applied", "outcome", "actual_pnl", "exit_price", "exit_date", "exit_reason", "timestamp", "eval_date", "eval_geo_score", "eval_nepal_score", "eval_nepse_index", "eval_market_state", "eval_policy_rate", "eval_fd_rate_pct", "eval_geo_delta", "eval_nepal_delta", "eval_key_news", "eval_price_change_pct", "eval_nepse_change_pct", "eval_alpha", "headlines_politics", "headlines_economy", "headlines_stock", "momentum_status", "rsi_slope_3d", "macd_hist_slope", "bb_pct_b_slope", "bounce_failed", "reversal_days"],
+    "market_log": ["date", "time", "symbol", "sector", "action", "confidence", "entry_price", "stop_loss", "target", "allocation_npr", "shares", "breakeven", "risk_reward", "rsi_14", "ema_20", "ema_50", "ema_200", "primary_signal", "macd_line", "macd_signal", "macd_histogram", "bb_pct_b", "bb_upper", "bb_lower", "bollinger_upper", "bollinger_lower", "ema_20_50_cross", "ema_50_200_cross", "volume", "volume_ratio", "obv_trend", "vwap", "vwap_dev", "bid_ask_ratio", "dpr_proximity", "volume_os_ratio", "atr_14", "support_level", "resistance_level", "candle_pattern", "conf_score", "pe_ratio", "eps", "roe", "npl_pct", "fundamental_score", "geo_score", "macro_score", "sector_mult", "cstar_signal", "market_state", "gemini_reason", "gemini_risk", "reasoning", "wait_condition", "wait_condition_parsed", "last_reviewed_date", "herding_note", "lesson_applied", "outcome", "actual_pnl", "exit_price", "exit_date", "exit_reason", "timestamp", "eval_date", "eval_geo_score", "eval_nepal_score", "eval_nepse_index", "eval_market_state", "eval_policy_rate", "eval_fd_rate_pct", "eval_geo_delta", "eval_nepal_delta", "eval_key_news", "eval_price_change_pct", "eval_nepse_change_pct", "eval_alpha", "headlines_politics", "headlines_economy", "headlines_stock", "momentum_status", "rsi_slope_3d", "macd_hist_slope", "bb_pct_b_slope", "bounce_failed", "reversal_days"],
     "indicators": ["symbol", "date", "volume", "history_days", "rsi_14", "rsi_signal", "ema_20", "ema_50", "ema_200", "ema_trend", "ema_20_50_cross", "ema_50_200_cross", "macd_line", "macd_signal", "macd_histogram", "macd_cross", "bb_upper", "bb_middle", "bb_lower", "bb_width", "bb_pct_b", "bb_signal", "atr_14", "atr_pct", "obv", "obv_trend", "support_level", "resistance_level", "tech_score", "tech_signal", "timestamp"],
     "candle_patterns": ["pattern_name", "type", "tier", "nepal_win_rate_pct", "sample_size", "avg_gain_pct", "best_sector", "best_rsi_range", "volume_condition", "reliability", "notes"],
     "candle_signals": ["symbol", "date", "pattern_name", "signal", "tier", "confidence", "volume_confirmed", "candles_used", "description", "timestamp"],
@@ -1660,6 +1677,7 @@ TABLE_COLUMNS: dict[str, list[str]] = {
     "news_effect_patterns": ["id", "event_type", "event_category", "lag_start", "lag_end", "magnitude", "market_regime", "status", "confidence_basis", "evidence_quality", "occurrence_count", "weighted_accuracy", "source", "superseded_by", "active", "notes", "inserted_at"],
     "pattern_validation_log": ["id", "event_type", "event_date", "event_cluster_id", "pattern_id", "lag_start", "lag_end", "magnitude_applied", "market_regime", "nepal_crisis_score_at_detection", "predicted_date_start", "predicted_date_end", "actual_nepse_pct", "magnitude_error", "outcome", "co_occurrence_count", "escalated_from", "scored_by", "scored_at", "inserted_at"],
     "agent_trace": ["cycle_ts", "step", "tool", "request_args", "response", "escalated", "decision", "elapsed_ms", "created_at"],
+    "wait_parse_log": ["market_log_id", "parsed_at", "raw_condition", "parsed_json", "model_used"],
     "broker_flow": ["date", "symbol", "name", "acc_broker_count_1d", "acc_amount_1d", "acc_qty_1d", "acc_top_broker_1d", "acc_top_broker_pct_1d", "dist_broker_count_1d", "dist_amount_1d", "dist_qty_1d", "dist_top_broker_1d", "dist_top_broker_pct_1d", "net_flow_1d", "flow_bias_1d", "acc_broker_count_1w", "acc_amount_1w", "acc_qty_1w", "acc_top_broker_1w", "acc_top_broker_pct_1w", "dist_broker_count_1w", "dist_amount_1w", "dist_qty_1w", "dist_top_broker_1w", "dist_top_broker_pct_1w", "net_flow_1w", "flow_bias_1w", "acc_brokers_1d_json", "dist_brokers_1d_json", "acc_brokers_1w_json", "created_at"],
     "broker_holdings": ["date", "symbol", "name", "total_involved_brokers", "top3_holding_pct", "total_qty", "hold_qty", "hold_pct", "public_trade_pct", "stealth_score", "ltp", "change", "change_pct", "top_broker_1_name", "top_broker_1_code", "top_broker_1_hold", "top_broker_1_pct", "top_broker_2_name", "top_broker_2_code", "top_broker_2_hold", "top_broker_2_pct", "top_broker_3_name", "top_broker_3_code", "top_broker_3_hold", "top_broker_3_pct", "top_brokers_json", "created_at"],
 }
