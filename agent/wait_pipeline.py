@@ -1,34 +1,35 @@
 """
 agent/wait_pipeline.py
 ─────────────────────────────────────────────────────────────────────────────
-NEPSE AI Engine — Phase 2 Plain Python WAIT Pipeline
+NEPSE AI Engine — Phase 2 Plain Python WAIT Pipeline  (redesigned)
 
 Entry point: run_wait_pipeline()
 Called by main.py when AGENT_USE_PIPELINE=true.
 
 Flow:
-  1. Read AGENTIC_WAIT_MONITOR — exit if false
-  2. Read AGENT_USE_PIPELINE   — if false, delegate to legacy run_wait_monitor()
-  3. get_market_state()
-  4. get_open_waits()
+  1. Read AGENTIC_WAIT_MONITOR — exit if false.
+  2. Read AGENT_USE_PIPELINE   — if false, delegate to legacy run_wait_monitor().
+  3. get_market_state()  — CRISIS / BEAR+tense / HALTED block.
+  4. get_open_waits()    — includes wait_condition_parsed + last_reviewed_date.
   5. get_portfolio()
-  6. No open waits → write one trace row, return
+  6. No open waits → write one trace row, return.
   7. For each WAIT symbol:
        a. get_fresh_indicators(symbol)
-       b. ONE LLM call → {"condition_met": bool, "reason": "..."}
-       c. condition_not_met  → log_skip
-       d. condition_met + cap not reached + not shadow → escalate_to_claude
-       e. condition_met + shadow_mode → log_skip [SHADOW]
-       f. Write agent_trace for every symbol regardless
+       b. condition_parser.get_parsed_condition(wait_row)
+            → None: log_skip("parse_failed"), continue
+       c. wait_evaluator.evaluate_wait(...)
+            → SKIP / ESCALATED / ERROR
+       d. _write_trace() — always, regardless of outcome.
 
-Hard rules:
-  - agent/agent.py and agent/agent_tools.py NOT touched
-  - All 7 tools via direct Python calls
-  - Shadow mode and escalation cap enforced in Python
-  - agent_trace written for every symbol — never skip
-  - Boolean flags in Python — LLM reads them, never computes
-  - Fail silent on LLM errors — condition_not_met, continue
-  - No LangChain, raw Python only
+Design decisions
+----------------
+- _call_condition_check() removed entirely — replaced by condition_parser +
+  wait_evaluator which together eliminate the per-symbol-per-cycle LLM calls.
+- get_open_waits() SQL extended to include the two new columns.
+- _write_trace() is unchanged.
+- All existing guards preserved: market state, timeout, escalation cap,
+  shadow mode.
+- agent/agent_tools.py NOT modified.
 ─────────────────────────────────────────────────────────────────────────────
 """
 
@@ -39,65 +40,14 @@ from datetime import datetime
 
 from config import NST
 from agent import agent_tools
+from agent.condition_parser import get_parsed_condition
+from agent.wait_evaluator   import evaluate_wait
 
 log = logging.getLogger(__name__)
 
-PIPELINE_MODEL_FALLBACK  = "openai/gpt-oss-120b:free"
-PIPELINE_MODEL_PRIMARY = "openai/gpt-oss-20b:free"
-
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 1 — LLM CONDITION CHECK
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _call_condition_check(
-    symbol:         str,
-    wait_condition: str,
-    indicators:     dict,
-    market_state:   dict,
-) -> dict:
-    """
-    Call cheap free LLM to check if WAIT condition is met.
-    Tries PIPELINE_MODEL_PRIMARY first, falls back to PIPELINE_MODEL_FALLBACK.
-    On any failure returns {"condition_met": False, "reason": "LLM_FAILURE"}.
-    """
-    from agent.prompt import build_condition_check_prompt
-    from AI.openrouter import _call, _strip_fences
-
-    prompt   = build_condition_check_prompt(symbol, wait_condition, indicators, market_state)
-    messages = [{"role": "user", "content": prompt}]
-    ctx      = f"pipeline_cc_{symbol}"
-
-    for model in (PIPELINE_MODEL_PRIMARY, PIPELINE_MODEL_FALLBACK):
-        raw = _call(
-            model       = model,
-            messages    = messages,
-            max_tokens  = 80,
-            temperature = 0.0,
-            context     = ctx,
-        )
-        if raw is None:
-            log.warning("[pipeline] %s returned None for %s — trying fallback", model, symbol)
-            continue
-
-        try:
-            cleaned = _strip_fences(raw)
-            result  = json.loads(cleaned)
-            if "condition_met" in result:
-                return {
-                    "condition_met": bool(result["condition_met"]),
-                    "reason":        str(result.get("reason", "")),
-                }
-        except Exception as exc:
-            log.warning("[pipeline] JSON parse failed for %s (%s): %s | raw: %s",
-                        symbol, model, exc, raw[:100])
-
-    log.warning("[pipeline] All models failed for %s — treating as condition_not_met", symbol)
-    return {"condition_met": False, "reason": "LLM_FAILURE"}
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# SECTION 2 — TRACE WRITER
+# SECTION 1 — TRACE WRITER  (unchanged from original)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _write_trace(
@@ -126,6 +76,63 @@ def _write_trace(
         })
     except Exception as exc:
         log.warning("[pipeline] trace write failed: %s", exc)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 2 — OPEN WAITS WITH NEW COLUMNS
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _get_open_waits_extended() -> dict:
+    """
+    Like agent_tools.get_open_waits() but also fetches the two new columns:
+      wait_condition_parsed  — cached parsed JSON (may be NULL)
+      last_reviewed_date     — date of last Claude review (may be NULL)
+
+    Returns the same shape as get_open_waits() so the rest of the pipeline
+    is unaffected.
+    """
+    from sheets import run_raw_sql
+    from agent.agent_tools import _safe_int
+
+    result = {"waits": [], "count": 0, "has_waits": False, "elapsed_ms": 0}
+    t0 = time.time()
+    try:
+        rows = run_raw_sql(
+            """
+            SELECT id, symbol, date, action, reasoning,
+                   wait_condition, confidence,
+                   wait_condition_parsed,
+                   last_reviewed_date
+            FROM market_log
+            WHERE action    = 'WAIT'
+              AND outcome   = 'PENDING'
+              AND wait_condition IS NOT NULL
+              AND wait_condition != ''
+            ORDER BY id DESC
+            LIMIT 20
+            """
+        )
+        waits = []
+        for r in rows:
+            waits.append({
+                "id":                     _safe_int(r.get("id")),
+                "symbol":                 str(r.get("symbol", "")).upper().strip(),
+                "signal_date":            str(r.get("date", "")),
+                "wait_condition":         str(r.get("wait_condition", "")),
+                "reasoning":              str(r.get("reasoning", "")),
+                "confidence":             _safe_int(r.get("confidence", 0)),
+                "wait_condition_parsed":  r.get("wait_condition_parsed") or "",
+                "last_reviewed_date":     r.get("last_reviewed_date") or "",
+            })
+        result["waits"]     = waits
+        result["count"]     = len(waits)
+        result["has_waits"] = len(waits) > 0
+        log.info("[pipeline] open waits (extended): %d rows", len(waits))
+    except Exception as exc:
+        log.error("[pipeline] _get_open_waits_extended failed: %s", exc)
+
+    result["elapsed_ms"] = int((time.time() - t0) * 1000)
+    return result
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -169,7 +176,7 @@ def run_wait_pipeline() -> dict:
         if get_setting("AGENTIC_WAIT_MONITOR", "false").lower() != "true":
             return _done("AGENTIC_WAIT_MONITOR=false")
 
-        # ── Step 2: Pipeline flag — guard against direct call with flag off ──
+        # ── Step 2: Pipeline flag ─────────────────────────────────────────────
         if get_setting("AGENT_USE_PIPELINE", "false").lower() != "true":
             log.info("[pipeline] AGENT_USE_PIPELINE=false — delegating to legacy loop")
             from agent.agent import run_wait_monitor
@@ -195,8 +202,8 @@ def run_wait_pipeline() -> dict:
     if market_state.get("trading_halted"):
         return _done("TRADING_HALTED")
 
-    # ── Step 4: Open waits ───────────────────────────────────────────────────
-    open_waits = agent_tools.get_open_waits()
+    # ── Step 4: Open waits (extended — includes parsed + reviewed columns) ────
+    open_waits = _get_open_waits_extended()
     if not open_waits.get("has_waits"):
         _write_trace(cycle_ts, 0, "wait_pipeline",
                      {}, {"reason": "no_open_waits"},
@@ -216,78 +223,96 @@ def run_wait_pipeline() -> dict:
             summary["reason"] = "TIMEOUT"
             break
 
-        symbol         = wait["symbol"]
-        wait_condition = wait["wait_condition"]
-        wait_log_id    = wait["id"]
+        symbol      = wait["symbol"]
+        wait_log_id = wait["id"]
 
-        log.info("[pipeline] [%d/%d] Checking %s",
-                 step, open_waits["count"], symbol)
+        log.info("[pipeline] [%d/%d] Checking %s", step, open_waits["count"], symbol)
 
         # 7a — Fresh indicators
         indicators = agent_tools.get_fresh_indicators(symbol)
 
-        # 7b — ONE LLM call
-        t_llm    = time.time()
-        llm_out  = _call_condition_check(symbol, wait_condition, indicators, market_state)
-        llm_ms   = int((time.time() - t_llm) * 1000)
+        # 7b — Condition parse (cache hit or free LLM parse)
+        t_parse = time.time()
+        parsed  = get_parsed_condition(wait)
+        parse_ms = int((time.time() - t_parse) * 1000)
 
-        condition_met = llm_out.get("condition_met", False)
-        reason        = llm_out.get("reason", "")
+        if parsed is None:
+            agent_tools.log_skip(symbol, "parse_failed", cycle_ts, step)
+            _write_trace(
+                cycle_ts     = cycle_ts,
+                step         = step,
+                tool         = "wait_pipeline",
+                request_args = {"symbol": symbol, "stage": "parse_failed"},
+                response     = {"reason": "parse_failed", "escalated": False,
+                                "decision": None, "parse_ms": parse_ms},
+                escalated    = False,
+                decision     = "SKIPPED",
+                elapsed_ms   = int((time.time() - cycle_start) * 1000),
+            )
+            continue
 
-        log.info("[pipeline] %s condition_met=%s reason=%s llm_ms=%d",
-                 symbol, condition_met, reason[:60], llm_ms)
-
-        escalated = False
-        decision  = None
-
-        if not condition_met:
-            # 7c — Skip
-            agent_tools.log_skip(symbol, reason or "condition_not_met", cycle_ts, step)
-
-        elif shadow_mode:
-            # 7e — Shadow skip
-            agent_tools.log_skip(symbol, f"[SHADOW] would escalate: {reason}", cycle_ts, step)
-
-        elif escalation_count >= max_escalations:
-            # Cap reached
+        # 7c — Evaluate (pre-filter → ambiguous → reviewed_today → Claude)
+        if shadow_mode or escalation_count < max_escalations:
+            t_eval = time.time()
+            eval_result = evaluate_wait(
+                wait_row     = wait,
+                parsed       = parsed,
+                indicators   = indicators,
+                market_state = market_state,
+                portfolio    = portfolio,
+                cycle_ts     = cycle_ts,
+                step         = step,
+                shadow_mode  = shadow_mode,
+            )
+            eval_ms = int((time.time() - t_eval) * 1000)
+        else:
+            # Escalation cap reached — skip without calling evaluate_wait
             agent_tools.log_skip(
                 symbol,
-                f"escalation_cap_reached ({max_escalations}): {reason}",
-                cycle_ts, step,
+                f"escalation_cap_reached ({max_escalations})",
+                cycle_ts,
+                step,
             )
+            _write_trace(
+                cycle_ts     = cycle_ts,
+                step         = step,
+                tool         = "wait_pipeline",
+                request_args = {"symbol": symbol, "stage": "cap_reached"},
+                response     = {"reason": f"escalation_cap_reached ({max_escalations})",
+                                "escalated": False, "decision": None},
+                escalated    = False,
+                decision     = "SKIPPED",
+                elapsed_ms   = int((time.time() - cycle_start) * 1000),
+            )
+            continue
 
-        else:
-            # 7d — Escalate to Claude
-            esc = agent_tools.escalate_to_claude(
-                symbol         = symbol,
-                wait_log_id    = wait_log_id,
-                wait_condition = wait_condition,
-                indicators     = indicators,
-                market_state   = market_state,
-                cycle_ts       = cycle_ts,
-                step           = step,
-                shadow_mode    = False,
-            )
+        outcome   = eval_result.get("outcome", "SKIP")
+        reason    = eval_result.get("reason", "")
+        decision  = eval_result.get("decision")
+        escalated = outcome == "ESCALATED"
+
+        if escalated and not shadow_mode:
             escalation_count += 1
-            escalated = True
-            decision  = esc.get("decision")
-            log.info("[pipeline] escalate_to_claude %s → %s", symbol, decision)
 
-        # 7f — Trace for every symbol regardless
+        log.info("[pipeline] %s outcome=%s reason=%s decision=%s eval_ms=%d",
+                 symbol, outcome, reason[:60], decision, eval_ms)
+
+        # 7d — Trace for every symbol regardless
         _write_trace(
             cycle_ts     = cycle_ts,
             step         = step,
             tool         = "wait_pipeline",
             request_args = {
-                "symbol":         symbol,
-                "condition_met":  condition_met,
-                "shadow_mode":    shadow_mode,
+                "symbol":      symbol,
+                "outcome":     outcome,
+                "shadow_mode": shadow_mode,
             },
             response     = {
                 "reason":    reason,
                 "escalated": escalated,
                 "decision":  decision,
-                "llm_ms":    llm_ms,
+                "parse_ms":  parse_ms,
+                "eval_ms":   eval_ms,
             },
             escalated    = escalated,
             decision     = decision,

@@ -175,7 +175,9 @@ model market_log {
   gemini_reason    Text   // Gemini rationale for recommendation
   gemini_risk      Text   // Gemini identified risk factors
   reasoning        Text
-  wait_condition   Text   // if WAIT/AVOID: specific condition that would make this a BUY
+  wait_condition        Text   // if WAIT/AVOID: specific condition that would make this a BUY
+  wait_condition_parsed Text   // JSON blob, null until parsed by condition_parser.py
+  last_reviewed_date    Text   // YYYY-MM-DD (NST) — set after each Claude re-evaluation
   herding_note     Text   // one sentence on herding/bubble risk or NONE
   lesson_applied   Text   // which lesson from Learning Hub was most relevant, or NONE
   outcome          Text  @default("PENDING")
@@ -1502,6 +1504,23 @@ model agent_trace {
   @@index([cycle_ts])
   @@index([tool])
   @@index([decision])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WAIT PARSE LOG — audit each free-LLM parse of a wait_condition text
+// Written by agent/condition_parser.py when a new parse is performed.
+// Never updated — one row per parse attempt.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model wait_parse_log {
+  id                Serial
+  market_log_id     Text!        // FK to market_log.id (stored as text, no FK constraint)
+  parsed_at         Text!        // YYYY-MM-DD HH:MM:SS NST
+  raw_condition     Text         // original wait_condition text
+  parsed_json       Text         // JSON extracted by free LLM
+  model_used        Text         // which free model performed the parse
+
+  @@index([market_log_id])
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
