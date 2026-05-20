@@ -413,7 +413,7 @@ def _load_recent_indicators(symbols: list[str], today: str, lookback: int = 7) -
         placeholders = ",".join(["%s"] * len(symbols))
         rows = run_raw_sql(
             f"""
-            SELECT symbol, date, rsi_14, macd_histogram, bb_pct_b
+            SELECT symbol, date, rsi_14, macd_histogram, bb_pct_b, obv_trend
             FROM indicators
             WHERE symbol IN ({placeholders})
               AND date < %s
@@ -441,14 +441,16 @@ def _compute_momentum(recent_rows: list[dict]) -> dict:
 
     Returns dict with keys:
       momentum_status : str   — classification
-      rsi_slope_3d    : float — positive = improving
+      momentum_score  : float — continuous 0-100 score
+      rsi_slope_3d    : float — avg-of-differences slope (positive = improving)
       macd_hist_slope : float — positive = improving
       bb_pct_b_slope  : float — positive = moving away from lower band
       bounce_failed   : bool
-      reversal_days   : int   — consecutive days RSI has been rising
+      reversal_days   : int   — consecutive days RSI has been rising (with tolerance)
     """
     default = {
         "momentum_status": "NEUTRAL",
+        "momentum_score":  50.0,
         "rsi_slope_3d":    0.0,
         "macd_hist_slope": 0.0,
         "bb_pct_b_slope":  0.0,
@@ -459,76 +461,127 @@ def _compute_momentum(recent_rows: list[dict]) -> dict:
     if not recent_rows or len(recent_rows) < 2:
         return default
 
-    def _f(row: dict, key: str) -> float:
-        try:
-            v = row.get(key)
-            return float(v) if v not in (None, "", "None") else 0.0
-        except (TypeError, ValueError):
+    # Step 1 — NULL-safe extraction
+    def _f_safe(row, key):
+        v = row.get(key)
+        return float(v) if v not in (None, "", "None") else None
+
+    rsi_vals  = [v for v in (_f_safe(r, "rsi_14")        for r in recent_rows[:5]) if v is not None]
+    hist_vals = [v for v in (_f_safe(r, "macd_histogram") for r in recent_rows[:5]) if v is not None]
+    pctb_vals = [v for v in (_f_safe(r, "bb_pct_b")      for r in recent_rows[:5]) if v is not None]
+
+    if len(rsi_vals) < 3:
+        return default
+
+    # Step 2 — Average-of-differences slope
+    def _avg_slope(vals):
+        if len(vals) < 2:
             return 0.0
+        diffs = [vals[i] - vals[i + 1] for i in range(len(vals) - 1)]
+        return sum(diffs) / len(diffs)
 
-    # Extract values newest-first: index 0 = yesterday, 1 = day before, etc.
-    rsi_vals  = [_f(r, "rsi_14")        for r in recent_rows[:5]]
-    hist_vals = [_f(r, "macd_histogram") for r in recent_rows[:5]]
-    pctb_vals = [_f(r, "bb_pct_b")      for r in recent_rows[:5]]
+    rsi_slope       = _avg_slope(rsi_vals)
+    macd_hist_slope = _avg_slope(hist_vals)
+    bb_pct_b_slope  = _avg_slope(pctb_vals)
 
-    # Slopes: positive = improving (newest - oldest of the 3-day window)
-    # rsi_vals[0] = yesterday (most recent history), rsi_vals[2] = 3 days ago
-    rsi_slope_3d    = rsi_vals[0]  - rsi_vals[min(2, len(rsi_vals)-1)]
-    macd_hist_slope = hist_vals[0] - hist_vals[min(2, len(hist_vals)-1)]
-    bb_pct_b_slope  = pctb_vals[0] - pctb_vals[min(2, len(pctb_vals)-1)]
+    # Step 3 — Ratio-based monotonic checks
+    pairs = min(len(rsi_vals), len(hist_vals), len(pctb_vals), 5) - 1
+    if pairs < 1:
+        return default
 
-    # Consecutive reversal days — how many days in a row RSI has been rising
+    rsi_rising_count  = sum(rsi_vals[i]  >= rsi_vals[i + 1]  - 0.5 for i in range(pairs))
+    hist_rising_count = sum(hist_vals[i] >  hist_vals[i + 1]        for i in range(pairs))
+    pctb_rising_count = sum(pctb_vals[i] >  pctb_vals[i + 1]        for i in range(pairs))
+
+    rsi_improving_confirmed  = rsi_rising_count  >= max(3, pairs - 1)
+    rsi_improving_early      = rsi_rising_count  >= max(2, pairs // 2 + 1)
+    macd_improving_confirmed = hist_rising_count >= max(3, pairs - 1)
+    macd_improving_early     = hist_rising_count >= max(2, pairs // 2 + 1)
+    bb_improving_confirmed   = pctb_rising_count >= max(3, pairs - 1)
+    rsi_deteriorating        = (pairs - rsi_rising_count) >= max(3, pairs - 1)
+
+    # Step 4 — Origin tracking
+    rsi_yesterday     = rsi_vals[0]
+    rsi_min_in_window = min(rsi_vals)
+    was_deep_oversold = rsi_min_in_window < 32
+    was_oversold      = rsi_min_in_window < 35
+
+    # Step 5 — Reversal days with tolerance
     reversal_days = 0
     for i in range(len(rsi_vals) - 1):
-        if rsi_vals[i] > rsi_vals[i + 1]:   # newer > older = rising
+        if rsi_vals[i] >= rsi_vals[i + 1] - 0.5:
             reversal_days += 1
         else:
             break
 
-    # Bounce failure: RSI was <20, bounced up, then fell back below previous low
+    # Step 6 — bounce_failed
     bounce_failed = False
     if len(rsi_vals) >= 3:
-        rsi_2d_ago    = rsi_vals[2]   # oldest of the 3
-        rsi_1d_ago    = rsi_vals[1]   # middle
-        rsi_yesterday = rsi_vals[0]   # most recent history
+        r2, r1, r0 = rsi_vals[2], rsi_vals[1], rsi_vals[0]
+        bounce_magnitude = r1 - r2
         if (
-            rsi_2d_ago < 20
-            and rsi_1d_ago > rsi_2d_ago      # bounced
-            and rsi_yesterday < rsi_1d_ago   # failed
-            and rsi_yesterday < 22           # back in danger zone
+            r2 < 30
+            and bounce_magnitude >= 2
+            and r0 < r1
+            and r0 < r2 + 3
         ):
             bounce_failed = True
 
-    # Classification — based on yesterday's RSI (rsi_vals[0])
-    rsi_yesterday = rsi_vals[0] if rsi_vals else 50.0
+    # Step 7 — Continuous momentum score
+    rsi_position_score = max(0.0, min(100.0,
+        30.0 + (rsi_slope * 10) if rsi_yesterday < 30
+        else 50.0 + (rsi_yesterday - 30) if rsi_yesterday < 50
+        else 50.0
+    ))
+    trend_score = (rsi_rising_count / pairs * 100) if pairs > 0 else 50.0
+    macd_score  = min(100.0, max(0.0, 50.0 + hist_rising_count / max(pairs, 1) * 50.0))
+    bb_score    = min(100.0, max(0.0, 50.0 + pctb_rising_count / max(pairs, 1) * 50.0))
+    bounce_penalty = -25.0 if bounce_failed else 0.0
 
+    momentum_score = max(0.0, min(100.0,
+        rsi_position_score * 0.35 +
+        trend_score        * 0.30 +
+        macd_score         * 0.20 +
+        bb_score           * 0.15 +
+        bounce_penalty
+    ))
+
+    # Step 8 — Classification (CONFIRMED before EARLY)
     if bounce_failed:
         status = "FALLING_KNIFE"
-    elif rsi_yesterday < 30 and rsi_slope_3d < 0:
+
+    elif rsi_yesterday < 30 and rsi_deteriorating:
         status = "FALLING_KNIFE"
-    elif rsi_yesterday < 30 and rsi_slope_3d >= 0 and rsi_slope_3d < 2:
+
+    elif rsi_yesterday < 30 and rsi_slope >= 0:
         status = "OVERSOLD_WATCH"
+
     elif (
-        rsi_yesterday >= 28 and rsi_yesterday < 38
-        and rsi_slope_3d >= 2
-        and macd_hist_slope > 0
-        and reversal_days >= 2
-    ):
-        status = "EARLY_REVERSAL"
-    elif (
-        rsi_yesterday >= 30
-        and rsi_slope_3d > 3
-        and macd_hist_slope > 0
-        and bb_pct_b_slope > 0
+        was_deep_oversold
+        and 30 <= rsi_yesterday < 50
+        and rsi_improving_confirmed
+        and macd_improving_confirmed
+        and bb_improving_confirmed
         and reversal_days >= 3
     ):
         status = "CONFIRMED_REVERSAL"
+
+    elif (
+        was_oversold
+        and 28 <= rsi_yesterday < 50
+        and rsi_improving_early
+        and macd_improving_early
+        and reversal_days >= 2
+    ):
+        status = "EARLY_REVERSAL"
+
     else:
         status = "NEUTRAL"
 
     return {
         "momentum_status": status,
-        "rsi_slope_3d":    round(rsi_slope_3d, 3),
+        "momentum_score":  round(momentum_score, 2),
+        "rsi_slope_3d":    round(rsi_slope, 3),
         "macd_hist_slope": round(macd_hist_slope, 6),
         "bb_pct_b_slope":  round(bb_pct_b_slope, 4),
         "bounce_failed":   bounce_failed,
@@ -647,25 +700,19 @@ def _score_macd(ind: dict) -> float:
         return max(20.0 + (hist * 5), 0.0)
 
 
-def _score_bollinger(ind: dict, momentum_status: str = "NEUTRAL") -> float:
+def _score_bollinger(ind: dict, momentum_status: str = "NEUTRAL", momentum_score: float = 50.0) -> float:
     """
     Weight 0.25. PF=12.19 — best quality signal in NEPSE.
-    Momentum-aware: LOWER_TOUCH score depends on direction, not just position.
+    LOWER_TOUCH uses continuous formula driven by momentum_score (0-100 → 10-65 range).
     """
     signal = str(ind.get("bb_signal", "NEUTRAL"))
     pct_b  = float(ind.get("bb_pct_b", 0.5) or 0.5)
 
     if signal == "LOWER_TOUCH":
-        if momentum_status == "CONFIRMED_REVERSAL":
-            return 90.0   # strong — confirmed multi-day improvement
-        elif momentum_status == "EARLY_REVERSAL":
-            return 70.0   # promising — but needs more confirmation
-        elif momentum_status == "OVERSOLD_WATCH":
-            return 45.0   # caution — improving but weak
-        elif momentum_status == "FALLING_KNIFE":
-            return 15.0   # dangerous — still falling into lower band
+        if momentum_status == "FALLING_KNIFE":
+            return 15.0
         else:
-            return 35.0   # unknown direction — was 100, now conservative
+            return round(10.0 + (momentum_score / 100.0) * 55.0, 1)  # 10–65 range
     elif signal == "SQUEEZE":
         return 75.0
     elif signal == "NEUTRAL":
@@ -748,14 +795,19 @@ def _score_rsi(ind: dict) -> float:
         return 50.0     # deeply oversold (needs MACD/BB — checked at gate)
 
 
-def _compute_indicator_score(ind: dict, sector: str, momentum_status: str = "NEUTRAL") -> tuple[float, str, int]:
+def _compute_indicator_score(
+    ind: dict,
+    sector: str,
+    momentum_status: str = "NEUTRAL",
+    momentum_score: float = 50.0,
+) -> tuple[float, str, int]:
     """
     Weighted composite indicator score (0–100).
     Returns (score, primary_signal, suggested_hold_days).
     """
     scores = {
         "macd":       _score_macd(ind)            * INDICATOR_WEIGHTS["macd"],
-        "bollinger":  _score_bollinger(ind, momentum_status) * INDICATOR_WEIGHTS["bollinger"],
+        "bollinger":  _score_bollinger(ind, momentum_status, momentum_score) * INDICATOR_WEIGHTS["bollinger"],
         "sma":        _score_sma(ind)              * INDICATOR_WEIGHTS["sma"],
         "stochastic": _score_stochastic_proxy(ind) * INDICATOR_WEIGHTS["stochastic"],
         "rsi":        _score_rsi(ind)              * INDICATOR_WEIGHTS["rsi"],
@@ -1676,7 +1728,11 @@ def run_filter(
             continue
 
         sector    = sector_map.get(sym) or str(ind.get("sector", "others") or "others")
-        ind_score, primary, hold_days = _compute_indicator_score(ind, sector, momentum["momentum_status"])
+        ind_score, primary, hold_days = _compute_indicator_score(
+            ind, sector,
+            momentum["momentum_status"],
+            momentum.get("momentum_score", 50.0),
+        )
         sect_mult = _get_sector_multiplier(sector, ctx)
 
         ltp        = float(getattr(price_row, "ltp", 0)        or getattr(price_row, "close", 0) or 0)
