@@ -61,8 +61,10 @@ import argparse
 import json
 import logging
 import os
+import random
 import statistics
 import sys
+import time
 from datetime import datetime, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -88,7 +90,10 @@ COUNCIL_USE_FREE_STACK = False
 # ── Free test models (rotate round-robin) ─────────────────────────────────────
 _FREE_MODELS = [
   
-    "openai/gpt-oss-20b:free",
+
+    "openai/gpt-oss-120b:free"
+
+  
   
 ]
 _free_counter = 0   # module-level rotation counter
@@ -107,11 +112,11 @@ _PROD_AUDIT_MODEL    = "openai/gpt-5.4-nano"
 _PROD_REVIEW_MODEL   = "anthropic/claude-haiku-4.5"
 
 # Discussion models (5 flagship models — different families)
-_PROD_GROK_MODEL     = "x-ai/grok-4.20"
-_PROD_GPT_MODEL      = "openai/gpt-5.4"
+_PROD_GROK_MODEL     = "x-ai/grok-4.3"
+_PROD_GPT_MODEL      = "openai/gpt-5.5"
 _PROD_DEEPSEEK_MODEL = "deepseek/deepseek-v4-pro"
 _PROD_GEMINI_MODEL   = "google/gemini-3.1-pro-preview"
-_PROD_SONNET_MODEL   = "anthropic/claude-sonnet-4.5"
+_PROD_SONNET_MODEL   = "anthropic/claude-sonnet-4.6"
 
 # Post-discussion (flagship)
 _PROD_REDTEAM_MODEL  = "anthropic/claude-opus-4.6"
@@ -429,6 +434,176 @@ def _load_bounce_failed_summary() -> list[dict]:
     except Exception as e:
         log.warning("_load_bounce_failed_summary failed (non-fatal): %s", e)
         return []
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# AGENDA ENRICHMENT — compact DB snapshots appended to agenda items
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _fetch_trade_summary() -> str:
+    try:
+        rows = run_raw_sql(
+            "SELECT result, COUNT(*) AS n FROM trade_journal GROUP BY result"
+        ) or []
+        wins   = next((int(r["n"]) for r in rows if str(r.get("result")) == "WIN"),  0)
+        losses = next((int(r["n"]) for r in rows if str(r.get("result")) == "LOSS"), 0)
+        total  = wins + losses
+        wr     = f"{wins / total * 100:.1f}%" if total else "0.0%"
+        return f"{wins}W/{losses}L of {total} trades ({wr} win rate)"
+    except Exception:
+        return ""
+
+
+def _fetch_open_positions() -> str:
+    try:
+        rows = run_raw_sql(
+            """SELECT ss.sectorname, COUNT(*) AS n
+               FROM paper_portfolio pp
+               JOIN share_sectors ss ON ss.symbol = pp.symbol
+               WHERE pp.status = 'OPEN'
+               GROUP BY ss.sectorname
+               ORDER BY n DESC"""
+        ) or []
+        total = sum(int(r["n"]) for r in rows)
+        parts = [f"{r['sectorname']}x{r['n']}" for r in rows]
+        return f"{total} open: {', '.join(parts)}" if parts else ""
+    except Exception:
+        return ""
+
+
+def _fetch_gate_misses_summary() -> str:
+    try:
+        rows = run_raw_sql(
+            "SELECT gate_category, COUNT(*) AS n FROM gate_misses "
+            "WHERE date >= %s GROUP BY gate_category ORDER BY n DESC LIMIT 5",
+            (_cutoff(),),
+        ) or []
+        return " | ".join(f"{r['gate_category']}:{r['n']}" for r in rows)
+    except Exception:
+        return ""
+
+
+def _fetch_breadth_summary() -> str:
+    try:
+        rows = run_raw_sql(
+            "SELECT market_signal FROM market_breadth ORDER BY date DESC LIMIT 10"
+        ) or []
+        labels = [str(r.get("market_signal", "?")) for r in rows]
+        return f"last {len(labels)}: {', '.join(labels)}" if labels else ""
+    except Exception:
+        return ""
+
+
+def _fetch_nrb_summary() -> str:
+    try:
+        rows = run_raw_sql(
+            "SELECT * FROM nrb_monthly ORDER BY id DESC LIMIT 1"
+        ) or []
+        if not rows:
+            return ""
+        r         = rows[0]
+        period    = r.get("period",    "?")
+        inflation = r.get("inflation", "?")
+        fx        = r.get("fx_reserves_months", r.get("fx", "?"))
+        sentiment = r.get("sentiment", "?")
+        return f"period={period} inflation={inflation}% fx={fx}mo sentiment={sentiment}"
+    except Exception:
+        return ""
+
+
+def _fetch_audit_summary() -> str:
+    try:
+        rows = run_raw_sql(
+            "SELECT * FROM claude_audit ORDER BY id DESC LIMIT 3"
+        ) or []
+        parts = []
+        for r in rows:
+            week = r.get("week", r.get("review_week", "?"))
+            wr   = r.get("win_rate",   r.get("wr",  "?"))
+            ret  = r.get("return_pct", r.get("ret", "?"))
+            parts.append(f"{week}/{wr}/{ret}")
+        return " | ".join(parts)
+    except Exception:
+        return ""
+
+
+_ENRICHER_FETCHERS = {
+    "trade_journal_summary":    _fetch_trade_summary,
+    "open_positions_by_sector": _fetch_open_positions,
+    "gate_misses_summary":      _fetch_gate_misses_summary,
+    "market_breadth_30d":       _fetch_breadth_summary,
+    "nrb_monthly_latest":       _fetch_nrb_summary,
+    "claude_audit_history":     _fetch_audit_summary,
+    # learning_hub_active has no compact fetcher — silently skipped when requested
+}
+
+_ENRICH_PROMPT = (
+    "You are a data fetch planner for a Nepal stock market AI trading council.\n"
+    "Given this agenda item, return a JSON array of data keys needed.\n\n"
+    "Available keys:\n"
+    "- trade_journal_summary\n"
+    "- open_positions_by_sector\n"
+    "- gate_misses_summary\n"
+    "- market_breadth_30d\n"
+    "- nrb_monthly_latest\n"
+    "- learning_hub_active\n"
+    "- claude_audit_history\n\n"
+    'Agenda item: "{item}"\n\n'
+    "Return ONLY a valid JSON array, nothing else. Example: [\"trade_journal_summary\"]\n"
+    "If no data needed return: []"
+)
+
+
+def _enrich_agenda_with_free_model(items: list[str], run_month: str) -> list[str]:
+    """
+    For each agenda item, ask Gemini (key index 2) which DB snapshots are relevant,
+    fetch them, and append as [AUTO-DATA: ...]. On any failure returns originals.
+    """
+    try:
+        from AI.gemini import ask_gemini_json_with_key
+
+        enriched: list[str] = []
+        for i, item in enumerate(items):
+            try:
+                prompt = _ENRICH_PROMPT.format(item=item[:500].replace('"', '\\"'))
+                keys = ask_gemini_json_with_key(
+                    prompt, key_index=2, context=f"enricher_{run_month}_{i}"
+                )
+                log.info("[enricher] item %d/%d detected keys: %s", i + 1, len(items), keys)
+
+                if not isinstance(keys, list):
+                    enriched.append(item)
+                else:
+                    data_parts: list[str] = []
+                    for key in keys:
+                        fetcher = _ENRICHER_FETCHERS.get(key)
+                        if not fetcher:
+                            continue
+                        try:
+                            val = fetcher()
+                            if val:
+                                data_parts.append(f"{key}={val}")
+                                log.info("[enricher] fetched %s: %s", key, val[:80])
+                        except Exception as fe:
+                            log.debug("[enricher] fetcher %s silently skipped: %s", key, fe)
+
+                    if data_parts:
+                        enriched.append(item + "\n[AUTO-DATA: " + " | ".join(data_parts) + "]")
+                    else:
+                        enriched.append(item)
+
+            except Exception as ie:
+                log.info("[enricher] item %d failed silently, using original: %s", i + 1, ie)
+                enriched.append(item)
+
+            time.sleep(random.uniform(10, 12))
+
+        return enriched
+    except Exception as e:
+        log.warning(
+            "[enricher] enrichment failed entirely — returning original items: %s", e
+        )
+        return items
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -860,19 +1035,33 @@ def _write_council_system_proposals(
             log.error("Endorse proposal id=%s failed: %s", proposal_id, e)
 
     for finding in system_verdict.get("new_system_findings", []):
+        if isinstance(finding, str):
+            component       = "system"
+            proposal_type   = "finding"
+            proposed_change = finding
+            data_evidence   = ""
+            confidence      = "LOW"
+        else:
+            component       = str(finding.get("component", ""))
+            proposal_type   = "add_signal"
+            proposed_change = str(finding.get("proposed_change", ""))
+            data_evidence   = str(finding.get("data_evidence", ""))
+            confidence      = str(finding.get("confidence", "LOW"))
+
         if dry_run:
-            log.info("[DRY RUN] Would write finding: %s", finding.get("component"))
+            log.info("[DRY RUN] Would write finding: component=%s proposed_change=%s",
+                     component, proposed_change[:80])
             n_new += 1
             continue
         try:
             write_row("system_proposals", {
                 "run_month":       run_month,
                 "source":          "monthly_council",
-                "component":       str(finding.get("component", "")),
-                "proposal_type":   "add_signal",
-                "proposed_change": str(finding.get("proposed_change", "")),
-                "data_evidence":   str(finding.get("data_evidence", "")),
-                "confidence":      str(finding.get("confidence", "LOW")),
+                "component":       component,
+                "proposal_type":   proposal_type,
+                "proposed_change": proposed_change,
+                "data_evidence":   data_evidence,
+                "confidence":      confidence,
                 "status":          "PENDING",
                 "inserted_at":     now_nst,
             })
@@ -945,23 +1134,33 @@ def _build_agenda_review_messages(
     data_context: str,
     run_month: str,
     user_additions: Optional[list[str]] = None,
+    mandatory_items: Optional[list[str]] = None,
 ) -> list[dict]:
     system = (
         "You are the NEPSE Monthly Council Secretary. "
-        "Review the proposed agenda. Approve, reorder, or lightly rephrase items. "
+        "Review the proposed agenda. Approve, reorder, or lightly rephrase AI-proposed items. "
         "Incorporate any user-added items. Keep 3-5 items total. "
+        "MANDATORY ITEMS must appear verbatim in approved_agenda — do not drop, merge, or rephrase them. "
         "Output ONLY valid JSON: {\"approved_agenda\": [...], \"review_notes\": \"...\"}"
     )
     additions_block = ""
     if user_additions:
         additions_block = f"\nUSER-ADDED ITEMS (must include):\n{json.dumps(user_additions)}"
 
+    mandatory_block = ""
+    if mandatory_items:
+        mandatory_block = (
+            f"\n\nMANDATORY ITEMS (hembro_manual — copy verbatim into approved_agenda, cannot be dropped or merged):\n"
+            + json.dumps(mandatory_items, ensure_ascii=False)
+        )
+
     user = (
         f"AGENDA REVIEW — {run_month}\n\n"
-        f"PROPOSED:\n{json.dumps(proposed_items, ensure_ascii=False)}"
+        f"AI-PROPOSED ITEMS (you may reorder or lightly rephrase these):\n{json.dumps(proposed_items, ensure_ascii=False)}"
+        f"{mandatory_block}"
         f"{additions_block}\n\n"
         f"MARKET CONTEXT:\n{data_context[:600]}\n\n"
-        f"Approve and finalize as JSON."
+        f"Approve and finalize as JSON. Mandatory items must appear verbatim."
     )
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
@@ -1515,9 +1714,30 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
     # ═════════════════════════════════════════════════════════════════════════
     # STAGE 0b: Agenda review
     # ═════════════════════════════════════════════════════════════════════════
+    # Load hembro_manual agenda items — must be preserved verbatim by reviewer
+    mandatory_items: list[str] = []
+    try:
+        mandatory_rows = run_raw_sql(
+            "SELECT agenda_item FROM monthly_council_agenda "
+            "WHERE run_month = %s AND approved_by = 'hembro_manual' "
+            "ORDER BY item_number",
+            (run_month,),
+        ) or []
+        mandatory_items = [str(r["agenda_item"]) for r in mandatory_rows if r.get("agenda_item")]
+        if mandatory_items:
+            log.info("[stage_0b] Found %d hembro_manual mandatory items", len(mandatory_items))
+    except Exception as e:
+        log.warning("[stage_0b] Could not load hembro_manual items (non-fatal): %s", e)
+
+    # Separate proposed_items: remove mandatory duplicates from AI list so they
+    # are not passed twice, then pass mandatory_items separately to the reviewer.
+    mandatory_set = set(mandatory_items)
+    ai_items = [it for it in proposed_items if it not in mandatory_set]
+
     review_msgs = _build_agenda_review_messages(
-        proposed_items, data_context, run_month,
+        ai_items, data_context, run_month,
         user_additions=user_additions if user_additions else None,
+        mandatory_items=mandatory_items if mandatory_items else None,
     )
     est_review = sum(len(m["content"]) for m in review_msgs) // 4
 
@@ -1537,6 +1757,12 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
         if not approved_items:
             approved_items = proposed_items
         _write_agenda(run_month, approved_items)
+        try:
+            enriched_items = _enrich_agenda_with_free_model(approved_items, run_month)
+            _write_agenda(run_month, enriched_items)
+            log.info("Agenda enrichment complete — %d items enriched", len(enriched_items))
+        except Exception as e:
+            log.warning("Agenda enrichment failed entirely — council proceeds with original agenda: %s", e)
 
     # ── Inject permanent items ────────────────────────────────────────────────
     approved_items = list(approved_items)
