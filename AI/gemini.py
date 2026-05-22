@@ -335,3 +335,40 @@ def ask_gemini_text(
         context            = context,
         use_search         = use_search,
     )
+
+
+def ask_gemini_json_with_key(
+    prompt: str,
+    key_index: int = 0,
+    system: Optional[str] = None,
+    temperature: float = 0.2,
+    context: str = "gemini_forced",
+):
+    """
+    Single-attempt Gemini call forcing a specific API key index (0-based).
+    Returns parsed JSON (list or dict) or None. No retry — caller handles failures.
+    Intended for quota-isolated callers (e.g. agenda enricher on key index 2).
+
+    If key_index exceeds the number of available keys, falls back to the last key.
+    """
+    available = [k for k in _GEMINI_KEYS if k and k.strip()]
+    if not available:
+        log.warning("[%s] No Gemini API keys configured", context)
+        return None
+    actual_index = min(key_index, len(available) - 1)
+    if actual_index != key_index:
+        log.warning(
+            "[%s] Forced key index %d unavailable (%d keys), using index %d",
+            context, key_index, len(available), actual_index,
+        )
+    api_key = available[actual_index]
+    try:
+        raw = _sdk_call(prompt, system, "application/json", temperature, api_key)
+        raw = _strip_fences(raw)
+        return json.loads(raw)
+    except Exception as exc:
+        log.warning(
+            "[%s] ask_gemini_json_with_key(key_index=%d) failed: %s",
+            context, key_index, exc,
+        )
+        return None
