@@ -11,7 +11,7 @@ AFTER any `logging.basicConfig(...)` call:
     attach_file_handler(__name__)
 
 The console output is unchanged.  File is created under logs/ at the repo root.
-Filename format:  logs/<YYYY>/<MonthName>/<DD>/<module>.txt
+Filename format:  logs/<YYYY>/<MonthName>/<DD>/<module>.log
 All runs of the same module on the same day append to the same file.
 """
 
@@ -52,7 +52,7 @@ def _entry_point_name(fallback: str) -> str:
     return fallback
 
 
-def attach_file_handler(module_name: str) -> str | None:
+def attach_file_handler(module_name: str, per_run: bool = False) -> str | None:
     """
     Add a FileHandler to the root logger.
 
@@ -60,7 +60,7 @@ def attach_file_handler(module_name: str) -> str | None:
     ----------
     module_name : str
         Pass ``__name__`` from the calling module.
-        e.g. "analysis.learning_hub" → log file ``learning_hub.txt``
+        e.g. "analysis.learning_hub" → log file ``learning_hub.log``
 
     Returns
     -------
@@ -95,7 +95,8 @@ def attach_file_handler(module_name: str) -> str | None:
     log_dir  = os.path.join(_ROOT, "logs", year, month_name, day)
     os.makedirs(log_dir, exist_ok=True)
 
-    log_path = os.path.join(log_dir, f"{short}.txt")
+    suffix = f"_{now.strftime('%H%M%S')}" if per_run else ""
+    log_path = os.path.join(log_dir, f"{short}{suffix}.log")
 
     # Within a long-running process, skip if this exact file is already handled
     root = logging.getLogger()
