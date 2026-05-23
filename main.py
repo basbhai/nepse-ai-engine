@@ -539,7 +539,7 @@ def run_trading_loop(paper_mode: bool, dry_run: bool, skip_guard: bool) -> int:
 
 if __name__ == "__main__":
     from log_config import attach_file_handler
-    attach_file_handler(__name__)
+    attach_file_handler(__name__, per_run=True)
     args       = _parse_args()
     paper_mode = _resolve_mode(args)
 
