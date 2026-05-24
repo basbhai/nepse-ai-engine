@@ -58,6 +58,9 @@ log = logging.getLogger(__name__)
 
 NST = ZoneInfo("Asia/Kathmandu")
 
+# Toggle: True = Playwright DeepSeek (Expert mode, free), False = OpenRouter API
+USE_PLAYWRIGHT_REVIEW = True
+
 # ─────────────────────────────────────────────────────────────────────────────
 # TOKEN BUDGET  -  controls how much data we send to GPT
 # ─────────────────────────────────────────────────────────────────────────────
@@ -965,6 +968,7 @@ def _write_lessons(
 
         # Build the column values
         columns = {
+            "date":                 now_nst[:10],
             "created_at":           now_nst,
             "lesson_type":          lesson.get("lesson_type"),
             "source":               src,
@@ -1316,7 +1320,18 @@ def run(dry_run: bool = False):
 
     log.info("Calling GPT-5o for weekly review (prompt ~%d tokens)...",
              (len(system_prompt) + len(user_prompt)) // 4)
-    raw_response = ask_deepseek_review(system_prompt, user_prompt, max_tokens=MAX_GPT_TOKENS, context="learning_hub")
+    if USE_PLAYWRIGHT_REVIEW:
+        from AI.deepseek import ask_deepseek_text
+        log.info("Using Playwright DeepSeek (Expert mode) for weekly review")
+        raw_response = ask_deepseek_text(
+            prompt=user_prompt,
+            system=system_prompt,
+            context="learning_hub",
+            return_raw=True,
+        )
+    else:
+        from AI.openrouter import ask_deepseek_review
+        raw_response = ask_deepseek_review(system_prompt, user_prompt, max_tokens=MAX_GPT_TOKENS, context="learning_hub")
 
         # Log full raw response for debugging — always, not just on parse failure
     log.info("Raw model response (%d chars):\n%s", len(raw_response or ""), raw_response or "")

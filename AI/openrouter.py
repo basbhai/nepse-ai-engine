@@ -108,21 +108,21 @@ def _call(
     """
     Core HTTP call to OpenRouter with retry logic.
     Returns raw response text or None on total failure.
- 
+
     If use_search=True and the model returns content=None (tool-only response),
     automatically retries once without tools to force a text response.
     """
     if not OPENROUTER_API_KEY:
         log.error("OPENROUTER_API_KEY not set in .env")
         return None
- 
+
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type":  "application/json",
         "HTTP-Referer":  "https://github.com/basbhai/nepse-ai-engine",
         "X-Title":       "NEPSE AI Engine",
     }
- 
+
     def _build_payload(with_search: bool) -> dict:
         p = {
             "model":       model,
@@ -136,7 +136,7 @@ def _call(
             p["tools"]       = [{"type": "openrouter:web_search"}]
             p["tool_choice"] = "auto"
         return p
- 
+
     def _extract_text(message: dict, ctx: str) -> Optional[str]:
         """
         Pull text out of an OpenRouter message dict.
@@ -155,24 +155,24 @@ def _call(
         else:
             raw = str(content).strip()
         return raw if raw else None
- 
+
     last_error   = ""
     current_search = use_search
- 
+
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             log.info(
                 "[%s] OpenRouter call attempt %d/%d (model=%s, search=%s)",
                 context, attempt, MAX_RETRIES, model, current_search,
             )
- 
+
             resp = requests.post(
                 OPENROUTER_URL,
                 headers=headers,
                 json=_build_payload(current_search),
                 timeout=120,
             )
- 
+
             if resp.status_code in _RETRYABLE_STATUS:
                 last_error = f"HTTP {resp.status_code}: {resp.text[:200]}"
                 if attempt < MAX_RETRIES:
@@ -185,19 +185,19 @@ def _call(
                     continue
                 else:
                     log.error("[%s] OpenRouter failed after %d attempts: %s",
-                              context, MAX_RETRIES, last_error)
+                            context, MAX_RETRIES, last_error)
                     _alert_admin(context, last_error)
                     return None
- 
+
             if resp.status_code != 200:
                 log.error("[%s] OpenRouter non-retryable HTTP %d: %s",
-                          context, resp.status_code, resp.text[:300])
+                        context, resp.status_code, resp.text[:300])
                 return None
- 
+
             data    = resp.json()
             message = data["choices"][0]["message"]
             raw     = _extract_text(message, context)
- 
+
             if raw is None:
                 # Model returned a tool-call with no text content
                 if current_search:
@@ -213,14 +213,14 @@ def _call(
                 else:
                     log.warning("[%s] OpenRouter returned None content (no search to disable)", context)
                     return None
- 
+
             if not raw:
                 log.warning("[%s] OpenRouter returned blank response", context)
                 return None
- 
+
             log.info("[%s] OpenRouter responded on attempt %d", context, attempt)
             return raw
- 
+
         except requests.exceptions.Timeout as exc:
             last_error = str(exc)
             if attempt < MAX_RETRIES:
@@ -230,7 +230,7 @@ def _call(
                     context, attempt, MAX_RETRIES, wait,
                 )
                 time.sleep(wait)
- 
+
         except requests.exceptions.ConnectionError as exc:
             last_error = str(exc)
             if attempt < MAX_RETRIES:
@@ -240,7 +240,7 @@ def _call(
                     context, attempt, MAX_RETRIES, wait,
                 )
                 time.sleep(wait)
- 
+
         except Exception as exc:
             last_error = str(exc)
             if _is_retryable_exc(exc) and attempt < MAX_RETRIES:
@@ -253,7 +253,7 @@ def _call(
             else:
                 log.error("[%s] OpenRouter non-retryable error: %s", context, exc)
                 return None
- 
+
     log.error("[%s] OpenRouter failed after %d attempts", context, MAX_RETRIES)
     _alert_admin(context, last_error)
     return None
@@ -436,7 +436,7 @@ def ask_free(
     from openai import OpenAI
 
     FREE_MODEL_CHAIN = [
-       
+    
         "openai/gpt-oss-20b:free",
         "minimax/minimax-m2.5:free",
     ]
@@ -533,11 +533,17 @@ def ask_deepseek_review(
         {"role": "user",   "content": prompt},
     ]
 
-    return _call(
+    result = _call(
         model       = "deepseek/deepseek-v4-pro",
         messages    = messages,
         max_tokens  = max_tokens,
         temperature = temperature,
         context     = context,
-        extra_body  = {"provider": {"order": ["DeepSeek", "NovitaAI"], "allow_fallbacks": False}},
+        extra_body  = {"provider": {"order": ["DeepSeek"], "allow_fallbacks": False}, "reasoning": {"enabled": True}},
     )
+    if result is not None:
+        return result
+
+    log.warning("[%s] OpenRouter DeepSeek failed — falling back to Playwright", context)
+    from AI.deepseek import ask_deepseek_review_playwright
+    return ask_deepseek_review_playwright(system, prompt, context)
