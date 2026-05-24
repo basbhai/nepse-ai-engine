@@ -767,6 +767,7 @@ def _write_log(
                 "volume_os_ratio": str(flag.volume_os_ratio),
                 "gemini_reason":   flag.gemini_reason,
                 "gemini_risk":     flag.gemini_risk,
+                "primary_signal":  flag.primary_signal,
             })
 
             rows = run_raw_sql(
