@@ -8,7 +8,7 @@ Broken dates: 2026-04-27, 2026-04-28, 2026-04-29, 2026-04-30, 2026-05-04,
               2026-05-06, 2026-05-07, 2026-05-08, 2026-05-15
 
 Usage:
-  python tools/backfill_indicators.py                    → all 9 broken dates
+  c                   → all 9 broken dates
   python tools/backfill_indicators.py --date 2026-05-08  → single date
   python tools/backfill_indicators.py --verify-only      → print RSI distribution only
 ─────────────────────────────────────────────────────────────────────────────

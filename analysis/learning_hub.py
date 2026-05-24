@@ -513,7 +513,7 @@ def _serialize_compact(rows: list[dict], keys: tuple) -> str:
     for r in rows:
         compact = {k: r.get(k) for k in keys if r.get(k) is not None}
         if compact:
-            lines.append(json.dumps(compact, ensure_ascii=False))
+            lines.append(json.dumps(compact, ensure_ascii=False, default=str))
     return "\n".join(lines)
 
 
@@ -803,10 +803,10 @@ Total misses tracked: {gate_summary.get('total_misses', 'N/A')}
 Total stamped: {gate_summary.get('total_stamped', 'N/A')}
 
 By category:
-{json.dumps(gate_summary.get('by_category', {}), ensure_ascii=False, indent=2)}
+{json.dumps(gate_summary.get('by_category', {}), ensure_ascii=False, indent=2, default=str)}
 
 By market state:
-{json.dumps(gate_summary.get('by_market_state', {}), ensure_ascii=False, indent=2)}
+{json.dumps(gate_summary.get('by_market_state', {}), ensure_ascii=False, indent=2, default=str)}
 
 Worst category: {gate_summary.get('worst_category', 'N/A')} (false block rate: {gate_summary.get('worst_false_block_rate', 'N/A')})
 
