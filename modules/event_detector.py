@@ -254,7 +254,7 @@ def write_prediction(
         if not event.get("primary"):
             return False
 
-        from sheets import run_raw_sql, write_row
+        from sheets import run_raw_sql, write_row, update_row
 
         # Dedup check
         existing = run_raw_sql(
@@ -345,7 +345,7 @@ def score_pending_predictions(dry_run: bool = False) -> dict:
 
 
 def _score_one_prediction(row: dict, dry_run: bool, tally: dict) -> None:
-    from sheets import run_raw_sql
+    from sheets import run_raw_sql, update_row
     from zoneinfo import ZoneInfo
     NST = ZoneInfo("Asia/Kathmandu")
 
@@ -410,17 +410,17 @@ def _score_one_prediction(row: dict, dry_run: bool, tally: dict) -> None:
                  pred_id, outcome, actual_peak, mag_pred)
         return
 
-    run_raw_sql(
-        """
-        UPDATE pattern_validation_log
-        SET actual_nepse_pct = %s,
-            magnitude_error  = %s,
-            outcome          = %s,
-            scored_by        = 'auto',
-            scored_at        = %s
-        WHERE id = %s
-        """,
-        (str(actual_peak), str(mag_error), outcome, scored_at, pred_id),
+
+    update_row(
+        "pattern_validation_log",
+        {
+            "actual_nepse_pct": str(actual_peak),
+            "magnitude_error":  str(mag_error),
+            "outcome":          outcome,
+            "scored_by":        "auto",
+            "scored_at":        scored_at,
+        },
+        where={"id": str(pred_id)},
     )
     log.info("Scored prediction id=%s event=%s → %s (actual=%.2f pred=%.2f)",
              pred_id, row["event_type"], outcome, actual_peak, mag_pred)
