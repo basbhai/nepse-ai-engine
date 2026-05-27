@@ -67,7 +67,7 @@ USE_PLAYWRIGHT_REVIEW = True
 
 MAX_TRADES        = 80     # most recent trades (GPT sees aggregate stats for older)
 MAX_WAIT_AVOID    = 80     # most recent evaluated WAIT/AVOID signals
-MAX_DAILY_CONTEXT = 90     # ~3 months of trading days
+MAX_DAILY_CONTEXT = 30    # ~1 months of trading days
 MAX_GPT_TOKENS    = 8000   # max_tokens for GPT response
 
 
