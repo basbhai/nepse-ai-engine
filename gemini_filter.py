@@ -502,9 +502,9 @@ TASK
 2. If ANALYZE: assign urgency NORMAL or HIGH or URGENT.
 
 - Study the INTRADAY BREADTH TIMELINE. Identify whether breadth_score is trending up, down, or oscillating.
-  Set intraday_trend accordingly. If breadth is FADING or DISTRIBUTING, be more conservative with
-  urgency — prefer NORMAL over HIGH. If ACCUMULATING or RECOVERING, urgency can be elevated if
-  signals are otherwise strong.
+  Set intraday_trend accordingly. Breadth affects URGENCY ONLY — NEVER skip a candidate solely due to breadth.
+  DISTRIBUTING/FADING → downgrade urgency to NORMAL only.
+  ACCUMULATING/RECOVERING → urgency can be elevated if signals are strong.
 
 Return ONLY this JSON — no markdown, no explanation, no extra text:
 {{
@@ -517,7 +517,7 @@ Return ONLY this JSON — no markdown, no explanation, no extra text:
       "symbol": "SYMBOL",
       "action": "ANALYZE",
       "urgency": "NORMAL or HIGH or URGENT",
-      "reason": "3 sentence why it is worth watching citing specific volume (search web for history txn  if required)  or laggard setup. also take account of added technical details",
+      "reason": "4 sentence why it is worth watching citing specific volume  or laggard setup. also take account of added technical details",
       "risk": "Key risk or support level (e.g., NHPC support at 300)",
       "primary_signal": "MACD or BB or SMA or RSI or OBV_MOMENTUM or VOLUME_BREAKOUT"
     }}
@@ -944,7 +944,7 @@ def run_gemini_filter(
         fallback_note,
         len(flags),
         len(gemini_result.get("skipped", [])),
-        gemini_result.get("market_comment", "—")[:80],
+        gemini_result.get("market_comment", "—"),
     )
     for f in flags:
         logger.info("  FLAG: %s", f.summary())
