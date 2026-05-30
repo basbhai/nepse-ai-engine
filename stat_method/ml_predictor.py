@@ -50,7 +50,7 @@ OUT_DIR = Path(__file__).parent / "output"
 sys.path.insert(0, str(Path(__file__).parent))
 from ml_feature_builder import (
     load_price_history, load_floorsheet_signals,
-    load_raw_floorsheet, load_nepse_regime, load_sectors,
+    load_raw_floorsheet_for_symbol, load_nepse_regime, load_sectors,
     compute_broker_features, compute_price_features,
     WINDOW_DAYS, MIN_FS_DAYS,
 )
@@ -79,7 +79,6 @@ def build_current_features(
     symbols: list[str],
     price_data: dict,
     fs_sig_data: dict,
-    raw_fs_data: dict,
     regime: pd.Series,
     sectors: dict,
     sector_map: dict,
@@ -92,9 +91,12 @@ def build_current_features(
     for symbol in sorted(symbols):
         price_df = price_data.get(symbol)
         fs_sig   = fs_sig_data.get(symbol)
-        raw_fs   = raw_fs_data.get(symbol)
 
-        if price_df is None or fs_sig is None or raw_fs is None:
+        if price_df is None or fs_sig is None:
+            continue
+
+        raw_fs = load_raw_floorsheet_for_symbol(symbol)
+        if raw_fs.empty:
             continue
         if len(price_df) < WINDOW_DAYS + 5:
             continue
@@ -169,14 +171,12 @@ def main():
     # Load current data
     price_data  = load_price_history()
     fs_sig_data = load_floorsheet_signals()
-    raw_fs_data = load_raw_floorsheet()
     regime      = load_nepse_regime()
     sectors     = load_sectors()
 
     symbols = sorted(
         set(price_data.keys()) &
-        set(fs_sig_data.keys()) &
-        set(raw_fs_data.keys())
+        set(fs_sig_data.keys())
     )
     log.info("Symbols with all data: %d", len(symbols))
 
@@ -184,7 +184,7 @@ def main():
     log.info("Building current features...")
     feat_df = build_current_features(
         symbols, price_data, fs_sig_data,
-        raw_fs_data, regime, sectors, sector_map,
+        regime, sectors, sector_map,
     )
 
     if feat_df.empty:

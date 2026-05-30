@@ -96,15 +96,17 @@ def load_price_history() -> dict[str, pd.DataFrame]:
     log.info("Loading price_history...")
     with _db() as cur:
         cur.execute("""
-            SELECT symbol, date, open::float, high::float, low::float,
-                   COALESCE(NULLIF(close,''), ltp)::float AS close,
-                   volume::float AS volume
+            SELECT
+                symbol, date,
+                CASE WHEN open   IS NOT NULL AND open   ~ '^[0-9]+\\.?[0-9]*$' THEN open::float   ELSE NULL END AS open,
+                CASE WHEN high   IS NOT NULL AND high   ~ '^[0-9]+\\.?[0-9]*$' THEN high::float   ELSE NULL END AS high,
+                CASE WHEN low    IS NOT NULL AND low    ~ '^[0-9]+\\.?[0-9]*$' THEN low::float    ELSE NULL END AS low,
+                COALESCE(NULLIF(close,''), NULLIF(ltp,''))::float AS close,
+                CASE WHEN volume IS NOT NULL AND volume ~ '^[0-9]+\\.?[0-9]*$' THEN volume::float ELSE 0    END AS volume
             FROM price_history
             WHERE close IS NOT NULL AND close != ''
               AND close ~ '^[0-9]+\\.?[0-9]*$'
               AND close::float > 0
-              AND volume IS NOT NULL AND volume != ''
-              AND volume ~ '^[0-9]+\\.?[0-9]*$'
             ORDER BY symbol, date ASC
         """)
         rows = cur.fetchall()
@@ -161,37 +163,111 @@ def load_floorsheet_signals() -> dict[str, pd.DataFrame]:
 
 def load_raw_floorsheet() -> dict[str, pd.DataFrame]:
     """
-    Load raw floorsheet for broker-level features.
-    Returns symbol → DataFrame with date, buyer_broker_id, seller_broker_id, qty, amount.
-    Only from FS_START onward.
+    DEPRECATED — do not call. Returns empty dict.
+    Raw floorsheet is now loaded per-symbol on demand via
+    load_raw_floorsheet_for_symbol() to avoid OOM.
     """
-    log.info("Loading raw floorsheet (this may take 1-2 minutes)...")
-    with _db() as cur:
-        cur.execute("""
+    log.info("Raw floorsheet: using per-symbol loading (24M rows — never load all at once)")
+    return {}
+
+
+def load_raw_floorsheet_for_symbol(symbol: str) -> pd.DataFrame:
+    """
+    Load raw floorsheet for a single symbol using local DB connection.
+    Falls back to _db() if local unavailable.
+    """
+    return _load_raw_fs_batch([symbol]).get(symbol, pd.DataFrame())
+
+
+def _local_db():
+    """
+    Direct psycopg2 connection to local PostgreSQL.
+    Much faster than Neon for bulk reads — no network round-trip.
+    """
+    import psycopg2
+    import psycopg2.extras
+    import os
+
+    # Try local first, fall back to DATABASE_URL
+    local_url = "postgresql://postgres:nepse123@127.0.0.1:5432/nepse_engine"
+    db_url    = os.environ.get("DATABASE_URL", local_url)
+    # Prefer local if DATABASE_URL points to Neon
+    if "neon" in db_url or "neon.tech" in db_url:
+        db_url = local_url
+
+    conn = psycopg2.connect(db_url)
+    conn.autocommit = True
+    return conn
+
+
+def _load_raw_fs_batch(symbols: list[str]) -> dict[str, pd.DataFrame]:
+    """
+    Load raw floorsheet for a batch of symbols in ONE query.
+    Returns symbol → DataFrame.
+    Batch size of 20 symbols = one query per 20 symbols instead of one per symbol.
+    """
+    if not symbols:
+        return {}
+
+    import psycopg2.extras
+
+    try:
+        conn = _local_db()
+        cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        placeholders = ",".join(["%s"] * len(symbols))
+        cur.execute(f"""
             SELECT symbol, date,
                    buyer_broker_id, seller_broker_id,
                    quantity::float AS qty,
                    amount::float   AS amount
             FROM floorsheet
-            WHERE date >= %s
+            WHERE symbol IN ({placeholders})
+              AND date >= %s
               AND quantity IS NOT NULL AND quantity != ''
               AND quantity ~ '^[0-9]+\\.?[0-9]*$'
               AND quantity::float > 0
             ORDER BY symbol, date ASC
-        """, (FS_START,))
+        """, symbols + [FS_START])
         rows = cur.fetchall()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        log.warning("Local DB batch load failed (%s), falling back to Neon per-symbol", e)
+        # Fallback: use _db() per symbol
+        result = {}
+        for sym in symbols:
+            with _db() as cur2:
+                cur2.execute("""
+                    SELECT date, buyer_broker_id, seller_broker_id,
+                           quantity::float AS qty, amount::float AS amount
+                    FROM floorsheet
+                    WHERE symbol = %s AND date >= %s
+                      AND quantity IS NOT NULL AND quantity != ''
+                      AND quantity ~ '^[0-9]+\\.?[0-9]*$'
+                      AND quantity::float > 0
+                    ORDER BY date ASC
+                """, (sym, FS_START))
+                sym_rows = cur2.fetchall()
+            if sym_rows:
+                df = pd.DataFrame([dict(r) for r in sym_rows])
+                df["date"] = pd.to_datetime(df["date"])
+                df["buyer_broker_id"]  = df["buyer_broker_id"].astype(str).str.strip()
+                df["seller_broker_id"] = df["seller_broker_id"].astype(str).str.strip()
+                result[sym] = df.sort_values("date").reset_index(drop=True)
+        return result
 
-    log.info("  %d raw floorsheet rows loaded", len(rows))
+    if not rows:
+        return {}
+
     df = pd.DataFrame([dict(r) for r in rows])
-    df["date"] = pd.to_datetime(df["date"])
+    df["date"]   = pd.to_datetime(df["date"])
     df["symbol"] = df["symbol"].str.upper()
     df["buyer_broker_id"]  = df["buyer_broker_id"].astype(str).str.strip()
     df["seller_broker_id"] = df["seller_broker_id"].astype(str).str.strip()
 
     result = {}
     for sym, grp in df.groupby("symbol"):
-        result[sym] = grp.sort_values("date").reset_index(drop=True)
-    log.info("  %d symbols in raw floorsheet", len(result))
+        result[sym] = grp.drop(columns="symbol").sort_values("date").reset_index(drop=True)
     return result
 
 
@@ -516,7 +592,6 @@ def build_features(
     symbols: list[str],
     price_data: dict,
     fs_sig_data: dict,
-    raw_fs_data: dict,
     regime: pd.Series,
     sectors: dict,
     from_date: str = None,
@@ -526,20 +601,38 @@ def build_features(
     all_sectors = sorted(set(sectors.values()))
     SECTOR_MAP  = {s: i for i, s in enumerate(all_sectors)}
 
-    all_rows = []
-    n_sym    = len(symbols)
+    all_rows   = []
+    n_sym      = len(symbols)
+    BATCH_SIZE = 20   # load floorsheet for 20 symbols per DB query
 
-    for sym_i, symbol in enumerate(sorted(symbols)):
+    # Pre-load floorsheet in batches
+    sorted_syms = sorted(symbols)
+    raw_fs_cache: dict[str, pd.DataFrame] = {}
+
+    log.info("Pre-loading raw floorsheet in batches of %d...", BATCH_SIZE)
+    for batch_start in range(0, len(sorted_syms), BATCH_SIZE):
+        batch = sorted_syms[batch_start:batch_start + BATCH_SIZE]
+        batch_data = _load_raw_fs_batch(batch)
+        raw_fs_cache.update(batch_data)
+        if (batch_start // BATCH_SIZE + 1) % 5 == 0:
+            log.info("  Floorsheet batch %d / %d loaded",
+                     batch_start // BATCH_SIZE + 1,
+                     (len(sorted_syms) + BATCH_SIZE - 1) // BATCH_SIZE)
+    log.info("Floorsheet pre-loaded for %d symbols", len(raw_fs_cache))
+
+    for sym_i, symbol in enumerate(sorted_syms):
         if (sym_i + 1) % 50 == 0:
             log.info("  %d / %d symbols...", sym_i + 1, n_sym)
 
         price_df = price_data.get(symbol)
         fs_sig   = fs_sig_data.get(symbol)
-        raw_fs   = raw_fs_data.get(symbol)
+        raw_fs   = raw_fs_cache.get(symbol)
 
         if price_df is None or len(price_df) < WINDOW_DAYS + LABEL_HORIZON + 5:
             continue
-        if fs_sig is None or raw_fs is None:
+        if fs_sig is None:
+            continue
+        if raw_fs is None or raw_fs.empty:
             continue
 
         price_df = price_df.reset_index(drop=True)
@@ -634,14 +727,12 @@ def main():
     # Load all data
     price_data  = load_price_history()
     fs_sig_data = load_floorsheet_signals()
-    raw_fs_data = load_raw_floorsheet()
     regime      = load_nepse_regime()
     sectors     = load_sectors()
 
     symbols = sorted(
         set(price_data.keys()) &
-        set(fs_sig_data.keys()) &
-        set(raw_fs_data.keys())
+        set(fs_sig_data.keys())
     )
     log.info("Symbols with all data sources: %d", len(symbols))
 
@@ -653,7 +744,7 @@ def main():
     log.info("Building feature matrix...")
     feat_df = build_features(
         symbols, price_data, fs_sig_data,
-        raw_fs_data, regime, sectors,
+        regime, sectors,
         from_date=args.from_date,
     )
 
