@@ -1502,6 +1502,234 @@
       margin-bottom: 8px;
     }
 
+    /* ── Light mode overrides ──────────────────────────────────────────── */
+    body.light-mode {
+      --bg: #f0f0f0;
+      --bg2: #e8e8e8;
+      --bg3: #dcdcdc;
+      --bg4: #d0d0d0;
+      --border: #c0c0c0;
+      --text: #1a1a1a;
+      --muted: #555555;
+    }
+
+    body.light-mode #sidebar {
+      background: #e8e8e8;
+    }
+
+    body.light-mode #bottom-nav {
+      background: #e8e8e8;
+    }
+
+    body.light-mode tr:hover td {
+      background: rgba(0, 0, 0, .04);
+    }
+
+    /* ── Theme toggle button ──────────────────────────────────────────── */
+    #theme-toggle {
+      position: fixed;
+      top: 12px;
+      right: 16px;
+      z-index: 9999;
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-size: 15px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background .15s, border-color .15s;
+      line-height: 1;
+      padding: 0;
+    }
+
+    #theme-toggle:hover {
+      background: var(--green);
+      border-color: var(--green);
+      color: #000;
+    }
+
+    /* ── Stealth tab styles ───────────────────────────────────────────── */
+    .st-stats-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      margin-bottom: 18px;
+    }
+
+    @media (max-width: 767px) {
+      .st-stats-row {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
+
+    .st-stat {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 12px 14px;
+    }
+
+    .st-stat-label {
+      font-size: 10px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      margin-bottom: 5px;
+    }
+
+    .st-stat-val {
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .st-section {
+      margin-bottom: 26px;
+    }
+
+    .st-section-hdr {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--muted);
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .st-note {
+      font-size: 10px;
+      font-weight: 400;
+      opacity: .6;
+      text-transform: none;
+      letter-spacing: 0;
+    }
+
+    .bhr-list {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+
+    .bhr-row {
+      display: grid;
+      grid-template-columns: 175px 1fr 52px 180px;
+      align-items: center;
+      gap: 10px;
+      font-size: 12px;
+    }
+
+    @media (max-width: 767px) {
+      .bhr-row {
+        grid-template-columns: 130px 1fr 45px;
+      }
+
+      .bhr-note {
+        display: none;
+      }
+    }
+
+    .bhr-bar-bg {
+      background: var(--bg3);
+      border-radius: 3px;
+      height: 7px;
+      overflow: hidden;
+    }
+
+    .bhr-bar-fill {
+      height: 100%;
+      background: var(--green);
+      border-radius: 3px;
+    }
+
+    .bhr-pct {
+      font-weight: 600;
+      color: var(--green);
+      text-align: right;
+    }
+
+    .bhr-note {
+      font-size: 10px;
+      color: var(--muted);
+    }
+
+    .st-tbl {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+
+    .st-tbl th {
+      text-align: left;
+      padding: 6px 10px;
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+
+    .st-tbl td {
+      padding: 7px 10px;
+      border-bottom: 1px solid var(--border);
+      color: var(--text);
+      white-space: nowrap;
+    }
+
+    .st-tbl tr:hover td {
+      background: var(--bg2);
+    }
+
+    .st-tbl tr.st-watch td:first-child {
+      border-left: 3px solid var(--amber);
+    }
+
+    .st-tbl tr.st-pos td:first-child {
+      border-left: 3px solid var(--green);
+    }
+
+    .st-tbl tr.st-neg td:first-child {
+      border-left: 3px solid var(--red);
+    }
+
+    .st-tbl tr.st-win td {
+      background: rgba(0, 217, 126, .04);
+    }
+
+    .st-tbl tr.st-loss td {
+      background: rgba(239, 68, 68, .04);
+    }
+
+    .st-empty {
+      color: var(--muted);
+      text-align: center;
+      padding: 20px;
+      font-size: 12px;
+    }
+
+    .st-ret-pos {
+      color: var(--green);
+      font-weight: 500;
+    }
+
+    .st-ret-neg {
+      color: var(--red);
+      font-weight: 500;
+    }
+
+
+
     @media (max-width: 767px) {
       .rpt-layout {
         grid-template-columns: 1fr;
@@ -1515,6 +1743,7 @@
 </head>
 
 <body>
+  <button id="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark">☀</button>
 
   <!-- ═══════════════════════ SIDEBAR ═══════════════════════════ -->
   <div id="sidebar">
@@ -1524,6 +1753,7 @@
     </div>
     <nav>
       <a href="#s-dashboard" class="active">&#9632; Dashboard</a>
+
       <a href="#s-marketlog">&#9632; Market Log</a>
       <a href="#s-learning">&#9632; Learning Hub</a>
       <a href="#s-audit">&#9632; Weekly Audit</a>
@@ -1533,6 +1763,7 @@
       <div class="divider"></div>
       <a href="#s-nrb">&#9632; NRB Entry</a>
       <a href="#s-reporter">&#9632; Query</a>
+      <a href="#s-stealth">&#9632; Stealth</a>
     </nav>
     <div class="refresh-info">
       Auto-refresh: <span>5 min</span><br />
@@ -1812,6 +2043,161 @@
 
       </div><!-- /rpt-layout -->
     </div><!-- /s-reporter -->
+    <div class="section" id="s-stealth">
+      <div class="section-header">
+        <h2>🔍 Stealth Signals</h2><span class="tag">ACCUMULATION</span>
+      </div>
+
+      <!-- Stats row -->
+      <div class="st-stats-row">
+        <div class="st-stat">
+          <div class="st-stat-label">👁 Watching</div>
+          <div class="st-stat-val" id="st-watching">—</div>
+        </div>
+        <div class="st-stat" style="border-left:3px solid var(--amber)">
+          <div class="st-stat-label">🔔 Triggered</div>
+          <div class="st-stat-val" id="st-triggered">—</div>
+        </div>
+        <div class="st-stat">
+          <div class="st-stat-label">🎯 Hit Rate</div>
+          <div class="st-stat-val" id="st-hitrate">—</div>
+        </div>
+        <div class="st-stat">
+          <div class="st-stat-label">📈 Avg Return</div>
+          <div class="st-stat-val" id="st-avgret">—</div>
+        </div>
+      </div>
+
+      <!-- Broker hit rates -->
+      <div class="st-section">
+        <div class="st-section-hdr">Validated Signal Quality (from backtest, 90d forward)</div>
+        <div class="bhr-list">
+          <div class="bhr-row">
+            <span>Sri Hari Securities</span>
+            <div class="bhr-bar-bg">
+              <div class="bhr-bar-fill" style="width:82.4%"></div>
+            </div>
+            <span class="bhr-pct">82.4%</span>
+            <span class="bhr-note">vol&lt;30% range&lt;5% streak≥5d</span>
+          </div>
+          <div class="bhr-row">
+            <span>Trishakti Securities</span>
+            <div class="bhr-bar-bg">
+              <div class="bhr-bar-fill" style="width:80%"></div>
+            </div>
+            <span class="bhr-pct">80.0%</span>
+            <span class="bhr-note">vol&lt;50% range&lt;3% streak≥5d</span>
+          </div>
+          <div class="bhr-row">
+            <span>Online Securities</span>
+            <div class="bhr-bar-bg">
+              <div class="bhr-bar-fill" style="width:78.3%"></div>
+            </div>
+            <span class="bhr-pct">78.3%</span>
+            <span class="bhr-note">vol&lt;60% range&lt;3% streak≥7d</span>
+          </div>
+          <div class="bhr-row">
+            <span>Dipshikha Dhitopatra</span>
+            <div class="bhr-bar-bg">
+              <div class="bhr-bar-fill" style="width:77.8%"></div>
+            </div>
+            <span class="bhr-pct">77.8%</span>
+            <span class="bhr-note">vol&lt;40% range&lt;10% streak≥10d</span>
+          </div>
+          <div class="bhr-row">
+            <span>Naasa Securities</span>
+            <div class="bhr-bar-bg">
+              <div class="bhr-bar-fill" style="width:60%"></div>
+            </div>
+            <span class="bhr-pct">~60.0%</span>
+            <span class="bhr-note">vol&lt;40% range&lt;5% streak≥5d</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Watching -->
+      <div class="st-section">
+        <div class="st-section-hdr">
+          🟡 Currently Watching
+          <span class="st-note">auto-refresh 5min</span>
+        </div>
+        <div class="tbl-wrap">
+          <table class="st-tbl">
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Broker</th>
+                <th>Since</th>
+                <th>Streak</th>
+                <th>Vol Ratio</th>
+                <th>Price Range</th>
+                <th>Entry Price</th>
+                <th>Days Watching</th>
+              </tr>
+            </thead>
+            <tbody id="st-watching-body">
+              <tr>
+                <td colspan="8" class="st-empty">Loading…</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Triggered -->
+      <div class="st-section">
+        <div class="st-section-hdr">🔥 Triggered — Entry Candidates</div>
+        <div class="tbl-wrap">
+          <table class="st-tbl">
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Broker</th>
+                <th>Triggered</th>
+                <th>Type</th>
+                <th>Entry Price</th>
+                <th>Trigger Price</th>
+                <th>Current Price</th>
+                <th>Live Return%</th>
+                <th>Days</th>
+              </tr>
+            </thead>
+            <tbody id="st-triggered-body">
+              <tr>
+                <td colspan="9" class="st-empty">Loading…</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- History -->
+      <div class="st-section">
+        <div class="st-section-hdr">✅ Closed History</div>
+        <div class="tbl-wrap">
+          <table class="st-tbl">
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Broker</th>
+                <th>Signal Date</th>
+                <th>Trigger Date</th>
+                <th>Close Date</th>
+                <th>Return%</th>
+                <th>Days Held</th>
+                <th>Result</th>
+              </tr>
+            </thead>
+            <tbody id="st-history-body">
+              <tr>
+                <td colspan="8" class="st-empty">Loading…</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div><!-- /s-stealth -->
 
   </div><!-- /main -->
 
@@ -1827,6 +2213,7 @@
       <a href="#s-portfolio"><span class="bico">◎</span>Port</a>
       <a href="#s-nrb"><span class="bico">⊞</span>NRB</a>
       <a href="#s-reporter"><span class="bico">⊟</span>Query</a>
+      <a href="#s-stealth"><span class="bico">◈</span>Stealth</a>
     </div>
   </nav>
 
@@ -3130,6 +3517,155 @@
     }
 
     nrbUpdatePeriodPreview();
+
+    /* ── Theme toggle ────────────────────────────────────────────────── */
+    (function () {
+      const saved = localStorage.getItem('nepse_theme');
+      if (saved === 'light') document.body.classList.add('light-mode');
+    })();
+
+    function toggleTheme() {
+      const isLight = document.body.classList.toggle('light-mode');
+      localStorage.setItem('nepse_theme', isLight ? 'light' : 'dark');
+      document.getElementById('theme-toggle').textContent = isLight ? '🌙' : '☀';
+    }
+
+    window.addEventListener('DOMContentLoaded', function () {
+      const isLight = document.body.classList.contains('light-mode');
+      document.getElementById('theme-toggle').textContent = isLight ? '🌙' : '☀';
+    });
+
+    /* ── Stealth helpers ─────────────────────────────────────────────── */
+    function stFmtRet(val) {
+      if (val == null || val === '') return '<span style="color:var(--muted)">—</span>';
+      const n = parseFloat(val);
+      if (isNaN(n)) return '<span style="color:var(--muted)">—</span>';
+      const cls = n > 0 ? 'st-ret-pos' : n < 0 ? 'st-ret-neg' : '';
+      return `<span class="${cls}">${n > 0 ? '+' : ''}${n.toFixed(2)}%</span>`;
+    }
+    function stFmtPrice(val) {
+      if (!val) return '—';
+      const n = parseFloat(val);
+      return isNaN(n) ? val : `NPR ${n.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+    }
+    function stFmtRatio(val) {
+      if (!val) return '—';
+      const n = parseFloat(val);
+      return isNaN(n) ? val : n.toFixed(2) + 'x';
+    }
+    function stFmtPctVal(val) {
+      if (val == null) return '—';
+      const n = parseFloat(val);
+      return isNaN(n) ? val : (n * 100).toFixed(1) + '%';
+    }
+
+    /* ── Stealth API calls ───────────────────────────────────────────── */
+    async function loadStealthStats() {
+      try {
+        const d = await fetchJSON('/stealth/stats');
+        const o = d.overall || {};
+        document.getElementById('st-watching').textContent = o.watching ?? '—';
+        document.getElementById('st-triggered').textContent = o.triggered ?? '—';
+        document.getElementById('st-hitrate').textContent = o.hit_rate != null ? o.hit_rate + '%' : '—';
+        document.getElementById('st-avgret').textContent = o.avg_return != null ? (o.avg_return > 0 ? '+' : '') + o.avg_return + '%' : '—';
+      } catch (e) { console.warn('stealth/stats:', e); }
+    }
+
+    async function loadStealthWatching() {
+      const tb = document.getElementById('st-watching-body');
+      try {
+        const d = await fetchJSON('/stealth/watching');
+        const rows = d.rows || [];
+        if (!rows.length) { tb.innerHTML = '<tr><td colspan="8" class="st-empty">No signals currently watching</td></tr>'; return; }
+        tb.innerHTML = rows.map(r => `
+          <tr class="st-watch">
+            <td style="font-weight:600;color:var(--green)">${esc(r.symbol)}</td>
+            <td>${esc(r.broker_name || '—')}</td>
+            <td>${esc(r.signal_date || '—')}</td>
+            <td>${r.streak_days ?? '—'}d</td>
+            <td>${stFmtRatio(r.vol_ratio)}</td>
+            <td>${stFmtPctVal(r.price_range)}</td>
+            <td>${stFmtPrice(r.entry_price)}</td>
+            <td>${r.days_watching ?? '—'}d</td>
+          </tr>`).join('');
+      } catch (e) {
+        tb.innerHTML = '<tr><td colspan="8" class="st-empty">Error loading data</td></tr>';
+      }
+    }
+
+    async function loadStealthTriggered() {
+      const tb = document.getElementById('st-triggered-body');
+      try {
+        const d = await fetchJSON('/stealth/triggered');
+        const rows = d.rows || [];
+        if (!rows.length) { tb.innerHTML = '<tr><td colspan="9" class="st-empty">No triggered signals</td></tr>'; return; }
+        tb.innerHTML = rows.map(r => {
+          const ret = r.live_return_pct != null ? parseFloat(r.live_return_pct) : null;
+          const cls = ret == null ? '' : ret > 0 ? 'st-pos' : ret < 0 ? 'st-neg' : '';
+          return `<tr class="${cls}">
+            <td style="font-weight:600;color:var(--green)">${esc(r.symbol)}</td>
+            <td>${esc(r.broker_name || '—')}</td>
+            <td>${esc(r.trigger_date || '—')}</td>
+            <td style="font-size:10px;color:var(--muted)">${esc(r.trigger_type || '—')}</td>
+            <td>${stFmtPrice(r.entry_price)}</td>
+            <td>${stFmtPrice(r.trigger_price)}</td>
+            <td>${stFmtPrice(r.current_price)}</td>
+            <td>${stFmtRet(r.live_return_pct)}</td>
+            <td>${r.days_since_trigger ?? '—'}d</td>
+          </tr>`;
+        }).join('');
+      } catch (e) {
+        tb.innerHTML = '<tr><td colspan="9" class="st-empty">Error loading data</td></tr>';
+      }
+    }
+
+    async function loadStealthHistory() {
+      const tb = document.getElementById('st-history-body');
+      try {
+        const d = await fetchJSON('/stealth/history');
+        const rows = d.rows || [];
+        if (!rows.length) { tb.innerHTML = '<tr><td colspan="8" class="st-empty">No closed signals yet</td></tr>'; return; }
+        tb.innerHTML = rows.map(r => {
+          const res = r.result || '';
+          const cls = res === 'WIN' ? 'st-win' : res === 'LOSS' ? 'st-loss' : '';
+          const badgeCls = res === 'WIN' ? 'badge-green' : res === 'LOSS' ? 'badge-red' : 'badge-grey';
+          return `<tr class="${cls}">
+            <td style="font-weight:600;color:var(--green)">${esc(r.symbol)}</td>
+            <td>${esc(r.broker_name || '—')}</td>
+            <td>${esc(r.signal_date || '—')}</td>
+            <td>${esc(r.trigger_date || '—')}</td>
+            <td>${esc(r.close_date || '—')}</td>
+            <td>${stFmtRet(r.return_pct)}</td>
+            <td>${r.days_held ?? '—'}d</td>
+            <td><span class="badge ${badgeCls}">${esc(res || '—')}</span></td>
+          </tr>`;
+        }).join('');
+      } catch (e) {
+        tb.innerHTML = '<tr><td colspan="8" class="st-empty">Error loading data</td></tr>';
+      }
+    }
+
+    async function loadStealth() {
+      await Promise.all([
+        loadStealthStats(),
+        loadStealthWatching(),
+        loadStealthTriggered(),
+        loadStealthHistory(),
+      ]);
+    }
+
+    /* ── Wire stealth into refreshAll ────────────────────────────────── */
+    /* IMPORTANT: find the existing refreshAll() function and add loadStealth() to it:
+ 
+    async function refreshAll() {
+      document.getElementById('last-refresh').textContent = ...
+      await Promise.allSettled([
+        loadSummary(), loadMarketLog(), loadLearningHub(),
+        loadAudit(), loadCouncil(), loadTrades(), loadPortfolio(),
+        loadStealth(),   // ← ADD THIS LINE
+      ]);
+    }
+    */
   </script>
 </body>
 
