@@ -393,7 +393,7 @@ def check_trigger(symbol: str,
 def send_trigger_alert(signal: dict) -> None:
     """Send Telegram alert when a stealth signal triggers."""
     try:
-        from modules.notifier import _send_admin_only
+        from helper.notifier import _send_admin_only
         msg = (
             f"🔔 *STEALTH SIGNAL TRIGGERED*\n\n"
             f"Symbol: *{signal['symbol']}*\n"
