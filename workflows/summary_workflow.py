@@ -148,6 +148,13 @@ def run(dry_run: bool = False, skip_guard: bool = False) -> int:
         "broker_flow_scraper (accumulation/distribution)", _broker_flow, dry_run
     )
 
+# ── Step 7.5: Stealth accumulation scanner ────────────────────────────────
+    def _stealth_scanner():
+        from modules.hidden_accum_scanner import run_scanner
+        run_scanner(dry_run=False)
+    results["stealth_scanner"] = _step(
+        "hidden_accum_scanner (stealth signals)", _stealth_scanner, dry_run
+    )
     # ── Step 8: Nepal pulse (fresh 9 PM headlines) ────────────────────────────
     def _nepal():
         from modules.nepal_pulse import run as run_pulse

@@ -58,6 +58,7 @@ TABS: dict[str, str] = {
     "wait_parse_log": "wait_parse_log",
     "broker_flow": "broker_flow",
     "broker_holdings": "broker_holdings",
+    "stealth_signals": "stealth_signals",
 }
 
 TABLE_DDL: dict[str, str] = {
@@ -1624,6 +1625,44 @@ TABLE_DDL: dict[str, str] = {
     CREATE INDEX IF NOT EXISTS ix_broker_holdings_stealth_score
         ON "broker_holdings" (stealth_score);
     """,
+
+    "stealth_signals": """
+    CREATE TABLE IF NOT EXISTS "stealth_signals" (
+        id SERIAL PRIMARY KEY,
+        symbol TEXT NOT NULL,
+        broker_id TEXT NOT NULL,
+        broker_name TEXT NOT NULL,
+        signal_date TEXT NOT NULL,
+        streak_days TEXT,
+        vol_ratio TEXT,
+        price_range TEXT,
+        entry_price TEXT,
+        status TEXT DEFAULT 'WATCHING',
+        trigger_date TEXT,
+        trigger_price TEXT,
+        trigger_type TEXT,
+        trigger_vol_ratio TEXT,
+        close_date TEXT,
+        close_price TEXT,
+        return_pct TEXT,
+        window_days TEXT,
+        vol_thresh TEXT,
+        price_thresh TEXT,
+        streak_thresh TEXT,
+        created_at TEXT,
+        updated_at TEXT,
+        inserted_at TIMESTAMPTZ DEFAULT NOW(),
+        CONSTRAINT ux_stealth_signals_symbol_broker_id_signal_date UNIQUE (symbol, broker_id, signal_date)
+    );
+    CREATE INDEX IF NOT EXISTS ix_stealth_signals_status
+        ON "stealth_signals" (status);
+    CREATE INDEX IF NOT EXISTS ix_stealth_signals_symbol
+        ON "stealth_signals" (symbol);
+    CREATE INDEX IF NOT EXISTS ix_stealth_signals_signal_date
+        ON "stealth_signals" (signal_date);
+    CREATE INDEX IF NOT EXISTS ix_stealth_signals_broker_id
+        ON "stealth_signals" (broker_id);
+    """,
 }
 
 TABLE_COLUMNS: dict[str, list[str]] = {
@@ -1680,4 +1719,5 @@ TABLE_COLUMNS: dict[str, list[str]] = {
     "wait_parse_log": ["market_log_id", "parsed_at", "raw_condition", "parsed_json", "model_used"],
     "broker_flow": ["date", "symbol", "name", "acc_broker_count_1d", "acc_amount_1d", "acc_qty_1d", "acc_top_broker_1d", "acc_top_broker_pct_1d", "dist_broker_count_1d", "dist_amount_1d", "dist_qty_1d", "dist_top_broker_1d", "dist_top_broker_pct_1d", "net_flow_1d", "flow_bias_1d", "acc_broker_count_1w", "acc_amount_1w", "acc_qty_1w", "acc_top_broker_1w", "acc_top_broker_pct_1w", "dist_broker_count_1w", "dist_amount_1w", "dist_qty_1w", "dist_top_broker_1w", "dist_top_broker_pct_1w", "net_flow_1w", "flow_bias_1w", "acc_brokers_1d_json", "dist_brokers_1d_json", "acc_brokers_1w_json", "created_at"],
     "broker_holdings": ["date", "symbol", "name", "total_involved_brokers", "top3_holding_pct", "total_qty", "hold_qty", "hold_pct", "public_trade_pct", "stealth_score", "ltp", "change", "change_pct", "top_broker_1_name", "top_broker_1_code", "top_broker_1_hold", "top_broker_1_pct", "top_broker_2_name", "top_broker_2_code", "top_broker_2_hold", "top_broker_2_pct", "top_broker_3_name", "top_broker_3_code", "top_broker_3_hold", "top_broker_3_pct", "top_brokers_json", "created_at"],
+    "stealth_signals": ["symbol", "broker_id", "broker_name", "signal_date", "streak_days", "vol_ratio", "price_range", "entry_price", "status", "trigger_date", "trigger_price", "trigger_type", "trigger_vol_ratio", "close_date", "close_price", "return_pct", "window_days", "vol_thresh", "price_thresh", "streak_thresh", "created_at", "updated_at"],
 }
