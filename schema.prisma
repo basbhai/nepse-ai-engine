@@ -1637,3 +1637,42 @@ model broker_holdings {
   @@index([symbol])
   @@index([stealth_score])
 }
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STEALTH ACCUMULATION SIGNALS
+// Populated daily by stat_method/hidden_accum_scanner.py after EOD scrape.
+// Tracks quiet broker accumulation → trigger → close lifecycle.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model stealth_signals {
+  id             Serial
+  symbol         Text!
+  broker_id      Text!
+  broker_name    Text!
+  signal_date    Text!          // YYYY-MM-DD — day streak threshold was first met
+  streak_days    Text           // consecutive net-buy days at signal time
+  vol_ratio      Text           // today_volume / 60d_avg_volume on signal day
+  price_range    Text           // (max-min)/min over last 20 trading days on signal day
+  entry_price    Text           // closing price on signal date
+  status         Text  @default("WATCHING")  // WATCHING | TRIGGERED | CLOSED
+  trigger_date   Text           // date volume spike or price breakout fired
+  trigger_price  Text           // closing price on trigger date
+  trigger_type   Text           // VOLUME_SPIKE_1.5X | VOLUME_SPIKE_2X | VOLUME_SPIKE_3X | PRICE_BREAKOUT_3PCT | PRICE_BREAKOUT_5PCT | PRICE_BREAKOUT_20D_HIGH | BOTH
+  trigger_vol_ratio Text        // actual vol ratio on trigger day
+  close_date     Text           // date signal closed (90d after trigger)
+  close_price    Text           // closing price on close date
+  return_pct     Text           // (close_price - trigger_price) / trigger_price * 100
+  window_days    Text           // lookback window that fired (30 | 60 | 90)
+  vol_thresh     Text           // vol_ratio threshold used for this broker
+  price_thresh   Text           // price_range threshold used for this broker
+  streak_thresh  Text           // min streak threshold used for this broker
+  created_at     Text           // YYYY-MM-DD HH:MM:SS NST — row created
+  updated_at     Text           // YYYY-MM-DD HH:MM:SS NST — last updated
+
+  @@unique([symbol, broker_id, signal_date])
+  @@index([status])
+  @@index([symbol])
+  @@index([signal_date])
+  @@index([broker_id])
+}
