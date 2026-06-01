@@ -68,7 +68,7 @@ import logging
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from typing import Optional
-
+import json 
 from config import NST
 
 logger = logging.getLogger(__name__)
@@ -252,6 +252,7 @@ class FilterCandidate:
     bb_pct_b_slope:   float = 0.0        # positive = moving away from lower band
     bounce_failed:    bool  = False      # True = dead-cat bounce pattern
     reversal_days:    int   = 0          # consecutive days RSI rising
+    news_catalyst:    str   = ""
 
     timestamp: str = field(default_factory=lambda:
                     datetime.now(tz=NST).strftime("%Y-%m-%d %H:%M:%S"))
@@ -630,8 +631,33 @@ def _check_symbol_gates(
 
     tech_score = int(ind.get("tech_score", 0) or 0)
     threshold  = ctx.get("tech_thresholds", TECH_SCORE_THRESHOLDS).get(ctx["market_state"], DEFAULT_TECH_THRESHOLD)
-    if tech_score < threshold:
+
+    # News catalyst boost — POSITIVE sentiment from nepal_pulse
+    catalyst_boost = 0
+    news_catalyst_str = ""
+    try:
+        from sheets import get_setting as _gs
+        raw = _gs("STOCK_CATALYSTS_TODAY", "[]")
+        catalysts = json.loads(raw) if raw else []
+        for c in catalysts:
+            if str(c.get("symbol", "")).upper() == symbol.upper():
+                if str(c.get("sentiment", "")).upper() == "POSITIVE" and tech_score >= 40:
+                    catalyst_boost = 10
+                    news_catalyst_str = str(c.get("reason", ""))
+                    logger.info(
+                        "NEWS_CATALYST_BOOST: %s +%d (reason: %s)",
+                        symbol, catalyst_boost, news_catalyst_str,
+                    )
+                break
+    except Exception:
+        pass
+
+    if (tech_score + catalyst_boost) < threshold:
         return False, f"TECH={tech_score}<{threshold}"
+    
+    # Store catalyst on ctx for downstream use
+    if news_catalyst_str:
+        ctx.setdefault("_sym_catalysts", {})[symbol] = news_catalyst_str
 
     conf_score = float(getattr(price_row, "conf_score", 0) or 0)
     min_conf   = ctx.get("min_conf_score", MIN_CONF_SCORE)
@@ -1763,6 +1789,10 @@ def run_filter(
         broker_flow_adj = _compute_broker_flow_adj(sym, flow_cache, holdings_cache)
         logger.debug("BROKER_FLOW_ADJ: %s adj=%+.1f", sym, broker_flow_adj)
 
+        # ── News catalyst (from nepal_pulse STOCK_CATALYSTS_TODAY) ────────────
+        candidate_news_catalyst = ctx.get("_sym_catalysts", {}).get(sym, "")
+
+
         composite = _compute_composite_score(
             indicator_score = ind_score,
             sector_mult     = sect_mult,
@@ -1847,6 +1877,8 @@ def run_filter(
             bb_pct_b_slope   = momentum["bb_pct_b_slope"],
             bounce_failed    = momentum["bounce_failed"],
             reversal_days    = momentum["reversal_days"],
+
+            news_catalyst    = candidate_news_catalyst,   # ADD
         ))
 
     ctx.pop("_sym_momentum", None)

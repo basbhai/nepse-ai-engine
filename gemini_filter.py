@@ -154,6 +154,7 @@ class GeminiFlag:
     market_log_id:   int        = None
     intraday_trend:  str        = ""  # Gemini breadth-based trend: ACCUMULATING|DISTRIBUTING|RECOVERING|FADING|CHOPPY|EARLY_SESSION
     sector_momentum: str        = ""  # compact sector context line for this flag's sector
+    news_catalyst:   str        = ""  # from nepal_pulse stock_specific_catalysts
 
     # ── Full FilterCandidate passthrough ──────────────────────────────────────
     change_pct:       float      = 0.0
@@ -697,6 +698,7 @@ def _assemble_flags(
             bb_pct_b_slope   = float(getattr(c, "bb_pct_b_slope",  0.0) or 0.0),
             bounce_failed    = bool(getattr(c, "bounce_failed",  False)),
             reversal_days    = int(getattr(c, "reversal_days",   0)   or 0),
+            news_catalyst    = getattr(c, "news_catalyst", ""),
         ))
 
     return flags
@@ -958,6 +960,7 @@ def run_gemini_filter(
 
 def format_flag_for_claude(flag: GeminiFlag) -> str:
     candle = f"{flag.best_candle}(T{flag.candle_tier})" if flag.best_candle else "none"
+    catalyst = f" NEWS_CATALYST:{flag.news_catalyst}" if getattr(flag, "news_catalyst", "") else ""
     return (
         f"SYMBOL:{flag.symbol} SECTOR:{flag.sector} LTP:{flag.ltp:.2f} "
         f"SIGNAL:{flag.primary_signal} URGENCY:{flag.urgency} "
@@ -966,9 +969,8 @@ def format_flag_for_claude(flag: GeminiFlag) -> str:
         f"REASON:{flag.gemini_reason} RISK:{flag.gemini_risk}"
         f" BREADTH_TREND:{flag.intraday_trend}"
         + (f" SECTOR_MOMENTUM:{flag.sector_momentum}" if flag.sector_momentum else "")
+        + catalyst
     )
-
-
 # ══════════════════════════════════════════════════════════════════════════════
 # CLI
 #   python gemini_filter.py              → full pipeline run
