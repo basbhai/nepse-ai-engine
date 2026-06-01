@@ -904,6 +904,21 @@ Use this to inform conviction:
 """
 
     _hold_signal_str = f" for {flag.primary_signal}" if flag.primary_signal not in ("LAGGARD_PLAY", "") else ""
+    
+    
+    # ── News catalyst block ───────────────────────────────────────────────────
+    news_catalyst = getattr(flag, "news_catalyst", "") or ""
+    catalyst_block = ""
+    if news_catalyst:
+        catalyst_block = (
+            "\n═══════════════════════════════════════════════\n"
+            "NEWS CATALYST (from today's Nepal news)\n"
+            "═══════════════════════════════════════════════\n"
+            f"{news_catalyst}\n"
+            "NOTE: This is a policy/regulatory/financial event directly named in today's news\n"
+            "for this symbol. Factor this into your conviction alongside technicals.\n"
+            "═══════════════════════════════════════════════"
+        )
 
     return f"""You are a senior NEPSE quantitative analyst with deep knowledge of Nepal market research.
 Analyze this specific stock and produce a precise trading recommendation.
@@ -922,6 +937,7 @@ Daily Change:    {getattr(flag, 'change_pct', 0):+.2f}%
 Urgency:         {flag.urgency}  (from Gemini screener)
 Gemini Reason:   {flag.gemini_reason}
 Gemini Risk:     {flag.gemini_risk}
+{catalyst_block}
 
 TECHNICAL INDICATORS (frozen at 10:30 AM NST):
   RSI 14:          {flag.rsi_14:.1f}  [{getattr(flag, 'rsi_signal', '')}]

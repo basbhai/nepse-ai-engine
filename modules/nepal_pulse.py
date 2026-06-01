@@ -87,8 +87,10 @@ NEWS_SOURCES = [
     "https://ekantipur.com/business",
     "https://ekantipur.com/politics",
     "https://eng.merolagani.com/",
+    "https://en.beemapost.com/feed",                              # ADD
+    "https://myrepublica.nagariknetwork.com/category/economy",   # ADD
+    "https://kathmandupost.com/money",                            # ADD
 ]
-
 NEWS_TIMEOUT = 10
 
 # Headline cache settings key and TTL
@@ -366,6 +368,11 @@ Detect signals relevant to Nepal stock market (NEPSE).
    (based on any India-Nepal border, trade, treaty, or political news — recent only)
 9. nrb_rate_decision: "CUT" | "RAISED" | "UNCHANGED"
    (based on any NRB monetary policy announcement)
+10. stock_specific_catalysts: List up to 5 NEPSE-listed company symbols directly named in 
+the headlines with a policy, regulatory, or financial event that directly impacts their 
+revenue or operations. Each entry: {{"symbol": "NRIC", "reason": "brief reason", 
+"sentiment": "POSITIVE|NEGATIVE|NEUTRAL"}}. Only include if symbol is explicitly named. 
+Empty list if none found.
 
 Headlines:
 {data_str}
@@ -384,9 +391,11 @@ Return ONLY this JSON object with no other text, no markdown, no explanation:
   "remittance_detail": "reason from headlines, or empty string",
   "overall_sentiment": "POSITIVE or NEUTRAL or NEGATIVE",
   "key_event": "single most important news that will directly affect NEPSE",
+  
   "headlines_politics": "title 1: lorem ipsum | title 2: lorem ipsum [only related to Nepal]",
   "headlines_economy":  "title 1: lorem ipsum | title 2: lorem ipsum [only related to Nepal]",
-  "headlines_stock":    "title 1: lorem ipsum | title 2: lorem ipsum [only related to NEPSE]"
+  "headlines_stock":    "title 1: lorem ipsum | title 2: lorem ipsum [only related to NEPSE]",
+  "stock_specific_catalysts": []
 }}"""
 
 def _is_nepal_source(source: str) -> bool:
@@ -395,6 +404,7 @@ def _is_nepal_source(source: str) -> bool:
         "eng.merolagani.com", "merolagani.com", "thehimalayantimes.com",
         "kathmandupost.com", "myrepublica.nagariknetwork.com",
         "ratopati.com", "setopati.com",
+        "en.beemapost.com",   # ADD
     }
     return any(ns in source.lower() for ns in nepal_sources)
 
@@ -522,6 +532,19 @@ def _scrape_and_analyze(force_keywords: bool = False) -> dict:
     nrb_ai = result.get("nrb_rate_decision", "").upper().strip()
     if nrb_ai in ("CUT", "RAISED", "UNCHANGED"):
         update_setting("NRB_RATE_DECISION", nrb_ai, set_by="nepal_pulse")
+        
+    # Save stock_specific_catalysts to settings for filter_engine
+    catalysts = result.get("stock_specific_catalysts", [])
+    if isinstance(catalysts, list):
+        try:
+            update_setting(
+                "STOCK_CATALYSTS_TODAY",
+                json.dumps(catalysts),
+                set_by="nepal_pulse",
+            )
+            log.info("Saved %d stock catalysts to settings", len(catalysts))
+        except Exception as exc:
+            log.warning("Failed to save stock catalysts: %s", exc)
 
     # Flag bandh to calendar_guard
     if result.get("bandh_today") == "YES":
