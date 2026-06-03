@@ -18,7 +18,8 @@ Sequence:
     1.  calendar_guard              → exit if today was not a trading day
     2.  nepse_indices               → scrape latest index values (backfill 5d)
     3.  history_bootstrap           → today's EOD OHLCV → price_history
-    4.  recommendation_tracker      → stamp WAIT/AVOID outcomes
+    4.  candle_detector             → detect 15 patterns on completed EOD OHLC → candle_signals
+    5.  recommendation_tracker      → stamp WAIT/AVOID outcomes
     5.  auditor                     → close trades, causal attribution, KPIs
     6.  gate_miss_tracker           → stamp FALSE_BLOCK/CORRECT_BLOCK
     7.  floorsheet                  → today's full floorsheet scrape
@@ -110,7 +111,13 @@ def run(dry_run: bool = False, skip_guard: bool = False) -> int:
         scrape_and_upsert(dry_run=False)
     results["history"] = _step("history_bootstrap (today's EOD → price_history)", _bootstrap, dry_run)
 
-    # ── Step 3: Recommendation tracker ───────────────────────────────────────
+    # ── Step 3: Candle detector (EOD patterns on completed OHLC) ─────────────
+    def _candles():
+        from modules.candle_detector import run as run_candles
+        run_candles()
+    results["candles"] = _step("candle_detector (15 patterns, EOD OHLC)", _candles, dry_run)
+
+    # ── Step 4: Recommendation tracker ───────────────────────────────────────
     def _rec_tracker():
         from analysis.recommendation_tracker import run as run_tracker
         run_tracker(dry_run=False)
