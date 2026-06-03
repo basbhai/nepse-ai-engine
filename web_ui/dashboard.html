@@ -2054,7 +2054,7 @@
     <!-- Logs Section -->
     <div class="section" id="s-logs">
       <div class="section-header">
-        <h2>📋 Run Logs</h2>
+        <h2 style="color:var(--green)">📋 Run Logs</h2>
         <select id="logs-dropdown" style="width:200px">
           <option value="">Loading logs…</option>
         </select>
@@ -3714,13 +3714,14 @@
         const d = await fetchJSON(`/dashboard/logs/file?path=${encodeURIComponent(_logsCurrentPath)}`);
         const lines = d.lines || [];
         content.innerHTML = lines.map(line => {
-          let color = 'var(--text)';
-          let className = '';
-          if (line.includes('ERROR')) color = 'var(--red)';
-          else if (line.includes('WARNING')) color = 'var(--amber)';
-          else if (line.includes('INFO')) color = 'var(--muted)';
-          if (line.match(/\b(BUY|WAIT|AVOID|✅|🔴|🟡)\b/)) className = 'highlight-outcome';
-          return `<div style="color:${color}" class="${className}">${esc(line)}</div>`;
+          let color = 'var(--muted)';
+          let weight = '';
+          if (line.includes(' ERROR'))   { color = 'var(--red)'; }
+          else if (line.includes(' WARNING')) { color = 'var(--amber)'; }
+          else if (line.includes('BUY')  || line.includes('🟢')) { color = 'var(--green)'; weight = 'font-weight:600;'; }
+          else if (line.includes('WAIT') || line.includes('🟡')) { color = 'var(--amber)'; weight = 'font-weight:600;'; }
+          else if (line.includes('AVOID')|| line.includes('🔴')) { color = '#f87171';      weight = 'font-weight:600;'; }
+          return `<div style="color:${color};${weight}">${esc(line)}</div>`;
         }).join('');
       } catch (e) {
         content.innerHTML = `<span style="color:var(--red)">Error loading file: ${esc(e.message)}</span>`;
