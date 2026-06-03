@@ -967,10 +967,12 @@ def write_daily_signals_to_db(
 def run() -> None:
     """
     Entry point called by morning_workflow.py.
-    Loads HistoryCache, fetches live prices, detects patterns, writes to Neon.
+    Loads HistoryCache, reads EOD prices from price_history, detects patterns, writes to Neon.
     """
     from modules.indicators import HistoryCache, DEFAULT_LOAD_PERIODS
-    from modules.scraper import get_all_market_data, PriceRow
+    from modules.scraper import PriceRow
+    from sheets import run_raw_sql
+    from calendar_guard import today_nst
 
     logger.info("Loading history cache...")
     cache = HistoryCache()
@@ -979,26 +981,43 @@ def run() -> None:
         raise RuntimeError("HistoryCache load failed — is price_history populated?")
     logger.info("Cache: %d symbols | %d trading days", count, len(cache.dates))
 
-    logger.info("Fetching live prices...")
-    market_data = get_all_market_data(write_breadth=False)
-    if not market_data:
-        logger.warning("Market closed — using cache close prices as today's price")
-        market_data = {}
-        for sym, closes in cache.closes.items():
-            if closes:
-                highs   = cache.get_highs(sym)
-                lows    = cache.get_lows(sym)
-                volumes = cache.get_volumes(sym)
-                market_data[sym] = PriceRow(
-                    symbol=sym, ltp=closes[-1],
-                    open_price=closes[-2] if len(closes) > 1 else closes[-1],
-                    close=closes[-1],
-                    high=highs[-1] if highs else closes[-1],
-                    low=lows[-1]   if lows  else closes[-1],
-                    prev_close=closes[-2] if len(closes) > 1 else closes[-1],
-                    volume=volumes[-1] if volumes else 0,
-                )
-    logger.info("Prices: %d symbols", len(market_data))
+    today_str = today_nst().isoformat()
+    logger.info("Reading EOD prices from price_history for %s...", today_str)
+    rows = run_raw_sql(
+        """
+        SELECT symbol, open, high, low, close, ltp, volume
+        FROM price_history
+        WHERE date = %s
+        """,
+        (today_str,),
+    )
+    if not rows:
+        logger.warning(
+            "price_history has no rows for %s — holiday or EOD not yet written; skipping.",
+            today_str,
+        )
+        return
+
+    def _f(val) -> float:
+        try:
+            return float(val) if val is not None else 0.0
+        except (ValueError, TypeError):
+            return 0.0
+
+    market_data: dict[str, PriceRow] = {}
+    for r in rows:
+        sym = r["symbol"]
+        close = _f(r["close"])
+        market_data[sym] = PriceRow(
+            symbol=sym,
+            ltp=_f(r["ltp"]) or close,
+            open_price=_f(r["open"]),
+            high=_f(r["high"]),
+            low=_f(r["low"]),
+            close=close,
+            volume=int(r["volume"] or 0),
+        )
+    logger.info("Prices: %d symbols from price_history", len(market_data))
 
     all_patterns = detect_all_patterns(market_data, cache)
     written = write_daily_signals_to_db(all_patterns)
