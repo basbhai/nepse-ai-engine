@@ -1061,30 +1061,42 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"  {e}"); sys.exit(1)
 
-    print("\n[2/3] Fetching live prices...")
+    print("\n[2/3] Reading EOD prices from price_history...")
     try:
-        from modules.scraper import get_all_market_data, PriceRow
-        market_data = get_all_market_data(write_breadth=False)
-        if not market_data:
-            print("  Market closed — using synthetic prices from cache")
-            market_data = {}
-            for sym, closes in cache.closes.items():
-                if closes:
-                    highs   = cache.get_highs(sym)
-                    lows    = cache.get_lows(sym)
-                    volumes = cache.get_volumes(sym)
-                    market_data[sym] = PriceRow(
-                        symbol=sym, ltp=closes[-1],
-                        open_price=closes[-2] if len(closes) > 1 else closes[-1],
-                        close=closes[-1],
-                        high=highs[-1] if highs else closes[-1],
-                        low=lows[-1] if lows else closes[-1],
-                        prev_close=closes[-2] if len(closes) > 1 else closes[-1],
-                        volume=volumes[-1] if volumes else 0,
-                    )
-        print(f"  {len(market_data)} symbols")
+        from modules.scraper import PriceRow
+        from sheets import run_raw_sql
+        from calendar_guard import today_nst
+        today_str = today_nst().isoformat()
+        rows = run_raw_sql(
+            "SELECT symbol, open, high, low, close, ltp, volume FROM price_history WHERE date = %s",
+            (today_str,),
+        )
+        if not rows:
+            print(f"  WARNING: no price_history rows for {today_str} — holiday or EOD not yet written")
+            sys.exit(0)
+
+        def _f(val) -> float:
+            try:
+                return float(val) if val is not None else 0.0
+            except (ValueError, TypeError):
+                return 0.0
+
+        market_data: dict[str, PriceRow] = {}
+        for r in rows:
+            sym = r["symbol"]
+            close = _f(r["close"])
+            market_data[sym] = PriceRow(
+                symbol=sym,
+                ltp=_f(r["ltp"]) or close,
+                open_price=_f(r["open"]),
+                high=_f(r["high"]),
+                low=_f(r["low"]),
+                close=close,
+                volume=int(r["volume"] or 0),
+            )
+        print(f"  {len(market_data)} symbols from price_history ({today_str})")
     except Exception as e:
-        print(f"  Scraper failed: {e}"); sys.exit(1)
+        print(f"  price_history query failed: {e}"); sys.exit(1)
 
     # Filter to specific symbols if passed
     sym_args = [a for a in args if not a.startswith("--")]
