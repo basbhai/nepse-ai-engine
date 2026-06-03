@@ -1592,6 +1592,12 @@
       margin-bottom: 26px;
     }
 
+    .highlight-outcome {
+      background-color: rgba(255, 193, 7, 0.15);
+      padding: 2px 4px;
+      border-left: 3px solid var(--amber);
+    }
+
     .st-section-hdr {
       font-size: 11px;
       font-weight: 600;
@@ -1761,6 +1767,7 @@
       <a href="#s-trades">&#9632; Trade Journal</a>
       <a href="#s-portfolio">&#9632; Portfolio</a>
       <div class="divider"></div>
+      <a href="#s-logs">&#9632; Run Logs</a>
       <a href="#s-nrb">&#9632; NRB Entry</a>
       <a href="#s-reporter">&#9632; Query</a>
       <a href="#s-stealth">&#9632; Stealth</a>
@@ -2043,6 +2050,20 @@
 
       </div><!-- /rpt-layout -->
     </div><!-- /s-reporter -->
+
+    <!-- Logs Section -->
+    <div class="section" id="s-logs">
+      <div class="section-header">
+        <h2>📋 Run Logs</h2>
+        <select id="logs-dropdown" style="width:200px">
+          <option value="">Loading logs…</option>
+        </select>
+      </div>
+      <div id="logs-content" style="font-family:monospace; font-size:12px; overflow-y:auto; max-height:500px; padding:12px; background:var(--bg3); border:1px solid var(--border); border-radius:4px; white-space:pre-wrap; word-break:break-word; line-height:1.5;">
+        <div class="spinner">Loading logs…</div>
+      </div>
+    </div><!-- /s-logs -->
+
     <div class="section" id="s-stealth">
       <div class="section-header">
         <h2>🔍 Stealth Signals</h2><span class="tag">ACCUMULATION</span>
@@ -2211,6 +2232,7 @@
       <a href="#s-council"><span class="bico">⚡</span>Cncl</a>
       <a href="#s-trades"><span class="bico">◉</span>Trades</a>
       <a href="#s-portfolio"><span class="bico">◎</span>Port</a>
+      <a href="#s-logs"><span class="bico">📋</span>Logs</a>
       <a href="#s-nrb"><span class="bico">⊞</span>NRB</a>
       <a href="#s-reporter"><span class="bico">⊟</span>Query</a>
       <a href="#s-stealth"><span class="bico">◈</span>Stealth</a>
@@ -2870,7 +2892,7 @@
     }
 
     /* ── Sidebar / bottom-nav active tracking ────────────────────────── */
-    const NAV_SECTIONS = ['s-dashboard', 's-marketlog', 's-learning', 's-audit', 's-council', 's-trades', 's-portfolio', 's-nrb', 's-reporter'];
+    const NAV_SECTIONS = ['s-dashboard', 's-marketlog', 's-learning', 's-audit', 's-council', 's-trades', 's-portfolio', 's-logs', 's-nrb', 's-reporter', 's-stealth'];
 
     function updateActiveNav() {
       let current = NAV_SECTIONS[0];
@@ -2890,7 +2912,7 @@
         new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       await Promise.allSettled([
         loadSummary(), loadMarketLog(), loadLearningHub(),
-        loadAudit(), loadCouncil(), loadTrades(), loadPortfolio(),
+        loadAudit(), loadCouncil(), loadTrades(), loadPortfolio(), loadLogsList(),
       ]);
     }
 
@@ -2898,8 +2920,10 @@
       refreshAll();
       nrbCheckAPI();
       loadReporter();
+      loadStealth();
       setInterval(refreshAll, 5 * 60 * 1000);
       setInterval(nrbCheckAPI, 15000);
+      setInterval(loadStealth, 30000);
     });
 
 
@@ -3654,9 +3678,58 @@
       ]);
     }
 
+    /* ── Logs ──────────────────────────────────────────────────────────── */
+
+    let _logsCurrentPath = null;
+
+    async function loadLogsList() {
+      try {
+        const d = await fetchJSON('/dashboard/logs/list');
+        const files = d.files || [];
+        const dropdown = document.getElementById('logs-dropdown');
+        dropdown.innerHTML = files.map((f, i) => `<option value="${f.path}" ${i === 0 ? 'selected' : ''}>${f.filename} (${f.date} ${f.time}, ${(f.size / 1024).toFixed(1)}KB)</option>`).join('');
+        if (files.length > 0) {
+          _logsCurrentPath = files[0].path;
+          dropdown.onchange = () => {
+            _logsCurrentPath = dropdown.value;
+            loadLogsFile();
+          };
+          await loadLogsFile();
+        } else {
+          document.getElementById('logs-content').innerHTML = '<span style="color:var(--muted)">No log files found</span>';
+        }
+      } catch (e) {
+        document.getElementById('logs-content').innerHTML = `<span style="color:var(--red)">Error loading logs: ${esc(e.message)}</span>`;
+      }
+    }
+
+    async function loadLogsFile() {
+      const content = document.getElementById('logs-content');
+      if (!_logsCurrentPath) {
+        content.innerHTML = '<span style="color:var(--muted)">No log file selected</span>';
+        return;
+      }
+      try {
+        content.innerHTML = '<div class="spinner">Loading…</div>';
+        const d = await fetchJSON(`/dashboard/logs/file?path=${encodeURIComponent(_logsCurrentPath)}`);
+        const lines = d.lines || [];
+        content.innerHTML = lines.map(line => {
+          let color = 'var(--text)';
+          let className = '';
+          if (line.includes('ERROR')) color = 'var(--red)';
+          else if (line.includes('WARNING')) color = 'var(--amber)';
+          else if (line.includes('INFO')) color = 'var(--muted)';
+          if (line.match(/\b(BUY|WAIT|AVOID|✅|🔴|🟡)\b/)) className = 'highlight-outcome';
+          return `<div style="color:${color}" class="${className}">${esc(line)}</div>`;
+        }).join('');
+      } catch (e) {
+        content.innerHTML = `<span style="color:var(--red)">Error loading file: ${esc(e.message)}</span>`;
+      }
+    }
+
     /* ── Wire stealth into refreshAll ────────────────────────────────── */
     /* IMPORTANT: find the existing refreshAll() function and add loadStealth() to it:
- 
+
     async function refreshAll() {
       document.getElementById('last-refresh').textContent = ...
       await Promise.allSettled([

@@ -996,3 +996,80 @@ def get_stealth_stats():
     except Exception as e:
         log.exception("stealth/stats failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Logs ──────────────────────────────────────────────────────────────────
+
+@app.get("/dashboard/logs/list")
+def get_logs_list():
+    try:
+        import glob as _glob
+        logs_dir = os.path.expanduser("~/nepse-engine/logs")
+        if not os.path.isdir(logs_dir):
+            return {"files": []}
+
+        files = []
+        for fpath in _glob.glob(os.path.join(logs_dir, "**", "main_*.log"), recursive=True):
+            try:
+                stat = os.stat(fpath)
+                mtime = stat.st_mtime
+                size = stat.st_size
+                rel_path = os.path.relpath(fpath, logs_dir)
+                dt = datetime.datetime.fromtimestamp(mtime)
+                files.append({
+                    "filename": os.path.basename(fpath),
+                    "path": rel_path.replace("\\", "/"),
+                    "date": dt.strftime("%Y-%m-%d"),
+                    "time": dt.strftime("%H:%M:%S"),
+                    "size": size,
+                })
+            except Exception:
+                pass
+
+        files.sort(key=lambda x: (x["date"], x["time"]), reverse=True)
+        return {"files": files}
+    except Exception as e:
+        log.exception("logs/list failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/dashboard/logs/file")
+def get_logs_file(path: str):
+    try:
+        logs_dir = os.path.expanduser("~/nepse-engine/logs")
+        fpath = os.path.normpath(os.path.join(logs_dir, path))
+
+        if not fpath.startswith(os.path.normpath(logs_dir)) or not os.path.isfile(fpath):
+            raise HTTPException(status_code=404, detail="File not found or access denied")
+
+        with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+            raw_lines = f.readlines()
+
+        lines = []
+        for raw in raw_lines:
+            line = raw.rstrip("\n\r")
+
+            # Truncate raw: content
+            if "raw: " in line:
+                idx = line.find("raw: ")
+                prefix = line[:idx + 5]
+                content = line[idx + 5:]
+                if len(content) > 120:
+                    content = content[:120] + "…[truncated]"
+                line = prefix + content
+
+            # Truncate HTML
+            if "<!DOCTYPE" in line or "<!doctype" in line.lower():
+                idx = line.lower().find("<!doctype")
+                line = line[:idx] + "<!DOCTYPE...…[truncated]"
+            elif line.lstrip().startswith("<") and ("html" in line.lower() or "body" in line.lower()):
+                line = line[:100] + "…[truncated]" if len(line) > 100 else line
+
+            lines.append(line)
+
+        return {"lines": lines}
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("logs/file failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
