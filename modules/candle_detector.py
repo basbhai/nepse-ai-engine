@@ -206,6 +206,10 @@ def _build_matrices(symbols: list, market_data: dict, cache) -> tuple:
         today_c = row.ltp        if row.ltp        > 0 else row.close
         today_v = float(row.volume)
 
+        if today_h == today_l:
+            logger.debug("_build_matrices: skipping %s — today high == low (flat/stale candle)", sym)
+            continue
+
         is_new_candle = today_c > 0 and (not hist_c or today_c != hist_c[-1])
 
         if is_new_candle:
@@ -486,7 +490,7 @@ def _detect_doji(symbols, O, H, L, C, V, C_full):
     br         = _body_ratio(o, h, l, c)
     full_range = _candle_range(h, l)
 
-    is_doji       = (br <= DOJI_BODY_RATIO) & (full_range > 0)
+    is_doji       = (br <= DOJI_BODY_RATIO) & (full_range > 0.01)
     at_support    = _near_support(C_full, l)
     at_resistance = _near_resistance(C_full, h)
     in_downtrend  = _is_downtrend(C_full, periods=3)
