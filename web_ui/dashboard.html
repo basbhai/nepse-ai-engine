@@ -7,7 +7,7 @@
   <title>NEPSE AI Engine</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap"
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Roboto:wght@400;500&family=Roboto+Mono:wght@400;600&display=swap"
     rel="stylesheet" />
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -2052,14 +2052,14 @@
     </div><!-- /s-reporter -->
 
     <!-- Logs Section -->
-    <div class="section" id="s-logs">
-      <div class="section-header">
-        <h2 style="color:var(--green)">📋 Run Logs</h2>
-        <select id="logs-dropdown" style="width:200px">
+    <div class="section" id="s-logs" style="background:#1e1e1e;border-radius:8px;padding:16px;">
+      <div class="section-header" style="border-bottom-color:#2c2c2c;">
+        <h2 style="font-family:'Roboto',sans-serif;color:#e0e0e0;font-size:14px;font-weight:500;letter-spacing:0.1em;text-transform:uppercase;">📋 Run Logs</h2>
+        <select id="logs-dropdown" style="background:#2c2c2c;color:#e0e0e0;border:1px solid #424242;border-radius:4px;padding:8px 32px 8px 12px;font-family:'Roboto',sans-serif;font-size:13px;appearance:none;-webkit-appearance:none;background-image:url('data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2212%22 height=%228%22 viewBox=%220 0 12 8%22><path fill=%22%2300d97e%22 d=%22M0 0l6 8 6-8z%22/></svg>');background-repeat:no-repeat;background-position:right 10px center;outline:none;cursor:pointer;" onfocus="this.style.borderColor='#00d97e';this.style.boxShadow='0 0 0 2px rgba(0,217,126,0.2)';" onblur="this.style.borderColor='#424242';this.style.boxShadow='none';">
           <option value="">Loading logs…</option>
         </select>
       </div>
-      <div id="logs-content" style="font-family:monospace; font-size:12px; overflow-y:auto; max-height:500px; padding:12px; background:var(--bg3); border:1px solid var(--border); border-radius:4px; white-space:pre-wrap; word-break:break-word; line-height:1.5;">
+      <div id="logs-content" style="background:#121212;border:1px solid #2c2c2c;border-radius:4px;padding:12px;font-family:'Roboto Mono',monospace;font-size:12px;line-height:1.6;overflow-y:auto;max-height:500px;white-space:pre-wrap;word-break:break-word;">
         <div class="spinner">Loading logs…</div>
       </div>
     </div><!-- /s-logs -->
@@ -3714,13 +3714,14 @@
         const d = await fetchJSON(`/dashboard/logs/file?path=${encodeURIComponent(_logsCurrentPath)}`);
         const lines = d.lines || [];
         content.innerHTML = lines.map(line => {
-          let color = 'var(--muted)';
+          let color = '#bdbdbd';
           let weight = '';
-          if (line.includes(' ERROR'))   { color = 'var(--red)'; }
-          else if (line.includes(' WARNING')) { color = 'var(--amber)'; }
-          else if (line.includes('BUY')  || line.includes('🟢')) { color = 'var(--green)'; weight = 'font-weight:600;'; }
-          else if (line.includes('WAIT') || line.includes('🟡')) { color = 'var(--amber)'; weight = 'font-weight:600;'; }
-          else if (line.includes('AVOID')|| line.includes('🔴')) { color = '#f87171';      weight = 'font-weight:600;'; }
+          if (line.includes(' ERROR'))        { color = '#ef5350'; }
+          else if (line.includes(' WARNING')) { color = '#ffa726'; }
+          else if (line.includes('BUY')  || line.includes('🟢')) { color = '#66bb6a'; weight = 'font-weight:600;'; }
+          else if (line.includes('WAIT') || line.includes('🟡')) { color = '#ffa726'; weight = 'font-weight:600;'; }
+          else if (line.includes('AVOID')|| line.includes('🔴')) { color = '#ef5350'; weight = 'font-weight:600;'; }
+          else if (line.includes(' INFO'))    { color = '#9e9e9e'; }
           return `<div style="color:${color};${weight}">${esc(line)}</div>`;
         }).join('');
       } catch (e) {
