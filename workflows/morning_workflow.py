@@ -8,11 +8,10 @@ Sequence (in order, each step fail-safe):
     1. calendar_guard      → exit if today is holiday
     2. meroshare.sync()    → sync real portfolio (live mode only)
     3. indicators.py       → compute RSI/EMA/MACD/BB for all symbols (FROZEN)
-    4. candle_detector.py  → detect 15 patterns → candle_signals
-    5. geo_sentiment.run() → DXY → geo_score
-    6. nepal_pulse.run()   → news + Gemini → nepal_score
-    7. capital_allocator   → wealth management advice
-    8. briefing.run()      → morning Telegram message
+    4. geo_sentiment.run() → DXY → geo_score
+    5. nepal_pulse.run()   → news + Gemini → nepal_score
+    6. capital_allocator   → wealth management advice
+    7. briefing.run()      → morning Telegram message
 
 Any step failure is logged but does NOT abort the rest.
 ─────────────────────────────────────────────────────────────────────────────
@@ -101,13 +100,7 @@ def run(dry_run: bool = False, skip_guard: bool = False) -> int:
         run_indicators()
     results["indicators"] = _step("indicators (RSI/MACD/BB/EMA)", _indicators, dry_run)
 
-    # ── Step 4: Candle detector ───────────────────────────────────────────────
-    def _candles():
-        from modules.candle_detector import run as run_candles
-        run_candles()
-    results["candles"] = _step("candle_detector (15 patterns)", _candles, dry_run)
-
-    # ── Step 5: Geo sentiment ─────────────────────────────────────────────────
+    # ── Step 4: Geo sentiment ─────────────────────────────────────────────────
     def _geo():
         from modules.geo_sentiment import run as run_geo
         run_geo()
