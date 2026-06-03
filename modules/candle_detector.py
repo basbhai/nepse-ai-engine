@@ -206,7 +206,11 @@ def _build_matrices(symbols: list, market_data: dict, cache) -> tuple:
         today_c = row.ltp        if row.ltp        > 0 else row.close
         today_v = float(row.volume)
 
-        is_new_candle = today_c > 0 and (not hist_c or today_c != hist_c[-1])
+        # Force new candle when we have a real open_price (from price_history EOD data).
+        # Without this, if cache already contains today close, today_c == hist_c[-1]
+        # -> is_new_candle=False -> else branch uses open=close -> body=0 everywhere.
+        has_real_open = row.open_price > 0
+        is_new_candle = today_c > 0 and (has_real_open or not hist_c or today_c != hist_c[-1])
 
         if is_new_candle:
             # Approximate historical opens as prior close (OmitNomis has no open column)
