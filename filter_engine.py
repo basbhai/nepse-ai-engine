@@ -928,19 +928,40 @@ def _check_cstar_signal(
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _load_candle_signals(symbols: list[str], date: str) -> dict[str, list]:
-    """Load today's bullish candle signals from candle_signals table."""
+    """Load candle signals from candle_signals table.
+    
+    Tries today's date first. If no rows found (candle_detector runs at 9 PM
+    summary_workflow, not morning), falls back to the most recent available date.
+    """
     candles: dict[str, list] = {sym: [] for sym in symbols}
     try:
         from sheets import run_raw_sql
-        rows = run_raw_sql(# AND signal IN ('BULLISH', 'NEUTRAL')
+
+        # Check if today has any rows at all
+        check = run_raw_sql(
+            "SELECT MAX(date) AS latest FROM candle_signals WHERE date <= %s",
+            (date,)
+        )
+        effective_date = (check[0]["latest"] if check and check[0]["latest"] else None)
+
+        if not effective_date:
+            logger.info("Candle signals: no data available at or before %s", date)
+            return candles
+
+        if effective_date != date:
+            logger.info(
+                "Candle signals: no data for %s — using most recent available: %s",
+                date, effective_date,
+            )
+
+        rows = run_raw_sql(
             """
             SELECT symbol, pattern_name, signal, tier, confidence, volume_confirmed
             FROM candle_signals
             WHERE date = %s
-             
             ORDER BY symbol, tier::int ASC, confidence::int DESC
             """,
-            (date,)
+            (effective_date,)
         )
         for r in rows:
             sym = str(r.get("symbol", "")).upper()
@@ -952,9 +973,10 @@ def _load_candle_signals(symbols: list[str], date: str) -> dict[str, list]:
                     "confidence":       int(r.get("confidence", 0) or 0),
                     "volume_confirmed": str(r.get("volume_confirmed", "false")).lower() == "true",
                 })
-            # print(r)
-        
-        logger.info("Candle signals loaded: %d symbols on %s", len(symbols), date)
+
+        logger.info(
+            "Candle signals loaded: %d symbols (date=%s)", len(symbols), effective_date
+        )
     except Exception as exc:
         logger.warning("_load_candle_signals failed: %s", exc)
     return candles
