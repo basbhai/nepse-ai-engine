@@ -563,7 +563,8 @@ def update_setting(key: str, value: str, set_by: str = "system") -> bool:
                 """,
                 (key, str(value), _now_nst(), set_by),
             )
-        log.info("update_setting: %s = %s (by %s)", key, value, set_by)
+        display_value = str(value)[:20] if not isinstance(value, int) else value
+        log.info("update_setting: %s = %s (by %s)", key, display_value, set_by)
         return True
     except Exception as e:
         log.error("update_setting(%s) failed: %s", key, e)
