@@ -64,7 +64,9 @@ SHOOTING_UPPER_WICK = 2.0    # upper wick >= 2x body
 SHOOTING_LOWER_WICK = 0.30   # lower wick <= 30% of body
 
 # Volume surge: today volume / prior 4-day avg >= this → confirmed
-VOLUME_SURGE_RATIO  = 1.5
+VOLUME_SURGE_RATIO       = 1.5
+# Multi-candle patterns use a relaxed threshold (NEPSE thin liquidity)
+MULTI_CANDLE_VOL_RATIO   = 1.2
 
 # Support/Resistance proximity (within 3% of recent swing high/low)
 SR_PROXIMITY_PCT    = 0.03
@@ -213,8 +215,14 @@ def _build_matrices(symbols: list, market_data: dict, cache) -> tuple:
         is_new_candle = today_c > 0 and (has_real_open or not hist_c or today_c != hist_c[-1])
 
         if is_new_candle:
-            # Approximate historical opens as prior close (OmitNomis has no open column)
-            o_hist = np.array(hist_c[-n_hist:], dtype=np.float64)
+            # Prior-close-as-open: open[i] = close[i-1], preserving body directionality
+            # for multi-candle patterns (avoids open==close→body=0 that kills engulfing/star)
+            total_h = len(hist_c)
+            n_take  = min(n_hist, total_h)
+            o_hist  = np.array(
+                [hist_c[max(0, total_h - n_take - 1 + j)] for j in range(n_take)],
+                dtype=np.float64,
+            )
             h_hist = np.array(hist_h[-n_hist:] if hist_h else hist_c[-n_hist:], dtype=np.float64)
             l_hist = np.array(hist_l[-n_hist:] if hist_l else hist_c[-n_hist:], dtype=np.float64)
             c_hist = np.array(hist_c[-n_hist:], dtype=np.float64)
@@ -238,7 +246,12 @@ def _build_matrices(symbols: list, market_data: dict, cache) -> tuple:
             C_full_rows.append(np.array(hist_c + [today_c], dtype=np.float64))
         else:
             # Market closed — use last LOOKBACK historical candles, no duplicate append
-            o_hist = np.array(hist_c[-LOOKBACK:], dtype=np.float64)
+            total_h = len(hist_c)
+            n_take  = min(LOOKBACK, total_h)
+            o_hist  = np.array(
+                [hist_c[max(0, total_h - n_take - 1 + j)] for j in range(n_take)],
+                dtype=np.float64,
+            )
             h_hist = np.array(hist_h[-LOOKBACK:] if hist_h else hist_c[-LOOKBACK:], dtype=np.float64)
             l_hist = np.array(hist_l[-LOOKBACK:] if hist_l else hist_c[-LOOKBACK:], dtype=np.float64)
             c_hist = np.array(hist_c[-LOOKBACK:], dtype=np.float64)
@@ -290,17 +303,20 @@ def _detect_bullish_engulfing(symbols, O, H, L, C, V, C_full):
     prev_o, prev_c = O[:, -2], C[:, -2]
     curr_o, curr_c = O[:, -1], C[:, -1]
 
+    # 90% overlap threshold — relaxed for NEPSE thin liquidity
+    prev_body     = _body(prev_o, prev_c)
+    slack         = 0.10 * prev_body
     prev_bearish  = _is_bearish(prev_o, prev_c)
     curr_bullish  = _is_bullish(curr_o, curr_c)
-    engulfs       = (curr_o <= prev_c) & (curr_c >= prev_o)
-    vol_confirmed = _volume_ratio(V) >= VOLUME_SURGE_RATIO
+    engulfs       = (curr_o <= prev_c + slack) & (curr_c >= prev_o - slack)
+    vol_confirmed = _volume_ratio(V) >= MULTI_CANDLE_VOL_RATIO
     in_downtrend  = _is_downtrend(C_full, periods=3)
     big_body      = _body_ratio(curr_o, H[:, -1], L[:, -1], curr_c) > LONG_BODY_RATIO
 
     match = prev_bearish & curr_bullish & engulfs
     out = []
     for i in np.where(match)[0]:
-        conf = min(70 + 10*vol_confirmed[i] + 10*in_downtrend[i] + 5*big_body[i], 95)
+        conf = min(70 + 10*vol_confirmed[i] + 10*in_downtrend[i] + 5*big_body[i], 88)
         out.append((i, CandlePattern(
             symbol=symbols[i], name="Bullish Engulfing", signal="BULLISH",
             tier=1, confidence=int(conf),
@@ -318,17 +334,20 @@ def _detect_bearish_engulfing(symbols, O, H, L, C, V, C_full):
     prev_o, prev_c = O[:, -2], C[:, -2]
     curr_o, curr_c = O[:, -1], C[:, -1]
 
+    # 90% overlap threshold — relaxed for NEPSE thin liquidity
+    prev_body     = _body(prev_o, prev_c)
+    slack         = 0.10 * prev_body
     prev_bullish  = _is_bullish(prev_o, prev_c)
     curr_bearish  = _is_bearish(curr_o, curr_c)
-    engulfs       = (curr_o >= prev_c) & (curr_c <= prev_o)
-    vol_confirmed = _volume_ratio(V) >= VOLUME_SURGE_RATIO
+    engulfs       = (curr_o >= prev_c - slack) & (curr_c <= prev_o + slack)
+    vol_confirmed = _volume_ratio(V) >= MULTI_CANDLE_VOL_RATIO
     in_uptrend    = _is_uptrend(C_full, periods=3)
     big_body      = _body_ratio(curr_o, H[:, -1], L[:, -1], curr_c) > LONG_BODY_RATIO
 
     match = prev_bullish & curr_bearish & engulfs
     out = []
     for i in np.where(match)[0]:
-        conf = min(70 + 10*vol_confirmed[i] + 10*in_uptrend[i] + 5*big_body[i], 95)
+        conf = min(70 + 10*vol_confirmed[i] + 10*in_uptrend[i] + 5*big_body[i], 88)
         out.append((i, CandlePattern(
             symbol=symbols[i], name="Bearish Engulfing", signal="BEARISH",
             tier=1, confidence=int(conf),
@@ -427,7 +446,7 @@ def _detect_morning_star(symbols, O, H, L, C, V, C_full):
         _is_bullish(o3, c3) & (c3 >= midpoint1) &
         (body1 > 0) & (body3 > 0)
     )
-    vol_confirmed = _volume_ratio(V) >= VOLUME_SURGE_RATIO
+    vol_confirmed = _volume_ratio(V) >= MULTI_CANDLE_VOL_RATIO
     in_downtrend  = _is_downtrend(C_full, periods=3)
     strong_recov  = body3 >= sb1 * 0.8
 
@@ -465,7 +484,7 @@ def _detect_evening_star(symbols, O, H, L, C, V, C_full):
         _is_bearish(o3, c3) & (c3 <= midpoint1) &
         (body1 > 0) & (body3 > 0)
     )
-    vol_confirmed = _volume_ratio(V) >= VOLUME_SURGE_RATIO
+    vol_confirmed = _volume_ratio(V) >= MULTI_CANDLE_VOL_RATIO
     in_uptrend    = _is_uptrend(C_full, periods=3)
     strong_drop   = body3 >= sb1 * 0.8
 
@@ -534,7 +553,7 @@ def _detect_three_white_soldiers(symbols, O, H, L, C, V, C_full):
         (o2 > o1) & (o2 < c1) &
         (o3 > o2) & (o3 < c2)
     )
-    vol_confirmed = _volume_ratio(V) >= VOLUME_SURGE_RATIO
+    vol_confirmed = _volume_ratio(V) >= MULTI_CANDLE_VOL_RATIO
     in_downtrend  = _is_downtrend(C_full, periods=4)
 
     out = []
@@ -542,7 +561,7 @@ def _detect_three_white_soldiers(symbols, O, H, L, C, V, C_full):
         conf = min(68 + 10*in_downtrend[i] + 8*vol_confirmed[i], 88)
         out.append((i, CandlePattern(
             symbol=symbols[i], name="Three White Soldiers", signal="BULLISH",
-            tier=2, confidence=int(conf),
+            tier=1, confidence=int(conf),
             description=f"3 green: {c1[i]:.0f}>{c2[i]:.0f}>{c3[i]:.0f}. Bullish momentum.",
             volume_confirmed=bool(vol_confirmed[i]), candles_used=3,
         )))
@@ -566,7 +585,7 @@ def _detect_three_black_crows(symbols, O, H, L, C, V, C_full):
         (o2 >= c1) & (o2 <= o1) &           # open inside first body
         (o3 >= c2) & (o3 <= o2)              # open inside second body
     )
-    vol_confirmed = _volume_ratio(V) >= VOLUME_SURGE_RATIO
+    vol_confirmed = _volume_ratio(V) >= MULTI_CANDLE_VOL_RATIO
     in_uptrend    = _is_uptrend(C_full, periods=4)
 
     out = []
@@ -574,7 +593,7 @@ def _detect_three_black_crows(symbols, O, H, L, C, V, C_full):
         conf = min(68 + 10*in_uptrend[i] + 8*vol_confirmed[i], 88)
         out.append((i, CandlePattern(
             symbol=symbols[i], name="Three Black Crows", signal="BEARISH",
-            tier=2, confidence=int(conf),
+            tier=1, confidence=int(conf),
             description=f"3 red: {c1[i]:.0f}<{c2[i]:.0f}<{c3[i]:.0f}. Bearish momentum.",
             volume_confirmed=bool(vol_confirmed[i]), candles_used=3,
         )))
@@ -1070,7 +1089,14 @@ if __name__ == "__main__":
         from modules.scraper import PriceRow
         from sheets import run_raw_sql
         from calendar_guard import today_nst
-        today_str = today_nst().isoformat()
+
+        # --date YYYY-MM-DD overrides today
+        date_idx = next((i for i, a in enumerate(args) if a == "--date"), None)
+        if date_idx is not None and date_idx + 1 < len(args):
+            today_str = args[date_idx + 1]
+        else:
+            today_str = today_nst().isoformat()
+
         rows = run_raw_sql(
             "SELECT symbol, open, high, low, close, ltp, volume FROM price_history WHERE date = %s",
             (today_str,),
@@ -1102,8 +1128,18 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"  price_history query failed: {e}"); sys.exit(1)
 
-    # Filter to specific symbols if passed
-    sym_args = [a for a in args if not a.startswith("--")]
+    # Filter to specific symbols if passed (exclude date value that follows --date)
+    skip_next = False
+    sym_args = []
+    for a in args:
+        if skip_next:
+            skip_next = False
+            continue
+        if a == "--date":
+            skip_next = True
+            continue
+        if not a.startswith("--"):
+            sym_args.append(a)
     if sym_args:
         req = {a.upper() for a in sym_args}
         market_data = {k: v for k, v in market_data.items() if k in req}
