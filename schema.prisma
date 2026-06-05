@@ -1640,6 +1640,31 @@ model broker_holdings {
 
 
 // ─────────────────────────────────────────────────────────────────────────────
+// FILTER CANDIDATES LOG — symbols that passed filter_engine each trading day
+// Written by filter_engine._log_filter_candidates() just before Gemini hand-off.
+// Append-only instrumentation — never deleted, never updated for logic.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model filter_candidates_log {
+  id              Serial
+  date            Text!
+  symbol          Text!
+  sector          Text
+  composite_score Float
+  primary_signal  Text
+  tech_score      Float
+  macro_score     Float
+  market_state    Text
+  pass_count      Int    @default(1)
+  last_seen       DateTime @db.Timestamptz
+  created_at      DateTime @default(now()) @db.Timestamptz
+
+  @@unique([symbol, date])
+  @@index([date])
+  @@index([symbol])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // STEALTH ACCUMULATION SIGNALS
 // Populated daily by stat_method/hidden_accum_scanner.py after EOD scrape.
 // Tracks quiet broker accumulation → trigger → close lifecycle.

@@ -1916,7 +1916,51 @@ def run_filter(
     for c in top:
         logger.info("  %s", c.summary())
 
+    _log_filter_candidates(top, date)
+
     return top
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 7.5 — FILTER CANDIDATE LOGGING
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _log_filter_candidates(candidates: list, date: str) -> None:
+    """
+    Upsert every candidate into filter_candidates_log.
+    ON CONFLICT (symbol, date): increment pass_count, refresh scores and last_seen.
+    Never raises — append-only instrumentation.
+    """
+    if not candidates:
+        return
+    try:
+        from sheets import run_raw_sql
+        sql = """
+            INSERT INTO filter_candidates_log
+                (date, symbol, sector, composite_score, primary_signal,
+                 tech_score, macro_score, market_state, last_seen)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, now())
+            ON CONFLICT (symbol, date) DO UPDATE SET
+                pass_count      = filter_candidates_log.pass_count + 1,
+                last_seen       = now(),
+                composite_score = EXCLUDED.composite_score,
+                tech_score      = EXCLUDED.tech_score,
+                macro_score     = EXCLUDED.macro_score
+        """
+        for c in candidates:
+            run_raw_sql(sql, (
+                date,
+                c.symbol,
+                c.sector or None,
+                float(c.composite_score),
+                c.primary_signal or None,
+                float(c.tech_score),
+                float(c.combined_geo),   # macro_score = combined geo+nepal context score
+                c.market_state or None,
+            ))
+        logger.info("_log_filter_candidates: logged %d candidates for %s", len(candidates), date)
+    except Exception as exc:
+        logger.warning("_log_filter_candidates failed (%s) — skipping", exc)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 8 — HELPERS FOR gemini_filter.py

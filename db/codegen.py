@@ -25,13 +25,91 @@ TAB_KEY_OVERRIDES = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Prisma type → PostgreSQL type mapping
+# Handles the typed columns (Float, Int, DateTime) used alongside the
+# project's custom Text!/Text/Serial shorthand types.
+# ---------------------------------------------------------------------------
+
+def _sql_type(field_type: str, attrs: str) -> str:
+    """Return the PostgreSQL column type for a Prisma field."""
+    base = field_type.rstrip('!?')
+
+    # @db.* overrides — checked first
+    db_m = re.search(r'@db\.(\w+)(?:\((\d+)\))?', attrs)
+    db_kind = db_m.group(1) if db_m else None
+    db_arg  = db_m.group(2) if db_m else None
+
+    if base in ('Text', 'String', 'Boolean'):
+        if db_kind == 'VarChar' and db_arg:
+            return f'VARCHAR({db_arg})'
+        return 'TEXT'
+
+    if base == 'Float':
+        return 'DECIMAL' if db_kind == 'Decimal' else 'FLOAT'
+
+    if base == 'Int':
+        return 'INTEGER'
+
+    if base == 'DateTime':
+        if db_kind == 'Date':
+            return 'DATE'
+        return 'TIMESTAMPTZ'
+
+    # serial (lowercase) used in international_prices
+    if base == 'serial':
+        return 'SERIAL'
+
+    return 'TEXT'
+
+
+def _parse_default(attrs: str) -> tuple:
+    """
+    Extract the default value from @default(...).
+    Returns (default_value, is_expr) where is_expr=True means emit without quotes.
+
+    Examples:
+      @default("sharesansar")  → ("sharesansar", False)  → DEFAULT 'sharesansar'
+      @default("1")            → ("1", False)            → DEFAULT '1'
+      @default(1)              → ("1", True)             → DEFAULT 1
+      @default(1.0)            → ("1.0", True)           → DEFAULT 1.0
+      @default(now())          → ("NOW()", True)          → DEFAULT NOW()
+      @default(autoincrement())→ (None, False)            → (handled as SERIAL)
+    """
+    # Known function calls — must be matched before the generic [^)]+ pattern
+    # because [^)]+ stops at the first ) and would capture "now(" instead of "now()"
+    if '@default(now())' in attrs:
+        return 'NOW()', True
+    if '@default(autoincrement())' in attrs:
+        return None, False  # handled by SERIAL / @id logic
+
+    # Quoted string: @default("val") or @default('val')
+    m = re.search(r'@default\("([^"]+)"\)', attrs) or re.search(r"@default\('([^']+)'\)", attrs)
+    if m:
+        return m.group(1), False
+
+    # Unquoted scalar value: @default(number or identifier)
+    m = re.search(r'@default\(([^)]+)\)', attrs)
+    if not m:
+        return None, False
+
+    val = m.group(1).strip()
+
+    if re.match(r'^-?[0-9][0-9.]*$', val):
+        return val, True   # numeric literal — no quotes
+
+    # Unquoted non-numeric — treat as SQL expression
+    return val, True
+
+
 def parse_prisma(text: str) -> list:
     """
     Parse all model blocks from schema.prisma.
     Returns list of dicts:
         {
             name:    str,
-            fields:  list of {name, required, is_serial, is_pk, default},
+            fields:  list of {name, field_type, attrs, required, is_serial, is_pk,
+                               default, default_is_expr},
             uniques: list of list[str],
             indexes: list of list[str],
         }
@@ -71,6 +149,10 @@ def parse_prisma(text: str) -> list:
                 indexes.append(cols)
                 continue
 
+            # @@map(...)  — table name alias, skip
+            if line.startswith('@@map('):
+                continue
+
             # Field line: name  Type  [annotations]
             parts = line.split()
             if len(parts) < 2:
@@ -80,28 +162,26 @@ def parse_prisma(text: str) -> list:
             field_type = parts[1]
             attrs      = ' '.join(parts[2:])
 
-            is_serial = field_type == 'Serial'
-            is_pk     = is_serial or '@id' in attrs
-            required  = field_type.endswith('!') or is_pk
+            is_serial  = field_type in ('Serial', 'serial')
+            is_pk      = is_serial or '@id' in attrs
+            required   = field_type.endswith('!') or is_pk
             has_unique = '@unique' in attrs
 
-            default_m = re.search(r'@default\("([^"]+)"\)', attrs)
-            if not default_m:
-                default_m = re.search(r"@default\('([^']+)'\)", attrs)
-            if not default_m:
-                default_m = re.search(r'@default\(([0-9][0-9.]*)\)', attrs)  # unquoted numeric
-            default = default_m.group(1) if default_m else None
+            default, default_is_expr = _parse_default(attrs)
 
             # @unique on a field = single-col unique constraint
             if has_unique and not is_serial:
                 uniques.append([field_name])
 
             fields.append({
-                'name':      field_name,
-                'required':  required,
-                'is_serial': is_serial,
-                'is_pk':     is_pk,
-                'default':   default,
+                'name':            field_name,
+                'field_type':      field_type,
+                'attrs':           attrs,
+                'required':        required,
+                'is_serial':       is_serial,
+                'is_pk':           is_pk,
+                'default':         default,
+                'default_is_expr': default_is_expr,
             })
 
         models.append({
@@ -122,16 +202,34 @@ def model_to_ddl(model: dict) -> str:
     col_lines = []
 
     for f in fields:
-        col = f['name']
+        col        = f['name']
+        field_type = f['field_type']
+        attrs      = f['attrs']
+
         if f['is_serial']:
             col_lines.append(f'        {col} SERIAL PRIMARY KEY')
             continue
+
         if f['is_pk'] and not f['is_serial']:
-            col_lines.append(f'        {col} TEXT NOT NULL PRIMARY KEY')
+            # Int @id @default(autoincrement()) → SERIAL PRIMARY KEY
+            # Everything else → TEXT NOT NULL PRIMARY KEY (existing behaviour)
+            base = field_type.rstrip('!?')
+            if base == 'Int':
+                col_lines.append(f'        {col} SERIAL PRIMARY KEY')
+            else:
+                col_lines.append(f'        {col} TEXT NOT NULL PRIMARY KEY')
             continue
+
+        sql_t        = _sql_type(field_type, attrs)
         null_part    = ' NOT NULL' if f['required'] else ''
-        default_part = f" DEFAULT '{f['default']}'" if f['default'] else ''
-        col_lines.append(f'        {col} TEXT{null_part}{default_part}')
+        default      = f['default']
+        default_part = ''
+        if default is not None:
+            if f['default_is_expr']:
+                default_part = f' DEFAULT {default}'       # e.g., DEFAULT NOW(), DEFAULT 1
+            else:
+                default_part = f" DEFAULT '{default}'"     # e.g., DEFAULT 'sharesansar'
+        col_lines.append(f'        {col} {sql_t}{null_part}{default_part}')
 
     # Only auto-add inserted_at if the model doesn't already define it explicitly
     field_names = {f['name'] for f in fields}

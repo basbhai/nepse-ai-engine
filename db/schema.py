@@ -58,6 +58,7 @@ TABS: dict[str, str] = {
     "wait_parse_log": "wait_parse_log",
     "broker_flow": "broker_flow",
     "broker_holdings": "broker_holdings",
+    "filter_candidates_log": "filter_candidates_log",
     "stealth_signals": "stealth_signals",
 }
 
@@ -442,46 +443,46 @@ TABLE_DDL: dict[str, str] = {
 
     "fundamentals": """
     CREATE TABLE IF NOT EXISTS "fundamentals" (
-        id TEXT NOT NULL PRIMARY KEY,
+        id SERIAL PRIMARY KEY,
         symbol TEXT,
-        stock_id TEXT,
+        stock_id INTEGER,
         fiscal_year TEXT,
         quarter TEXT,
-        eps TEXT,
-        net_worth TEXT,
-        roe TEXT,
-        roa TEXT,
-        paidup_capital TEXT,
-        reserve TEXT,
-        total_assets TEXT,
-        total_liabilities TEXT,
-        deposit TEXT,
-        loan TEXT,
-        net_interest_income TEXT,
-        operating_profit TEXT,
-        net_profit TEXT,
-        npl TEXT,
-        capital_fund_to_rwa TEXT,
-        cost_of_fund TEXT,
-        base_rate TEXT,
-        interest_spread TEXT,
-        cd_ratio TEXT,
-        dps TEXT,
-        sector_id TEXT,
-        promoter_shares TEXT,
-        public_shares TEXT,
+        eps FLOAT,
+        net_worth FLOAT,
+        roe FLOAT,
+        roa FLOAT,
+        paidup_capital FLOAT,
+        reserve FLOAT,
+        total_assets FLOAT,
+        total_liabilities FLOAT,
+        deposit FLOAT,
+        loan FLOAT,
+        net_interest_income FLOAT,
+        operating_profit FLOAT,
+        net_profit FLOAT,
+        npl FLOAT,
+        capital_fund_to_rwa FLOAT,
+        cost_of_fund FLOAT,
+        base_rate FLOAT,
+        interest_spread FLOAT,
+        cd_ratio FLOAT,
+        dps FLOAT,
+        sector_id INTEGER,
+        promoter_shares FLOAT,
+        public_shares FLOAT,
         share_registar TEXT,
         is_delisted TEXT,
         is_merged TEXT,
-        core_capital TEXT,
-        gram_value TEXT,
-        prev_quarter_profit TEXT,
-        growth_rate TEXT,
-        close TEXT,
-        discount_rate TEXT,
-        pe_ratio TEXT,
-        peg_value TEXT,
-        scraped_at TEXT,
+        core_capital FLOAT,
+        gram_value FLOAT,
+        prev_quarter_profit FLOAT,
+        growth_rate FLOAT,
+        close FLOAT,
+        discount_rate FLOAT,
+        pe_ratio FLOAT,
+        peg_value FLOAT,
+        scraped_at TIMESTAMPTZ DEFAULT NOW(),
         inserted_at TIMESTAMPTZ DEFAULT NOW(),
         CONSTRAINT ux_fundamentals_symbol_fiscal_year_quarter UNIQUE (symbol, fiscal_year, quarter)
     );
@@ -493,15 +494,15 @@ TABLE_DDL: dict[str, str] = {
 
     "fundamental_beta": """
     CREATE TABLE IF NOT EXISTS "fundamental_beta" (
-        id TEXT NOT NULL PRIMARY KEY,
-        symbol TEXT,
-        beta TEXT,
-        market_corr TEXT,
-        market_corr_p TEXT,
-        n_months TEXT,
-        period_start TEXT,
-        period_end TEXT,
-        computed_date TEXT,
+        id SERIAL PRIMARY KEY,
+        symbol VARCHAR(20),
+        beta FLOAT,
+        market_corr FLOAT,
+        market_corr_p FLOAT,
+        n_months INTEGER,
+        period_start TIMESTAMPTZ,
+        period_end TIMESTAMPTZ,
+        computed_date DATE DEFAULT NOW(),
         inserted_at TIMESTAMPTZ DEFAULT NOW(),
         CONSTRAINT ux_fundamental_beta_symbol_computed_date UNIQUE (symbol, computed_date)
     );
@@ -741,7 +742,7 @@ TABLE_DDL: dict[str, str] = {
         last_validated TEXT,
         validation_count TEXT,
         trade_journal_ids TEXT,
-        source_weight TEXT DEFAULT '1.0',
+        source_weight FLOAT DEFAULT 1.0,
         inserted_at TIMESTAMPTZ DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS ix_learning_hub_symbol
@@ -1028,11 +1029,11 @@ TABLE_DDL: dict[str, str] = {
 
     "international_prices": """
     CREATE TABLE IF NOT EXISTS "international_prices" (
-        id TEXT,
-        date TEXT,
-        variable_name TEXT,
-        close_price TEXT,
-        source TEXT DEFAULT 'yfinance',
+        id SERIAL PRIMARY KEY,
+        date DATE,
+        variable_name VARCHAR(20),
+        close_price DECIMAL,
+        source VARCHAR(50) DEFAULT 'yfinance',
         inserted_at TIMESTAMPTZ DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS ix_international_prices_date_variable_name
@@ -1042,7 +1043,7 @@ TABLE_DDL: dict[str, str] = {
     "share_sectors": """
     CREATE TABLE IF NOT EXISTS "share_sectors" (
         id SERIAL PRIMARY KEY,
-        externalid TEXT,
+        externalid INTEGER,
         companyname TEXT,
         symbol TEXT,
         securityname TEXT,
@@ -1388,7 +1389,7 @@ TABLE_DDL: dict[str, str] = {
     CREATE TABLE IF NOT EXISTS "monthly_override" (
         id SERIAL PRIMARY KEY,
         run_month TEXT NOT NULL,
-        confidence_score TEXT,
+        confidence_score INTEGER,
         buy_blocked TEXT DEFAULT 'false',
         market_state TEXT,
         stop_trigger TEXT,
@@ -1403,7 +1404,7 @@ TABLE_DDL: dict[str, str] = {
     CREATE TABLE IF NOT EXISTS "accuracy_review_log" (
         id SERIAL PRIMARY KEY,
         run_month TEXT NOT NULL,
-        trade_count TEXT,
+        trade_count INTEGER,
         signal_accuracy TEXT,
         sector_accuracy TEXT,
         market_state_accuracy TEXT,
@@ -1445,7 +1446,7 @@ TABLE_DDL: dict[str, str] = {
 
     "news_effect_patterns": """
     CREATE TABLE IF NOT EXISTS "news_effect_patterns" (
-        id TEXT NOT NULL PRIMARY KEY,
+        id SERIAL PRIMARY KEY,
         event_type TEXT,
         event_category TEXT DEFAULT 'POLITICAL',
         lag_start TEXT,
@@ -1461,7 +1462,7 @@ TABLE_DDL: dict[str, str] = {
         superseded_by TEXT,
         active TEXT DEFAULT 'true',
         notes TEXT,
-        inserted_at TEXT
+        inserted_at TIMESTAMPTZ DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS ix_news_effect_patterns_event_type
         ON "news_effect_patterns" (event_type);
@@ -1473,7 +1474,7 @@ TABLE_DDL: dict[str, str] = {
 
     "pattern_validation_log": """
     CREATE TABLE IF NOT EXISTS "pattern_validation_log" (
-        id TEXT NOT NULL PRIMARY KEY,
+        id SERIAL PRIMARY KEY,
         event_type TEXT,
         event_date TEXT,
         event_cluster_id TEXT,
@@ -1492,7 +1493,7 @@ TABLE_DDL: dict[str, str] = {
         escalated_from TEXT,
         scored_by TEXT DEFAULT 'pending',
         scored_at TEXT,
-        inserted_at TEXT
+        inserted_at TIMESTAMPTZ DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS ix_pattern_validation_log_event_type
         ON "pattern_validation_log" (event_type);
@@ -1626,6 +1627,29 @@ TABLE_DDL: dict[str, str] = {
         ON "broker_holdings" (stealth_score);
     """,
 
+    "filter_candidates_log": """
+    CREATE TABLE IF NOT EXISTS "filter_candidates_log" (
+        id SERIAL PRIMARY KEY,
+        date TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        sector TEXT,
+        composite_score FLOAT,
+        primary_signal TEXT,
+        tech_score FLOAT,
+        macro_score FLOAT,
+        market_state TEXT,
+        pass_count INTEGER DEFAULT 1,
+        last_seen TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        inserted_at TIMESTAMPTZ DEFAULT NOW(),
+        CONSTRAINT ux_filter_candidates_log_symbol_date UNIQUE (symbol, date)
+    );
+    CREATE INDEX IF NOT EXISTS ix_filter_candidates_log_date
+        ON "filter_candidates_log" (date);
+    CREATE INDEX IF NOT EXISTS ix_filter_candidates_log_symbol
+        ON "filter_candidates_log" (symbol);
+    """,
+
     "stealth_signals": """
     CREATE TABLE IF NOT EXISTS "stealth_signals" (
         id SERIAL PRIMARY KEY,
@@ -1695,7 +1719,7 @@ TABLE_COLUMNS: dict[str, list[str]] = {
     "daily_context_log": ["date", "geo_score_eod", "nepal_score_eod", "combined_score_eod", "nepse_index_eod", "nepse_change_pct", "dxy_value", "dxy_change_pct", "market_state", "advancing", "declining", "breadth_score", "total_turnover_npr", "policy_rate", "fd_rate_pct", "lending_rate", "bop_status", "overall_sentiment", "key_events_summary", "nepal_pulse_highlights", "geo_summary", "nrb_macro_summary", "signals_summary", "buy_count", "wait_count", "avoid_count", "gate_miss_count", "gate_top_category", "gate_false_block_pct", "signals_avg_confidence", "headlines_political", "headlines_economy", "headlines_nepse", "source", "backfilled", "created_at"],
     "fd_rates": ["fetch_date", "institute_code", "institute_name", "product_name", "interest_rate", "interest_pct", "tenure_label", "tenure_months", "tenure_category", "minimum_balance", "institute_type", "source"],
     "fd_rate_summary": ["fetch_date", "avg_rate_pct", "max_rate_pct", "min_rate_pct", "benchmark_rate_pct", "benchmark_products", "best_bank_name", "best_bank_rate", "best_tenure", "rate_vs_prev_pct", "rate_direction", "fd_score_signal", "total_products"],
-    "international_prices": ["id", "date", "variable_name", "close_price", "source"],
+    "international_prices": ["date", "variable_name", "close_price", "source"],
     "share_sectors": ["externalid", "companyname", "symbol", "securityname", "status", "companyemail", "website", "sectorname", "regulatorybody", "instrumenttype"],
     "paper_users": ["telegram_id", "username", "full_name", "status", "registered_at", "approved_at", "approved_by"],
     "paper_capital": ["telegram_id", "starting_capital", "current_capital", "total_realised_pnl", "total_fees_paid", "total_cgt_paid", "total_trades", "total_wins", "total_losses", "last_updated", "test_mode"],
@@ -1719,5 +1743,6 @@ TABLE_COLUMNS: dict[str, list[str]] = {
     "wait_parse_log": ["market_log_id", "parsed_at", "raw_condition", "parsed_json", "model_used"],
     "broker_flow": ["date", "symbol", "name", "acc_broker_count_1d", "acc_amount_1d", "acc_qty_1d", "acc_top_broker_1d", "acc_top_broker_pct_1d", "dist_broker_count_1d", "dist_amount_1d", "dist_qty_1d", "dist_top_broker_1d", "dist_top_broker_pct_1d", "net_flow_1d", "flow_bias_1d", "acc_broker_count_1w", "acc_amount_1w", "acc_qty_1w", "acc_top_broker_1w", "acc_top_broker_pct_1w", "dist_broker_count_1w", "dist_amount_1w", "dist_qty_1w", "dist_top_broker_1w", "dist_top_broker_pct_1w", "net_flow_1w", "flow_bias_1w", "acc_brokers_1d_json", "dist_brokers_1d_json", "acc_brokers_1w_json", "created_at"],
     "broker_holdings": ["date", "symbol", "name", "total_involved_brokers", "top3_holding_pct", "total_qty", "hold_qty", "hold_pct", "public_trade_pct", "stealth_score", "ltp", "change", "change_pct", "top_broker_1_name", "top_broker_1_code", "top_broker_1_hold", "top_broker_1_pct", "top_broker_2_name", "top_broker_2_code", "top_broker_2_hold", "top_broker_2_pct", "top_broker_3_name", "top_broker_3_code", "top_broker_3_hold", "top_broker_3_pct", "top_brokers_json", "created_at"],
+    "filter_candidates_log": ["date", "symbol", "sector", "composite_score", "primary_signal", "tech_score", "macro_score", "market_state", "pass_count", "last_seen", "created_at"],
     "stealth_signals": ["symbol", "broker_id", "broker_name", "signal_date", "streak_days", "vol_ratio", "price_range", "entry_price", "status", "trigger_date", "trigger_price", "trigger_type", "trigger_vol_ratio", "close_date", "close_price", "return_pct", "window_days", "vol_thresh", "price_thresh", "streak_thresh", "created_at", "updated_at"],
 }
