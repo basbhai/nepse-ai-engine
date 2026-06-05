@@ -1924,22 +1924,43 @@ def run_filter(
 # SECTION 7.5 — FILTER CANDIDATE LOGGING
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _log_filter_candidates(candidates, date):
-    from db.schema import _db
+def _log_filter_candidates(candidates: list, date: str) -> None:
+    """
+    Log all filter candidates passed to Gemini each cycle.
+    Upserts on (symbol, date) — increments pass_count on repeat appearances.
+    Uses execute_dml from sheets (never from db directly).
+    Fails silently — logging must never break the trading pipeline.
+    """
+    if not candidates:
+        return
     try:
-        with _db() as cur:
-            for c in candidates:
-                cur.execute("""
-                    INSERT INTO filter_candidates_log
-                        (date, symbol, sector, composite_score, primary_signal, tech_score, macro_score, market_state, last_seen)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, now())
-                    ON CONFLICT (symbol, date) DO UPDATE SET
-                        pass_count = filter_candidates_log.pass_count + 1,
-                        last_seen = now(),
-                        composite_score = EXCLUDED.composite_score,
-                        tech_score = EXCLUDED.tech_score,
-                        macro_score = EXCLUDED.macro_score
-                """, (date, c.symbol, c.sector, c.composite_score, c.primary_signal, c.tech_score, c.macro_score, c.market_state))
+        from sheets import execute_dml
+        for c in candidates:
+            execute_dml(
+                """
+                INSERT INTO filter_candidates_log
+                    (date, symbol, sector, composite_score, primary_signal,
+                     tech_score, macro_score, market_state, last_seen)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, now())
+                ON CONFLICT (symbol, date) DO UPDATE SET
+                    pass_count      = filter_candidates_log.pass_count + 1,
+                    last_seen       = now(),
+                    composite_score = EXCLUDED.composite_score,
+                    tech_score      = EXCLUDED.tech_score,
+                    macro_score     = EXCLUDED.macro_score
+                """,
+                (
+                    date,
+                    c.symbol,
+                    c.sector,
+                    c.composite_score,
+                    c.primary_signal,
+                    float(c.tech_score),
+                    float(c.nepal_score),
+                    c.market_state,
+                ),
+            )
+        logger.info("filter_candidates_log: wrote %d candidates", len(candidates))
     except Exception as e:
         logger.warning("filter_candidates_log write failed: %s", e)
 

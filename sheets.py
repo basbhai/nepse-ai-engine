@@ -1287,3 +1287,31 @@ def run_raw_sql(sql: str, params: tuple = None) -> list[dict]:
     except Exception as e:
         log.error("run_raw_sql failed: %s", e)
         return []
+
+
+def execute_dml(sql: str, params: tuple = None) -> bool:
+    """
+    Execute a DML statement (INSERT/UPDATE/DELETE) that returns no rows.
+    Use this when run_raw_sql() fails because fetchall() errors on non-SELECT.
+
+    Args:
+        sql:    SQL string with %s placeholders
+        params: Parameters tuple
+
+    Returns:
+        True on success, False on failure
+
+    Example:
+        execute_dml(
+            "INSERT INTO filter_candidates_log (date, symbol) VALUES (%s, %s)"
+            " ON CONFLICT (symbol, date) DO UPDATE SET pass_count = filter_candidates_log.pass_count + 1",
+            ("2026-06-05", "NABIL")
+        )
+    """
+    try:
+        with _db() as cur:
+            cur.execute(sql, params)
+        return True
+    except Exception as e:
+        log.error("execute_dml failed: %s", e)
+        return False
