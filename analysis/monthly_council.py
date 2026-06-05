@@ -527,6 +527,16 @@ def _fetch_audit_summary() -> str:
         return ""
 
 
+def _fetch_research_findings() -> str:
+    """Latest quantitative research findings for council context."""
+    try:
+        from sheets import get_setting
+        val = get_setting("RESEARCH_FINDINGS_2026_06", "")
+        return val[:800] if val else ""
+    except Exception:
+        return ""
+
+
 _ENRICHER_FETCHERS = {
     "trade_journal_summary":    _fetch_trade_summary,
     "open_positions_by_sector": _fetch_open_positions,
@@ -534,6 +544,7 @@ _ENRICHER_FETCHERS = {
     "market_breadth_30d":       _fetch_breadth_summary,
     "nrb_monthly_latest":       _fetch_nrb_summary,
     "claude_audit_history":     _fetch_audit_summary,
+    "research_findings_2026_06": _fetch_research_findings,
     # learning_hub_active has no compact fetcher — silently skipped when requested
 }
 
@@ -547,7 +558,8 @@ _ENRICH_PROMPT = (
     "- market_breadth_30d\n"
     "- nrb_monthly_latest\n"
     "- learning_hub_active\n"
-    "- claude_audit_history\n\n"
+    "- claude_audit_history\n"
+    "- research_findings_2026_06\n\n"
     'Agenda item: "{item}"\n\n'
     "Return ONLY a valid JSON array, nothing else. Example: [\"trade_journal_summary\"]\n"
     "If no data needed return: []"
