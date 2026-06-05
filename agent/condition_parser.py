@@ -187,13 +187,13 @@ def _store_parsed(market_log_id: int, parsed: dict, raw_condition: str, model_us
     2. INSERT one row into wait_parse_log for audit.
     Fails silently.
     """
-    from sheets import run_raw_sql, write_row
+    from sheets import execute_dml, write_row
 
     now_nst   = datetime.now(tz=NST).strftime("%Y-%m-%d %H:%M:%S")
     json_blob = json.dumps(parsed)
 
     try:
-        run_raw_sql(
+        execute_dml(
             "UPDATE market_log SET wait_condition_parsed = %s WHERE id = %s",
             (json_blob, market_log_id),
         )
