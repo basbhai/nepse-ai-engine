@@ -874,6 +874,56 @@ def run_gemini_filter(
     except Exception as exc:
         logger.warning("Dedup check failed — proceeding without filter: %s", exc)
 
+    # Sector concentration gate — belt-and-suspenders for externally provided candidates
+    _sector_counts  = context.get("sector_position_counts", {})
+    _max_per_sector = context.get("max_positions_per_sector", 2)
+    if _sector_counts:
+        _before = len(candidates)
+        _filtered: list = []
+        for _c in candidates:
+            _sec = (_c.sector or "").lower().strip()
+            _cnt = _sector_counts.get(_sec, 0) if _sec else 0
+            if _sec and _cnt >= _max_per_sector:
+                logger.info(
+                    "SECTOR_CONCENTRATION: %s sector=%s count=%d>=%d — excluded pre-Gemini",
+                    _c.symbol, _sec, _cnt, _max_per_sector,
+                )
+                try:
+                    from sheets import upsert_row as _upsert_row
+                    _today_sc = datetime.now(tz=NST).strftime("%Y-%m-%d")
+                    _upsert_row(
+                        "gate_misses",
+                        {
+                            "symbol":                   _c.symbol,
+                            "sector":                   _c.sector,
+                            "date":                     _today_sc,
+                            "gate_reason":              f"SECTOR_LIMIT={_sec}:{_cnt}>={_max_per_sector}",
+                            "gate_category":            "SECTOR_CONCENTRATION",
+                            "price_at_block":           str(_c.ltp),
+                            "market_state":             _c.market_state,
+                            "tech_score":               str(_c.tech_score),
+                            "conf_score":               str(_c.conf_score),
+                            "composite_score_would_be": str(_c.composite_score),
+                            "volume_os_ratio":          str(getattr(_c, "volume_os_ratio", 0.0)),
+                            "vwap_dev":                 str(getattr(_c, "vwap_dev",        0.0)),
+                            "bid_ask_ratio":            str(getattr(_c, "bid_ask_ratio",   0.0)),
+                            "dpr_proximity":            str(getattr(_c, "dpr_proximity",   0.0)),
+                            "outcome":                  None,
+                            "tracking_days":            "0",
+                        },
+                        conflict_columns=["symbol", "date"],
+                    )
+                except Exception as _exc:
+                    logger.warning("SECTOR_CONCENTRATION gate_miss write failed: %s", _exc)
+            else:
+                _filtered.append(_c)
+        if len(_filtered) < _before:
+            logger.info(
+                "Sector concentration gate: removed %d candidates pre-Gemini",
+                _before - len(_filtered),
+            )
+        candidates = _filtered
+
     logger.info(
         "Portfolio: %d open | %d slots | capital NPR %.0f | %d lessons loaded",
         len(open_positions), slots_remaining, total_capital, len(lessons),

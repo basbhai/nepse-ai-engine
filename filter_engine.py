@@ -302,6 +302,7 @@ def _categorize_gate_reason(reason: str) -> str:
     if "VOS=" in r and "<" in r:        return "ILLIQUID"
     if r.startswith("BROKER_FLOW"):     return "BROKER_FLOW"
     if "DPR_PROXIMITY" in r:           return "DPR_UPPER"
+    if "SECTOR_LIMIT" in r:            return "SECTOR_CONCENTRATION"
     return "OTHER"
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 1 — CONTEXT LOADER
@@ -315,15 +316,17 @@ def _load_context() -> dict:
     All defaults to safe/neutral values on failure.
     """
     ctx = {
-        "geo_score":      0,
-        "nepal_score":    0,
-        "combined_geo":   0,
-        "bandh_today":    "NO",
-        "crisis_detected":"NO",
-        "ipo_drain":      "NO",
-        "market_state":   "SIDEWAYS",
-        "loss_streak":    0,
-        "rf_rate_annual": RF_ANNUAL_PCT,
+        "geo_score":               0,
+        "nepal_score":             0,
+        "combined_geo":            0,
+        "bandh_today":             "NO",
+        "crisis_detected":         "NO",
+        "ipo_drain":               "NO",
+        "market_state":            "SIDEWAYS",
+        "loss_streak":             0,
+        "rf_rate_annual":          RF_ANNUAL_PCT,
+        "sector_position_counts":  {},
+        "max_positions_per_sector": 2,
     }
     try:
         from sheets import get_latest_geo, get_latest_pulse, get_setting, read_tab
@@ -375,6 +378,30 @@ def _load_context() -> dict:
             ctx["max_positions"] = int(get_setting("MAX_POSITIONS", "3"))
         except Exception:
             ctx["max_positions"] = 3
+
+        try:
+            from sheets import run_raw_sql as _run_raw_sql
+            _pos_rows = _run_raw_sql(
+                """
+                SELECT pp.symbol, ss.sectorname AS sector
+                FROM paper_portfolio pp
+                LEFT JOIN share_sectors ss ON ss.symbol = pp.symbol
+                WHERE pp.status = 'OPEN' AND pp.test_mode = 'false'
+                """
+            )
+            _sec_counts: dict[str, int] = {}
+            for _p in (_pos_rows or []):
+                _sec = str(_p.get("sector", "") or "").lower().strip()
+                if _sec:
+                    _sec_counts[_sec] = _sec_counts.get(_sec, 0) + 1
+            ctx["sector_position_counts"] = _sec_counts
+        except Exception:
+            ctx["sector_position_counts"] = {}
+
+        try:
+            ctx["max_positions_per_sector"] = int(get_setting("MAX_POSITIONS_PER_SECTOR", "2"))
+        except Exception:
+            ctx["max_positions_per_sector"] = 2
 
         try:
             ctx["gemini_max_candidates"] = int(get_setting("GEMINI_MAX_CANDIDATES", "10"))
@@ -628,6 +655,13 @@ def _check_symbol_gates(
     history_days = int(ind.get("history_days", 0) or 0)
     if history_days < MIN_HISTORY_DAYS:
         return False, f"HISTORY={history_days}<{MIN_HISTORY_DAYS}"
+
+    sector_lc = str(ind.get("sector", "") or getattr(price_row, "sector", "") or "").lower().strip()
+    if sector_lc:
+        sec_count      = ctx.get("sector_position_counts", {}).get(sector_lc, 0)
+        max_per_sector = ctx.get("max_positions_per_sector", 2)
+        if sec_count >= max_per_sector:
+            return False, f"SECTOR_LIMIT={sector_lc}:{sec_count}>={max_per_sector}"
 
     tech_score = int(ind.get("tech_score", 0) or 0)
     threshold  = ctx.get("tech_thresholds", TECH_SCORE_THRESHOLDS).get(ctx["market_state"], DEFAULT_TECH_THRESHOLD)
