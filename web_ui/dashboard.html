@@ -7,7 +7,8 @@
   <title>NEPSE AI Engine</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Roboto:wght@400;500&family=Roboto+Mono:wght@400;600&display=swap"
+  <link
+    href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Roboto:wght@400;500&family=Roboto+Mono:wght@400;600&display=swap"
     rel="stylesheet" />
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -2054,12 +2055,18 @@
     <!-- Logs Section -->
     <div class="section" id="s-logs" style="background:#1e1e1e;border-radius:8px;padding:16px;">
       <div class="section-header" style="border-bottom-color:#2c2c2c;">
-        <h2 style="font-family:'Roboto',sans-serif;color:#e0e0e0;font-size:14px;font-weight:500;letter-spacing:0.1em;text-transform:uppercase;">📋 Run Logs</h2>
-        <select id="logs-dropdown" style="background:#2c2c2c;color:#e0e0e0;border:1px solid #424242;border-radius:4px;padding:8px 32px 8px 12px;font-family:'Roboto',sans-serif;font-size:13px;appearance:none;-webkit-appearance:none;background-image:url('data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2212%22 height=%228%22 viewBox=%220 0 12 8%22><path fill=%22%2300d97e%22 d=%22M0 0l6 8 6-8z%22/></svg>');background-repeat:no-repeat;background-position:right 10px center;outline:none;cursor:pointer;" onfocus="this.style.borderColor='#00d97e';this.style.boxShadow='0 0 0 2px rgba(0,217,126,0.2)';" onblur="this.style.borderColor='#424242';this.style.boxShadow='none';">
+        <h2
+          style="font-family:'Roboto',sans-serif;color:#e0e0e0;font-size:14px;font-weight:500;letter-spacing:0.1em;text-transform:uppercase;">
+          📋 Run Logs</h2>
+        <select id="logs-dropdown"
+          style="background:#2c2c2c;color:#e0e0e0;border:1px solid #424242;border-radius:4px;padding:8px 32px 8px 12px;font-family:'Roboto',sans-serif;font-size:13px;appearance:none;-webkit-appearance:none;background-image:url('data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2212%22 height=%228%22 viewBox=%220 0 12 8%22><path fill=%22%2300d97e%22 d=%22M0 0l6 8 6-8z%22/></svg>');background-repeat:no-repeat;background-position:right 10px center;outline:none;cursor:pointer;"
+          onfocus="this.style.borderColor='#00d97e';this.style.boxShadow='0 0 0 2px rgba(0,217,126,0.2)';"
+          onblur="this.style.borderColor='#424242';this.style.boxShadow='none';">
           <option value="">Loading logs…</option>
         </select>
       </div>
-      <div id="logs-content" style="background:#121212;border:1px solid #2c2c2c;border-radius:4px;padding:12px;font-family:'Roboto Mono',monospace;font-size:12px;line-height:1.6;overflow-y:auto;max-height:500px;white-space:pre-wrap;word-break:break-word;">
+      <div id="logs-content"
+        style="background:#121212;border:1px solid #2c2c2c;border-radius:4px;padding:12px;font-family:'Roboto Mono',monospace;font-size:12px;line-height:1.6;overflow-y:auto;max-height:500px;white-space:pre-wrap;word-break:break-word;">
         <div class="spinner">Loading logs…</div>
       </div>
     </div><!-- /s-logs -->
@@ -2672,89 +2679,108 @@
     async function loadCouncil() {
       try {
         const d = await fetchJSON('/dashboard/council');
-        renderCouncil(d.log || [], d.agenda || [], d.checklist || []);
+        renderCouncil(d.log || [], d.agenda || [], d.checklist || [], d.proposals || [], d.run_month || '');
       } catch (e) { setError('council-content', 'Council API error: ' + e.message); }
     }
 
-    function renderCouncil(logRows, agendaRows, checklistRows) {
-      if (!logRows.length && !agendaRows.length) { document.getElementById('council-content').innerHTML = '<div style="color:var(--muted)">No council data yet.</div>'; return; }
+    function renderCouncil(logRows, agendaRows, checklistRows, proposalsRows, runMonth) {
+      const container = document.getElementById('council-content');
+      if (!logRows.length && !agendaRows.length) {
+        container.innerHTML = '<div style="color:var(--muted)">No council data yet.</div>';
+        return;
+      }
 
-      const months = [...new Set([...logRows.map(r => r.run_month), ...agendaRows.map(r => r.run_month)])].filter(Boolean).sort((a, b) => b.localeCompare(a));
-
-      const html = months.map((month, mi) => {
-        const mLog = logRows.filter(r => r.run_month === month);
-        const mCl = checklistRows.filter(r => r.run_month === month);
-        const cl = mCl[0] || {};
-
-        const checklistHtml = cl.stop_trigger || cl.go_trigger ? `
-      <div class="g2s" style="margin-bottom:14px">
-        <div class="card" style="border-left:3px solid var(--red)">
-          <div style="font-size:10px;color:var(--muted);margin-bottom:4px">STOP TRIGGER</div>
-          <div style="font-size:12px">${esc(cl.stop_trigger)}</div>
-        </div>
-        <div class="card" style="border-left:3px solid var(--green)">
-          <div style="font-size:10px;color:var(--muted);margin-bottom:4px">GO TRIGGER</div>
-          <div style="font-size:12px">${esc(cl.go_trigger)}</div>
-        </div>
-      </div>` : '';
-
-        const byAgenda = {};
-        for (const r of mLog) { const k = r.agenda_item || r.stage || 'General'; if (!byAgenda[k]) byAgenda[k] = []; byAgenda[k].push(r); }
-        const items = Object.keys(byAgenda);
-        if (!items.length) return '';
-
-        const tabBar = items.map((item, ti) =>
-          `<button class="tab-btn ${ti === 0 ? 'active' : ''}" onclick="switchCouncilTab('${month}','${ti}',this)">${esc(item).substring(0, 28)}</button>`
-        ).join('');
-
-        const tabPanes = items.map((item, ti) => {
-          const modelRows = byAgenda[item];
-          const dirs = [...new Set(modelRows.map(r => String(r.direction || '').toUpperCase()).filter(Boolean))];
-          const hasSplit = dirs.length > 1;
-
-          const mCards = modelRows.map(r => {
-            const confVal = parseFloat(r.confidence) || 0;
-            const confPct = Math.min(100, confVal > 1 ? confVal : confVal * 100);
-            return `
-        <div class="card" style="margin-bottom:10px">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px">
-            <span style="font-weight:600;color:var(--blue)">${esc(r.model)}</span>
-            ${dirBadge(r.direction)} ${badge(r.stage, 'grey')}
+      const cl = checklistRows[0] || {};
+      const checklistHtml = cl.stop_trigger || cl.go_trigger ? `
+        <div class="g2s" style="margin-bottom:14px">
+          <div class="card" style="border-left:3px solid var(--red)">
+            <div style="font-size:10px;color:var(--muted);margin-bottom:4px">STOP TRIGGER</div>
+            <div style="font-size:12px">${esc(cl.stop_trigger)}</div>
           </div>
-          <div style="margin-bottom:8px">
-            <div class="conf-bar-wrap">
-              <span style="font-size:10px;color:var(--muted);width:60px;flex-shrink:0">Conf</span>
-              <div class="conf-bar"><div class="conf-bar-fill" style="width:${confPct}%"></div></div>
-              <span style="font-size:11px">${r.confidence || '—'}</span>
-            </div>
+          <div class="card" style="border-left:3px solid var(--green)">
+            <div style="font-size:10px;color:var(--muted);margin-bottom:4px">GO TRIGGER</div>
+            <div style="font-size:12px">${esc(cl.go_trigger)}</div>
           </div>
-          <div style="font-size:11px;margin-bottom:4px"><strong>Key driver:</strong> ${esc(r.key_driver)}</div>
-          <div style="font-size:11px;color:var(--muted)"><strong>Risk:</strong> ${esc(r.risk_factor)}</div>
-          ${r.full_response ? `<details style="margin-top:8px"><summary style="cursor:pointer;font-size:10px;color:var(--muted)">Full response &#9654;</summary><pre class="expand-pre" style="margin-top:8px;background:var(--bg);padding:10px;border-radius:4px">${esc(r.full_response)}</pre></details>` : ''}
-        </div>`;
-          }).join('');
+        </div>` : '';
 
-          return `<div id="council-${month}-${ti}" class="tab-pane ${ti === 0 ? 'active' : ''}">
-        ${hasSplit ? `<div style="margin-bottom:10px"><span class="split-badge">&#9889; SPLIT</span></div>` : ''}
-        ${mCards}
+      // Group log rows by agenda_item
+      const byAgenda = {};
+      for (const r of logRows) {
+        const k = r.agenda_item || r.stage || 'General';
+        if (!byAgenda[k]) byAgenda[k] = [];
+        byAgenda[k].push(r);
+      }
+      const items = Object.keys(byAgenda);
+
+      const tabBar = items.map((item, ti) =>
+        `<button class="tab-btn ${ti === 0 ? 'active' : ''}" onclick="switchCouncilTabDirect('${ti}',this)">${esc(item).substring(0, 28)}</button>`
+      ).join('');
+
+      const tabPanes = items.map((item, ti) => {
+        const modelRows = byAgenda[item];
+        const dirs = [...new Set(modelRows.map(r => String(r.direction || '').toUpperCase()).filter(Boolean))];
+        const hasSplit = dirs.length > 1;
+
+        const mCards = modelRows.map(r => {
+          const confVal = parseFloat(r.confidence) || 0;
+          const confPct = Math.min(100, confVal > 1 ? confVal : confVal * 100);
+          return `
+      <div class="card" style="margin-bottom:10px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px">
+          <span style="font-weight:600;color:var(--blue)">${esc(r.model)}</span>
+          ${dirBadge(r.direction)} ${badge(r.stage, 'grey')}
+        </div>
+        <div style="margin-bottom:8px">
+          <div class="conf-bar-wrap">
+            <span style="font-size:10px;color:var(--muted);width:60px;flex-shrink:0">Conf</span>
+            <div class="conf-bar"><div class="conf-bar-fill" style="width:${confPct}%"></div></div>
+            <span style="font-size:11px">${r.confidence || '—'}</span>
+          </div>
+        </div>
+        <div style="font-size:11px;margin-bottom:4px"><strong>Key driver:</strong> ${esc(r.key_driver)}</div>
+        <div style="font-size:11px;color:var(--muted)"><strong>Risk:</strong> ${esc(r.risk_factor)}</div>
+        ${r.full_response ? `<details style="margin-top:8px"><summary style="cursor:pointer;font-size:10px;color:var(--muted)">Full response &#9654;</summary><pre class="expand-pre" style="margin-top:8px;background:var(--bg);padding:10px;border-radius:4px">${esc(r.full_response)}</pre></details>` : ''}
       </div>`;
         }).join('');
 
-        return `
-    <div style="margin-bottom:8px">
-      <div class="accordion-header" onclick="toggleAccordion('council-body-${mi}',this)">
-        <h3>${esc(month)}</h3>
-        <span style="color:var(--muted);font-size:12px">${mLog.length} entries &#9660;</span>
-      </div>
-      <div id="council-body-${mi}" class="accordion-body">
-        ${checklistHtml}
-        <div class="tab-bar">${tabBar}</div>
-        ${tabPanes}
-      </div>
+        return `<div id="council-direct-${ti}" class="tab-pane ${ti === 0 ? 'active' : ''}">
+      ${hasSplit ? `<div style="margin-bottom:10px"><span class="split-badge">&#9889; SPLIT</span></div>` : ''}
+      ${mCards}
     </div>`;
       }).join('');
 
-      document.getElementById('council-content').innerHTML = html || '<div style="color:var(--muted)">No data.</div>';
+      // system_proposals panel
+      const statusColor = { PENDING: 'amber', APPROVED: 'green', REJECTED: 'red' };
+      const propRows = proposalsRows.map(p => `
+        <tr>
+          <td style="color:var(--muted)">#${p.id}</td>
+          <td style="font-weight:600">${esc(p.component || '—')}</td>
+          <td>${esc(p.proposal_type || '—')}</td>
+          <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)">${esc(p.proposed_change || '—')}</td>
+          <td>${badge(p.confidence, confColor(p.confidence))}</td>
+          <td>${badge(p.status, statusColor[String(p.status || '').toUpperCase()] || 'grey')}</td>
+        </tr>`).join('');
+
+      const proposalsHtml = `
+        <div style="margin-top:24px;padding-top:16px;border-top:1px solid var(--border)">
+          <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">
+            System Proposals <span class="tag">${proposalsRows.length}</span>
+          </div>
+          ${proposalsRows.length ? `
+          <div class="tbl-wrap"><table>
+            <thead><tr>
+              <th>#</th><th>Component</th><th>Type</th><th>Proposed Change</th><th>Conf</th><th>Status</th>
+            </tr></thead>
+            <tbody>${propRows}</tbody>
+          </table></div>` : '<div style="color:var(--muted);font-size:12px">No proposals this cycle.</div>'}
+        </div>`;
+
+      container.innerHTML = `
+        <div style="font-size:10px;color:var(--muted);margin-bottom:12px;letter-spacing:.06em">${esc(runMonth)}</div>
+        ${checklistHtml}
+        <div class="tab-bar" id="council-direct-tabbar">${tabBar}</div>
+        ${tabPanes}
+        ${proposalsHtml}`;
     }
 
     function switchCouncilTab(month, ti, btn) {
@@ -2765,6 +2791,12 @@
       btn.classList.add('active');
     }
 
+    function switchCouncilTabDirect(ti, btn) {
+      document.querySelectorAll('#council-content .tab-pane[id^="council-direct-"]').forEach(p => p.classList.remove('active'));
+      document.querySelectorAll('#council-direct-tabbar .tab-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById('council-direct-' + ti).classList.add('active');
+      btn.classList.add('active');
+    }
     function toggleAccordion(id, header) {
       const body = document.getElementById(id);
       const wasHidden = body.classList.contains('hidden');
@@ -3716,12 +3748,12 @@
         content.innerHTML = lines.map(line => {
           let color = '#bdbdbd';
           let weight = '';
-          if (line.includes(' ERROR'))        { color = '#ef5350'; }
+          if (line.includes(' ERROR')) { color = '#ef5350'; }
           else if (line.includes(' WARNING')) { color = '#ffa726'; }
-          else if (line.includes('BUY')  || line.includes('🟢')) { color = '#66bb6a'; weight = 'font-weight:600;'; }
+          else if (line.includes('BUY') || line.includes('🟢')) { color = '#66bb6a'; weight = 'font-weight:600;'; }
           else if (line.includes('WAIT') || line.includes('🟡')) { color = '#ffa726'; weight = 'font-weight:600;'; }
-          else if (line.includes('AVOID')|| line.includes('🔴')) { color = '#ef5350'; weight = 'font-weight:600;'; }
-          else if (line.includes(' INFO'))    { color = '#9e9e9e'; }
+          else if (line.includes('AVOID') || line.includes('🔴')) { color = '#ef5350'; weight = 'font-weight:600;'; }
+          else if (line.includes(' INFO')) { color = '#9e9e9e'; }
           return `<div style="color:${color};${weight}">${esc(line)}</div>`;
         }).join('');
       } catch (e) {
