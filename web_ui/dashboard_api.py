@@ -207,7 +207,7 @@ def get_summary():
 
             # market_state from settings
             cur.execute(
-                "SELECT value FROM settings WHERE key = 'market_state' ORDER BY id DESC LIMIT 1"
+                "SELECT value FROM settings WHERE key = 'MARKET_STATE' ORDER BY id DESC LIMIT 1"
             )
             ms = cur.fetchone()
             market_state = ms["value"] if ms else None
@@ -398,24 +398,46 @@ def get_council():
     try:
         with _db() as cur:
             cur.execute(
-                "SELECT * FROM monthly_council_log ORDER BY run_month DESC, id ASC"
+                "SELECT DISTINCT run_month FROM monthly_council_log "
+                "WHERE run_month ~ '^[0-9]{4}-[0-9]{2}$' "
+                "ORDER BY run_month DESC LIMIT 1"
+            )
+            row = cur.fetchone()
+            latest_month = row["run_month"] if row else None
+
+            if not latest_month:
+                return {"log": [], "agenda": [], "checklist": [], "proposals": [], "run_month": None}
+
+            cur.execute(
+                "SELECT * FROM monthly_council_log WHERE run_month = %s ORDER BY id ASC",
+                (latest_month,)
             )
             log_rows = _rows(cur)
 
             cur.execute(
-                "SELECT * FROM monthly_council_agenda ORDER BY run_month DESC, item_number ASC"
+                "SELECT * FROM monthly_council_agenda WHERE run_month = %s ORDER BY item_number ASC",
+                (latest_month,)
             )
             agenda_rows = _rows(cur)
 
             cur.execute(
-                "SELECT * FROM monthly_council_checklist ORDER BY run_month DESC"
+                "SELECT * FROM monthly_council_checklist WHERE run_month = %s ORDER BY id ASC",
+                (latest_month,)
             )
             checklist_rows = _rows(cur)
+
+            cur.execute(
+                "SELECT * FROM system_proposals WHERE run_month = %s ORDER BY id ASC",
+                (latest_month,)
+            )
+            proposals_rows = _rows(cur)
 
         return {
             "log":       log_rows,
             "agenda":    agenda_rows,
             "checklist": checklist_rows,
+            "proposals": proposals_rows,
+            "run_month": latest_month,
         }
     except Exception as e:
         log.exception("council failed: %s", e)
@@ -784,9 +806,10 @@ def get_stealth_watching():
         today = date.today()
         with _db() as cur:
             cur.execute("""
-                SELECT * FROM stealth_signals
+                SELECT DISTINCT ON (symbol, broker_id) *
+                FROM stealth_signals
                 WHERE status = 'WATCHING'
-                ORDER BY signal_date DESC
+                ORDER BY symbol, broker_id, signal_date DESC
             """)
             rows = _rows(cur)
 
@@ -812,20 +835,20 @@ def get_stealth_triggered():
         today = date.today()
         with _db() as cur:
             cur.execute("""
-                SELECT s.*,
-                       p.close AS current_price
+                SELECT DISTINCT ON (s.symbol, s.broker_id) s.*,
+                    p.close AS current_price
                 FROM stealth_signals s
                 LEFT JOIN LATERAL (
                     SELECT COALESCE(NULLIF(close,''), NULLIF(ltp,''))::float AS close
                     FROM price_history
                     WHERE symbol = s.symbol
-                      AND close IS NOT NULL AND close != ''
-                      AND close ~ '^[0-9]+\\.?[0-9]*$'
+                    AND close IS NOT NULL AND close != ''
+                    AND close ~ '^[0-9]+\\.?[0-9]*$'
                     ORDER BY date DESC
                     LIMIT 1
                 ) p ON true
                 WHERE s.status = 'TRIGGERED'
-                ORDER BY s.trigger_date DESC
+                ORDER BY s.symbol, s.broker_id, s.trigger_date DESC, s.signal_date DESC
             """)
             rows = _rows(cur)
 
