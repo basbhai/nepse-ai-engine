@@ -21,7 +21,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
 
@@ -137,6 +137,11 @@ class NRBPayload(BaseModel):
 # ── Static ────────────────────────────────────────────────────────────────────
 
 _NRB_HTML = os.path.join(os.path.dirname(__file__), "nrb_entry.html")
+
+
+@app.get("/robots.txt", response_class=PlainTextResponse)
+def robots():
+    return "User-agent: *\nAllow: /"
 
 
 @app.get("/")
