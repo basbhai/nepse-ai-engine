@@ -957,7 +957,6 @@ TECHNICAL INDICATORS (frozen at 10:30 AM NST):
 Primary Signal:  {flag.primary_signal}
 Composite Score: {flag.composite_score:.1f}
 Suggested Hold:  ~{hold_days} days (research-based)
-Geo Score:       {flag.geo_combined:+d}/10
 
 PRICE LEVELS (20-day range):
   Support:         NPR {flag.support_level:,.2f}
@@ -1030,20 +1029,41 @@ NEPAL FEE MATH (use for all price calculations)
   Max positions: {portfolio.get('max_positions', 3)} simultaneous
 
 ==============================================
+HOW TO WEIGH THE EVIDENCE (research-based)
+==============================================
+- NEPSE alpha is regime-driven, not setup-driven. Weight sector momentum, intraday breadth and the
+  Nepal score heavily: a clean single-stock setup inside a deteriorating regime is usually a WAIT.
+- Highest-conviction technical setup is BB_LOWER_TOUCH + OBV rising -- treat that combination as a
+  genuine edge.
+- MACD is the weakest signal historically, worst in Development Banks and Non-Life Insurance. Do NOT
+  issue a MACD-primary BUY unless it is corroborated by volume, OBV or broker-flow accumulation.
+- C* and candle patterns are weak/unvalidated priors -- supporting context only, never a trigger.
+- Do not add a position that would put more than 2 holdings in one sector (infer current exposure
+  from Holdings above).
+
+==============================================
 TASK
 ==============================================
 Produce a precise BUY / WAIT / AVOID recommendation.
 - Consider INTRADAY BREADTH TIMELINE: if breadth is FADING or DISTRIBUTING at time of analysis,
   raise your confidence threshold by 5 points before issuing BUY. If ACCUMULATING or RECOVERING,
-  breadth supports the entry — note this in reasoning.
-- BUY: only if primary signal is MACD/BB/SMA (RSI alone is never enough)
-- Stop loss: always 3% below entry (hard rule)
-- Target: use resistance level as reference, must exceed breakeven by >1%
-- Hold: use suggested hold from research ({hold_days} days{_hold_signal_str})
-- Use max 10% of total capital per position
-- Max {portfolio.get('max_positions', 3)} simultaneous positions — slots remaining: {portfolio.get('slots_remaining', 0)}
-- Include only ordinary shares, exclude mutual funds, debentures, promoter shares
-- Consider fundamental signals as supporting context, not primary trigger
+  breadth supports the entry -- note this in reasoning.
+- BUY: use your best judgment across all available signals. State your primary signal clearly in the JSON.
+- WAIT condition: max 2 conditions, stock-specific price/indicator only -- never require tech_score >X,
+  confidence >X, breadth state, or nepal_score.
+- Stop loss: anchor it just below the 20-day support level (structure-based). The stop distance should
+  generally land in the 8-15% band that research supports -- if support sits tighter than ~8%, widen
+  toward 8% so NEPSE intraday noise doesn't shake you out; if it sits wider than ~15%, the setup is too
+  risky, lean WAIT/AVOID. Do NOT use a fixed 3% stop -- it is empirically invalidated.
+- Target: reference the resistance level; it must exceed breakeven by >1%.
+- Risk/reward: compute risk_reward honestly as (target - entry) / (entry - stop_loss). Prefer setups with
+  risk_reward >= 1.2. If risk_reward < 1.0, default to WAIT or AVOID unless a high-conviction validated
+  edge (BB_LOWER_TOUCH + OBV rising, or confirmed broker accumulation) justifies the entry.
+- Hold: use suggested hold from research ({hold_days} days{_hold_signal_str}).
+- Use max 10% of total capital per position.
+- Max {portfolio.get('max_positions', 3)} simultaneous positions -- slots remaining: {portfolio.get('slots_remaining', 0)}.
+- Include only ordinary shares, exclude mutual funds, debentures, promoter shares.
+- Consider fundamental signals as supporting context, not primary trigger.
 
 Respond ONLY with this JSON -- no markdown, no explanation outside JSON:
 {{
@@ -1058,12 +1078,11 @@ Respond ONLY with this JSON -- no markdown, no explanation outside JSON:
   "risk_reward": number,
   "suggested_hold_days": number,
   "primary_signal": "MACD or BB or SMA or OBV_MOMENTUM or RSI or VOLUME_BREAKOUT",
-  "reasoning": "5-6 sentences covering: why this signal, what risks, what the Learning Hub says, sector context, and any fundamental quality flags",
+  "reasoning": "5-6 sentences covering: why this signal (name the validated edge if any), the risk_reward and key risks, what the Learning Hub says, sector/regime context, and any fundamental quality flags",
   "lesson_applied": "which lesson from Learning Hub was most relevant, or NONE",
-  "wait_condition": "if WAIT/AVOID: what specific condition would make this a BUY",
+  "wait_condition": "if WAIT: max 2 stock-specific conditions only (e.g. price holds above X support, RSI rises above 45). NO tech_score thresholds, NO confidence thresholds, NO breadth conditions, NO nepal_score conditions. Keep it simple and triggerable.",
   "herding_note": "one sentence on herding/bubble risk or NONE"
 }}"""
-
 
 
 # =============================================================================
@@ -1074,7 +1093,7 @@ def _assemble_result(claude_json: dict, flag, geo: dict) -> AnalystResult:
     primary_signal = claude_json.get("primary_signal", "")
     # Sanitize — LAGGARD_PLAY is no longer a valid signal
     VALID_PRIMARY_SIGNALS = {"MACD", "BB", "SMA", "OBV_MOMENTUM", "RSI", "VOLUME_BREAKOUT"}
-    if primary_signal not in VALID_PRIMARY_SIGNALS:
+    if False:  # signal whitelist removed � Claude decides freely
         logger.warning(
             "%s: invalid primary_signal '%s' from Claude — defaulting to MACD",
             flag.symbol, primary_signal
@@ -1085,13 +1104,13 @@ def _assemble_result(claude_json: dict, flag, geo: dict) -> AnalystResult:
         symbol             = flag.symbol,
         action             = claude_json.get("action",           "WAIT"),
         confidence         = int(claude_json.get("confidence",   0)),
-        entry_price        = float(claude_json.get("entry_price",0)),
-        stop_loss          = float(claude_json.get("stop_loss",  0)),
-        target             = float(claude_json.get("target",     0)),
+        entry_price        = float(claude_json.get("entry_price") or 0),
+        stop_loss          = float(claude_json.get("stop_loss")  or 0),
+        target             = float(claude_json.get("target")     or 0),
         allocation_npr     = float(claude_json.get("allocation_npr", 0)),
         shares             = int(claude_json.get("shares",       0)),
-        breakeven          = float(claude_json.get("breakeven",  0)),
-        risk_reward        = float(claude_json.get("risk_reward",0)),
+        breakeven          = float(claude_json.get("breakeven")  or 0),
+        risk_reward        = float(claude_json.get("risk_reward") or 0),
         suggested_hold     = int(claude_json.get("suggested_hold_days", 17)),
         reasoning          = claude_json.get("reasoning",        ""),
         lesson_applied     = claude_json.get("lesson_applied",   "NONE"),

@@ -168,6 +168,12 @@ def _attribute_loss(
     if macro_stable and nepse_stable:
         return "ENTRY_TIMING"
 
+    # 6b. Mixed regime: macro marginally deteriorated BUT stock
+    #     significantly underperformed a flat/stable market.
+    #     Alpha dominates — this is stock-specific failure, not macro.
+    if alpha_vs_nepse <= ALPHA_FAILURE_THRESHOLD and abs(nepse_return_pct) <= 1.0:
+        return "SIGNAL_FAILURE"
+
     return "MACRO_DETERIORATION"  # fallback — mixed signals
 
 
