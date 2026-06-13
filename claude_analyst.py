@@ -180,12 +180,20 @@ def _load_geo_context() -> dict:
             or ""
         )
 
+        _nepal_score_int = int(pulse.get("nepal_score", 0) or 0)
+        if _nepal_score_int <= -3:
+            _nepal_status = "BEARISH"
+        elif _nepal_score_int >= 3:
+            _nepal_status = "BULLISH"
+        else:
+            _nepal_status = "NEUTRAL"
+
         return {
             "geo_score":          int(geo.get("geo_score",    0) or 0),
-            "nepal_score":        int(pulse.get("nepal_score",0) or 0),
-            "combined":           int(geo.get("geo_score", 0) or 0) + int(pulse.get("nepal_score", 0) or 0),
+            "nepal_score":        _nepal_score_int,
+            "combined":           int(geo.get("geo_score", 0) or 0) + _nepal_score_int,
             "geo_status":         geo.get("geo_status",      "NEUTRAL"),
-            "nepal_status":       pulse.get("status",        "NEUTRAL"),
+            "nepal_status":       _nepal_status,
             "bandh":              pulse.get("bandh_today",   "NO"),
             "ipo_drain":          pulse.get("ipo_fpo_active","NO"),
             "crisis_detected":    pulse.get("crisis_detected","NO"),
@@ -218,25 +226,29 @@ def _load_macro_context() -> dict:
             else "CUT" if _fwd == "LOOSE"
             else "UNCHANGED"
         )
+        def _nrb(key, fallback="N/A"):
+            v = row.get(key)
+            return v if (v is not None and v != "") else fallback
+
         return {
-            "policy_rate":          row.get("policy_rate",               "?"),
+            "policy_rate":          _nrb("policy_rate") or _nrb("policy_rate_pct") or _nrb("bank_rate"),
             "nrb_rate_decision":    nrb_decision,
-            "inflation_pct":        row.get("cpi_inflation",             "?"),
-            "remittance_yoy_pct":   row.get("remittance_yoy_change_pct", "?"),
-            "forex_reserve_months": row.get("fx_reserve_months",         "?"),
-            "lending_rate":         row.get("bank_rate",                 "?"),
-            "period":               row.get("period",                    "?"),
-            "fd_rate":              get_setting("FD_RATE_PCT",            "8.5"),
-            "fd_signal":            get_setting("FD_SCORE_SIGNAL",        "NEUTRAL"),
-            "deposit_rate_pct":                     row.get("deposit_rate_pct",                    "?"),
-            "interbank_rate_pct":                   row.get("interbank_rate_pct",                  "?"),
-            "tbill_91d_rate_pct":                   row.get("tbill_91d_rate_pct",                  "?"),
-            "npl_ratio_pct":                        row.get("npl_ratio_pct",                       "?"),
-            "m2_growth_yoy_pct":                    row.get("m2_growth_yoy_pct",                   "?"),
-            "private_sector_credit_growth_yoy_pct": row.get("private_sector_credit_growth_yoy_pct","?"),
-            "bop_impact_on_nepse":                  row.get("bop_impact_on_nepse",                 "?"),
-            "usd_npr_rate":                         row.get("usd_npr_rate",                        "?"),
-            "remittance_total_billion_npr":         row.get("remittance_total_billion_npr",        "?"),
+            "inflation_pct":        _nrb("cpi_inflation"),
+            "remittance_yoy_pct":   _nrb("remittance_yoy_change_pct"),
+            "forex_reserve_months": _nrb("fx_reserve_months"),
+            "lending_rate":         _nrb("lending_rate_pct") or _nrb("lending_rate") or _nrb("bank_rate") or _nrb("base_rate"),
+            "period":               _nrb("period"),
+            "fd_rate":              get_setting("FD_RATE_PCT",     "8.5"),
+            "fd_signal":            get_setting("FD_SCORE_SIGNAL", "NEUTRAL"),
+            "deposit_rate_pct":                     _nrb("deposit_rate_pct"),
+            "interbank_rate_pct":                   _nrb("interbank_rate_pct"),
+            "tbill_91d_rate_pct":                   _nrb("tbill_91d_rate_pct"),
+            "npl_ratio_pct":                        _nrb("npl_ratio_pct"),
+            "m2_growth_yoy_pct":                    _nrb("m2_growth_yoy_pct"),
+            "private_sector_credit_growth_yoy_pct": _nrb("private_sector_credit_growth_yoy_pct"),
+            "bop_impact_on_nepse":                  _nrb("bop_impact_on_nepse"),
+            "usd_npr_rate":                         _nrb("usd_npr_rate"),
+            "remittance_total_billion_npr":         _nrb("remittance_total_billion_npr"),
         }
     except Exception as exc:
         logger.warning("_load_macro_context failed: %s", exc)
@@ -788,6 +800,50 @@ def _calc_breakeven(entry_price: float, shares: int) -> float:
 # SECTION 4 - BUILD CLAUDE PROMPT
 # =============================================================================
 
+def _audit_prompt_fields(flag, geo: dict, macro: dict, portfolio: dict) -> None:
+    """Print a pre-send field audit so missing values are caught before the LLM call."""
+    fields = {
+        "symbol":           flag.symbol,
+        "sector":           flag.sector,
+        "ltp":              flag.ltp,
+        "rsi_14":           flag.rsi_14,
+        "macd_cross":       flag.macd_cross,
+        "bb_signal":        flag.bb_signal,
+        "obv_trend":        getattr(flag, "obv_trend",       None),
+        "ema_trend":        getattr(flag, "ema_trend",        None),
+        "tech_score":       flag.tech_score,
+        "composite_score":  flag.composite_score,
+        "support_level":    flag.support_level,
+        "resistance_level": flag.resistance_level,
+        "vwap_dev":         getattr(flag, "vwap_dev",         None),
+        "bid_ask_ratio":    getattr(flag, "bid_ask_ratio",    None),
+        "dpr_proximity":    getattr(flag, "dpr_proximity",    None),
+        "volume_os_ratio":  getattr(flag, "volume_os_ratio",  None),
+        "geo_score":        geo.get("geo_score"),
+        "nepal_score":      geo.get("nepal_score"),
+        "combined":         geo.get("combined"),
+        "policy_rate":      macro.get("policy_rate"),
+        "lending_rate":     macro.get("lending_rate"),
+        "fd_rate":          macro.get("fd_rate"),
+        "inflation_pct":    macro.get("inflation_pct"),
+        "total_capital":    portfolio.get("total_capital_npr"),
+        "liquid_npr":       portfolio.get("liquid_npr"),
+    }
+    ZERO_OK = {"bid_ask_ratio", "dpr_proximity", "volume_os_ratio", "vwap_dev", "combined"}
+    warnings = []
+    for k, v in fields.items():
+        str_v = str(v) if v is not None else ""
+        if v is None or str_v in ("", "?", "None", "N/A"):
+            warnings.append(f"  MISSING   {k} = {repr(v)}")
+        elif isinstance(v, float) and v == 0.0 and k not in ZERO_OK:
+            warnings.append(f"  ZERO?     {k} = {v}  (check if intentional)")
+    if warnings:
+        print(f"\n⚠️  PROMPT FIELD AUDIT — {flag.symbol}")
+        print("\n".join(warnings))
+    else:
+        print(f"✅  All audit fields populated for {flag.symbol}")
+
+
 def _build_prompt(
     flag,
     portfolio:    dict,
@@ -983,14 +1039,14 @@ TODAY'S NEPAL HEADLINES (from nepal_pulse — untruncated):
   Economy:  {geo.get('headlines_economy',  'None') or 'None'}
   Market:   {geo.get('headlines_stock',    'None') or 'None'}
 
-MACRO (NRB {macro.get('period', '?')} -- updated monthly):
-  Policy Rate:     {macro.get('policy_rate', '?')}%
-  NRB Decision:    {macro.get('nrb_rate_decision', '?')}
-  Inflation:       {macro.get('inflation_pct', '?')}%
-  Remittance YoY:  {macro.get('remittance_yoy_pct', '?')}%
-  Forex Reserve:   {macro.get('forex_reserve_months', '?')} months
-  Lending Rate:    {macro.get('lending_rate', '?')}%
-  FD Rate (1yr):   {macro.get('fd_rate', '?')}%  [{macro.get('fd_signal', 'NEUTRAL')}]
+MACRO (NRB {macro.get('period') or 'N/A'} -- updated monthly):
+  Policy Rate:     {macro.get('policy_rate') or 'N/A'}%
+  NRB Decision:    {macro.get('nrb_rate_decision') or 'N/A'}
+  Inflation:       {macro.get('inflation_pct') or 'N/A'}%
+  Remittance YoY:  {macro.get('remittance_yoy_pct') or 'N/A'}%
+  Forex Reserve:   {macro.get('forex_reserve_months') or 'N/A'} months
+  Lending Rate:    {macro.get('lending_rate') or 'N/A'}%
+  FD Rate (1yr):   {macro.get('fd_rate') or 'N/A'}%  [{macro.get('fd_signal') or 'NEUTRAL'}]
 
 {sector_momentum_section}
 ==============================================
@@ -1411,6 +1467,7 @@ def run_analysis(flags: list) -> list[AnalystResult]:
         except Exception as e:
             print(f"DEBUG ORDER_BOOK EXCEPTION: {e}")
 
+        _audit_prompt_fields(flag, geo, macro, portfolio)
         prompt      = _build_prompt(
             flag, portfolio, geo, macro, lessons, market_state, loss_streak,
             fund_ctx=fund_ctx,
@@ -1545,6 +1602,7 @@ if __name__ == "__main__":
                     print(f"DEBUG OVERRIDDEN bid_ask_ratio={flag.bid_ask_ratio:.4f}")
             except Exception as e:
                 print(f"DEBUG ORDER_BOOK EXCEPTION: {e}")
+            _audit_prompt_fields(flag, geo, macro, portfolio)
             prompt     = _build_prompt(
                 flag, portfolio, geo, macro, lessons, market_state, loss_streak,
                 fund_ctx=fund_ctx,
