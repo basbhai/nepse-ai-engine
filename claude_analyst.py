@@ -1037,6 +1037,7 @@ Produce a precise BUY / WAIT / AVOID recommendation.
   raise your confidence threshold by 5 points before issuing BUY. If ACCUMULATING or RECOVERING,
   breadth supports the entry — note this in reasoning.
 - BUY: only if primary signal is MACD/BB/SMA (RSI alone is never enough)
+- WAIT condition: max 2 conditions, stock-specific price/indicator only — never require tech_score >X, confidence >X, breadth state, or nepal_score
 - Stop loss: always 3% below entry (hard rule)
 - Target: use resistance level as reference, must exceed breakeven by >1%
 - Hold: use suggested hold from research ({hold_days} days{_hold_signal_str})
@@ -1060,7 +1061,7 @@ Respond ONLY with this JSON -- no markdown, no explanation outside JSON:
   "primary_signal": "MACD or BB or SMA or OBV_MOMENTUM or RSI or VOLUME_BREAKOUT",
   "reasoning": "5-6 sentences covering: why this signal, what risks, what the Learning Hub says, sector context, and any fundamental quality flags",
   "lesson_applied": "which lesson from Learning Hub was most relevant, or NONE",
-  "wait_condition": "if WAIT/AVOID: what specific condition would make this a BUY",
+  "wait_condition": "if WAIT: max 2 stock-specific conditions only (e.g. price holds above X support, RSI rises above 45). NO tech_score thresholds, NO confidence thresholds, NO breadth conditions, NO nepal_score conditions. Keep it simple and triggerable.",
   "herding_note": "one sentence on herding/bubble risk or NONE"
 }}"""
 
