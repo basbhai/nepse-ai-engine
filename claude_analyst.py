@@ -1047,23 +1047,16 @@ TASK
 Produce a precise BUY / WAIT / AVOID recommendation.
 - Consider INTRADAY BREADTH TIMELINE: if breadth is FADING or DISTRIBUTING at time of analysis,
   raise your confidence threshold by 5 points before issuing BUY. If ACCUMULATING or RECOVERING,
-  breadth supports the entry -- note this in reasoning.
-- BUY: use your best judgment across all available signals. State your primary signal clearly in the JSON.
-- WAIT condition: max 2 conditions, stock-specific price/indicator only -- never require tech_score >X,
-  confidence >X, breadth state, or nepal_score.
-- Stop loss: anchor it just below the 20-day support level (structure-based). The stop distance should
-  generally land in the 8-15% band that research supports -- if support sits tighter than ~8%, widen
-  toward 8% so NEPSE intraday noise doesn't shake you out; if it sits wider than ~15%, the setup is too
-  risky, lean WAIT/AVOID. Do NOT use a fixed 3% stop -- it is empirically invalidated.
-- Target: reference the resistance level; it must exceed breakeven by >1%.
-- Risk/reward: compute risk_reward honestly as (target - entry) / (entry - stop_loss). Prefer setups with
-  risk_reward >= 1.2. If risk_reward < 1.0, default to WAIT or AVOID unless a high-conviction validated
-  edge (BB_LOWER_TOUCH + OBV rising, or confirmed broker accumulation) justifies the entry.
-- Hold: use suggested hold from research ({hold_days} days{_hold_signal_str}).
-- Use max 10% of total capital per position.
-- Max {portfolio.get('max_positions', 3)} simultaneous positions -- slots remaining: {portfolio.get('slots_remaining', 0)}.
-- Include only ordinary shares, exclude mutual funds, debentures, promoter shares.
-- Consider fundamental signals as supporting context, not primary trigger.
+  breadth supports the entry — note this in reasoning.
+- BUY: only if primary signal is MACD/BB/SMA (RSI alone is never enough)
+- WAIT condition: max 2 conditions, stock-specific price/indicator only — never require tech_score >X, confidence >X, breadth state, or nepal_score
+- Stop loss: always 3% below entry (hard rule)
+- Target: use resistance level as reference, must exceed breakeven by >1%
+- Hold: use suggested hold from research ({hold_days} days{_hold_signal_str})
+- Use max 10% of total capital per position
+- Max {portfolio.get('max_positions', 3)} simultaneous positions — slots remaining: {portfolio.get('slots_remaining', 0)}
+- Include only ordinary shares, exclude mutual funds, debentures, promoter shares
+- Consider fundamental signals as supporting context, not primary trigger
 
 Respond ONLY with this JSON -- no markdown, no explanation outside JSON:
 {{

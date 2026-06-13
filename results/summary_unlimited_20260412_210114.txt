@@ -1,0 +1,53 @@
+================================================================================
+NEPSE BACKTEST SUMMARY — UNLIMITED
+Generated: 2026-04-12 21:19:43
+================================================================================
+
+TOP 10 SIGNALS (by Profit Factor)
+--------------------------------------------------------------------------------
+Rank  Signal           Trades      WR%       PF     Ann%   Sharpe   MaxDD%       NetPnL
+1     VWAP               7463    54.5%     1.89    37.4%     2.67  -198.8%  10,791,227
+2     VWAP               7936    51.8%     1.89    38.1%     2.59  -112.3%  10,973,333
+3     VWAP               7820    54.2%     1.86    36.1%     2.60  -205.2%  10,920,358
+4     VWAP               7604    50.7%     1.86    37.5%     2.65  -112.3%  10,759,439
+5     VWAP               7141    53.5%     1.86    36.8%     2.75  -133.0%  10,578,727
+6     VWAP               7384    54.2%     1.86    36.5%     2.73  -133.0%  10,812,927
+7     VWAP               7744    55.6%     1.86    36.8%     2.65  -175.7%  10,723,811
+8     VWAP               8312    51.6%     1.84    36.6%     2.51  -113.3%  10,910,137
+9     VWAP               7916    51.4%     1.83    36.4%     2.58  -104.5%  10,777,471
+10    VWAP               8302    53.1%     1.83    37.2%     2.54  -104.5%  10,733,933
+
+BEST OVERALL SIGNAL
+--------------------------------------------------------------------------------
+Signal:          VWAP
+Profit Factor:   1.89
+Win Rate:        54.5%
+Total Trades:    7463
+Annual Return:   37.37%
+Sharpe Ratio:    2.67
+Sortino Ratio:   0.03
+Calmar Ratio:    0.19
+Max Drawdown:    -198.85%
+Total Net P&L:   NPR 10,791,227
+Total Fees Paid: NPR 3,592,996
+Spearman p-value:0.875562
+
+SECTOR BREAKDOWN (Best Signal)
+--------------------------------------------------------------------------------
+Microfinance              trades=1758  WR= 59.2%  PF=  1.72  PnL=NPR  3,524,596
+Manufacturing And Processing trades= 146  WR= 54.1%  PF=  3.49  PnL=NPR  2,150,800
+Hydro Power               trades=2146  WR= 57.5%  PF=  1.78  PnL=NPR  1,255,085
+Non Life Insurance        trades= 360  WR= 55.8%  PF=  1.79  PnL=NPR  1,174,914
+Tradings                  trades=  58  WR= 69.0%  PF=  2.78  PnL=NPR    685,676
+Commercial Banks          trades=1253  WR= 39.9%  PF=  1.60  PnL=NPR    403,823
+Investment                trades= 176  WR= 55.7%  PF=  2.10  PnL=NPR    344,315
+Life Insurance            trades= 293  WR= 54.9%  PF=  1.60  PnL=NPR    305,047
+Development Banks         trades= 373  WR= 66.5%  PF=  2.21  PnL=NPR    272,327
+Unknown                   trades= 281  WR= 51.2%  PF=  1.45  PnL=NPR    271,801
+Finance                   trades= 242  WR= 75.2%  PF=  4.10  PnL=NPR    261,208
+Others                    trades=  97  WR= 53.6%  PF=  1.57  PnL=NPR    108,130
+Hotels And Tourism        trades= 125  WR= 56.8%  PF=  1.14  PnL=NPR     41,298
+Mutual Fund               trades= 155  WR= 12.3%  PF=  0.09  PnL=NPR     -7,794
+
+================================================================================
+END OF SUMMARY

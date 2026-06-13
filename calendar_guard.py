@@ -82,7 +82,7 @@ WEEKDAY_NAMES = {
 # 3. SESSION WINDOWS (all NST)
 # ══════════════════════════════════════════════════════════════════════════════
 
-MARKET_OPEN  = time(10, 45)   # Regular trading session open
+MARKET_OPEN  = time(11, 00)   # Regular trading session open
 MARKET_CLOSE = time(15,  0)   # Regular trading session close
 
 PREOPEN_START = time(10, 30)  # morning_brief.yml window start
@@ -109,6 +109,8 @@ _GAZETTE_HOLIDAYS: dict[date, str] = {
     date(2026,  4, 14): "Nepali New Year (Baisakh 1, 2083 BS)",
 
     date(2026,  5,  1): "Buddha Jayanti / International Workers' Day",
+
+    date(2026,  5,  28): "Eid ul-Fitr (tentative, subject to moon sighting)",
     date(2026,  5, 29): "Republic Day",
 
     date(2026,  8, 28): "Rakshya Bandhan",

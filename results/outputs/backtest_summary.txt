@@ -1,0 +1,52 @@
+NEPSE AI ENGINE — BACKTEST RESULTS
+============================================================
+Generated: 2026-04-01 07:24:59
+
+INDICATOR PARAMS
+----------------------------------------
+RSI period=14
+MACD fast=16 slow=30 signal=12
+BB period=25 std=2.2
+EMA fast=20 slow=40 trend=200
+Vol lookback=25
+
+SIGNAL THRESHOLDS
+----------------------------------------
+MACD: stop=5% target=12% rsi<60 vol>1.2x hold=35d trail_act=10% trail=2%
+BB:   stop=5% target=10% rsi<45 vol>1.5x hold=60d trail_act=12% trail=3%
+SMA:  stop=4% target=8% rsi<60 vol>1.0x hold=20d trail_act=10% trail=2%
+
+
+SIM1 CONSTRAINED
+----------------------------------------
+Trades:        194 (W:86 L:108 BE:0)
+Win Rate:      44.3%
+Profit Factor: 1.08
+Total P&L:     NPR 44,016
+Annual Return: 3.55%
+Sharpe:        0.95
+Max Drawdown:  -62.39%
+Alpha:         -92.47%
+Trail used:    63 trades (62 wins)
+
+Signal Breakdown:
+  MACD_CROSS             trades= 137 WR= 38.7% PF= 0.88 PnL=NPR  -51,486 trail=49
+  SMA_GOLDEN_CROSS       trades=   8 WR= 75.0% PF= 5.59 PnL=NPR   30,587 trail=3
+  BB_LOWER_TOUCH         trades=  49 WR= 55.1% PF= 1.66 PnL=NPR   64,915 trail=11
+
+SIM2 FREE RUN
+----------------------------------------
+Trades:        877 (W:424 L:453 BE:0)
+Win Rate:      48.4%
+Profit Factor: 1.36
+Total P&L:     NPR 596,398
+Annual Return: 27.39%
+Sharpe:        2.17
+Max Drawdown:  -101.26%
+Alpha:         183.72%
+Trail used:    339 trades (331 wins)
+
+Signal Breakdown:
+  MACD_CROSS             trades= 711 WR= 47.0% PF= 1.31 PnL=NPR  429,589 trail=304
+  SMA_GOLDEN_CROSS       trades=  53 WR= 49.1% PF= 1.27 PnL=NPR   24,200 trail=11
+  BB_LOWER_TOUCH         trades= 113 WR= 56.6% PF= 1.77 PnL=NPR  142,610 trail=24
