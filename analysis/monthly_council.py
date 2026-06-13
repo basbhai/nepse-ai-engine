@@ -23,7 +23,7 @@ Pipeline:
 ─────────────────────────────────────────────────────────────────────────────
 TEST STACK vs PRODUCTION STACK
 ─────────────────────────────────────────────────────────────────────────────
-Set COUNCIL_USE_FREE_STACK = True  → rotates 3 free models, no cost
+Set COUNCIL_USE_FREE_STACK = False  → rotates 3 free models, no cost
 Set COUNCIL_USE_FREE_STACK = False → uses original flagship model stack
 
 When you are ready for next real council meeting:
@@ -85,7 +85,7 @@ log = logging.getLogger(__name__)
 # ── STACK SWITCH ─────────────────────────────────────────────────────────────
 # Set True for free-model testing, False for real council with flagship models
 # ═══════════════════════════════════════════════════════════════════════════════
-COUNCIL_USE_FREE_STACK = True
+COUNCIL_USE_FREE_STACK = False  # ← SWITCH: True for free models, False for production models
 
 # ── Free test models (rotate round-robin) ─────────────────────────────────────
 _FREE_MODELS = [
@@ -140,9 +140,9 @@ COUNCIL_WEIGHT_DEEPSEEK = "deepseek/deepseek-r1"
 
 # ── Token budget ──────────────────────────────────────────────────────────────
 MAX_DATA_TOKENS       = 2000
-MAX_DISCUSSION_TOKENS = 800
-MAX_CHAIRMAN_TOKENS   = 2000
-MAX_REDTEAM_TOKENS    = 1200
+MAX_DISCUSSION_TOKENS = 1500
+MAX_CHAIRMAN_TOKENS   = 15000
+MAX_REDTEAM_TOKENS    = 14000
 MAX_AGENDA_TOKENS     = 600
 
 DATA_LOOKBACK_DAYS = 30
@@ -579,7 +579,7 @@ def _enrich_agenda_with_free_model(items: list[str], run_month: str) -> list[str
             try:
                 prompt = _ENRICH_PROMPT.format(item=item[:500].replace('"', '\\"'))
                 keys = ask_gemini_json_with_key(
-                    prompt, key_index=2, context=f"enricher_{run_month}_{i}"
+                    prompt, key_index=1, context=f"enricher_{run_month}_{i}"
                 )
                 log.info("[enricher] item %d/%d detected keys: %s", i + 1, len(items), keys)
 
@@ -741,11 +741,11 @@ def _council_call(
     # Provider routing — cheapest provider per model family
     _PROVIDER_MAP = {
         "anthropic/claude-haiku-4.5":   {"order": ["Anthropic"],      "allow_fallbacks": False},
-        "anthropic/claude-sonnet-4.5":  {"order": ["Anthropic 2"],    "allow_fallbacks": False},
+        "anthropic/claude-sonnet-4.6":  {"order": ["Anthropic 2"],    "allow_fallbacks": False},
         "anthropic/claude-opus-4.6":    {"order": ["Anthropic"],      "allow_fallbacks": False},
         "anthropic/claude-opus-4.7":    {"order": ["Amazon Bedrock"], "allow_fallbacks": False},
         "openai/gpt-5.4-nano":          {"order": ["OpenAI"],         "allow_fallbacks": False},
-        "openai/gpt-5.4":              {"order": ["OpenAI"],         "allow_fallbacks": False},
+        "openai/gpt-5.5":              {"order": ["OpenAI"],         "allow_fallbacks": False},
         "deepseek/deepseek-v4-pro":     {"order": ["DeepSeek"],       "allow_fallbacks": False},
     }
     provider_routing = _PROVIDER_MAP.get(model)
@@ -856,7 +856,7 @@ _PROD_DISCUSSION_MODELS = [
     (_PROD_GPT_MODEL,      "gpt_5.4",     "stage_2_gpt",           False),
     (_PROD_DEEPSEEK_MODEL, "deepseek_v4", "stage_3_deepseek",      False),
     (_PROD_GEMINI_MODEL,   "gemini_3.1",  "stage_4_gemini_devil",  False),
-    (_PROD_SONNET_MODEL,   "sonnet_4.5",  "stage_5_sonnet",        False),
+    (_PROD_SONNET_MODEL,   "sonnet_4.6",  "stage_5_sonnet",        False),
 ]
 
 
@@ -1028,7 +1028,7 @@ def _write_council_system_proposals(
     n_new      = 0
 
     for review in system_verdict.get("proposals_reviewed", []):
-        if review.get("council_assessment") != "ENDORSE":
+        if not isinstance(review, dict) or review.get("council_assessment") != "ENDORSE":
             continue
         proposal_id = review.get("proposal_id")
         if not proposal_id:
@@ -1150,8 +1150,8 @@ def _build_agenda_review_messages(
 ) -> list[dict]:
     system = (
         "You are the NEPSE Monthly Council Secretary. "
-        "Review the proposed agenda. Approve, reorder, or lightly rephrase AI-proposed items. "
-        "Incorporate any user-added items. Keep 3-5 items total. "
+        "Review the proposed agenda. Approve and reorder items but DO NOT rephrase, summarize, shorten, or merge any item — copy each one verbatim exactly as provided. "
+        "Incorporate ALL user-added items and ALL mandatory items. Do NOT drop any item — include everything provided. "
         "MANDATORY ITEMS must appear verbatim in approved_agenda — do not drop, merge, or rephrase them. "
         "Output ONLY valid JSON: {\"approved_agenda\": [...], \"review_notes\": \"...\"}"
     )
@@ -1168,7 +1168,7 @@ def _build_agenda_review_messages(
 
     user = (
         f"AGENDA REVIEW — {run_month}\n\n"
-        f"AI-PROPOSED ITEMS (you may reorder or lightly rephrase these):\n{json.dumps(proposed_items, ensure_ascii=False)}"
+        f"AI-PROPOSED ITEMS (copy verbatim — do NOT rephrase, summarize, or shorten):\n{json.dumps(proposed_items, ensure_ascii=False)}"
         f"{mandatory_block}"
         f"{additions_block}\n\n"
         f"MARKET CONTEXT:\n{data_context[:600]}\n\n"
@@ -1233,7 +1233,7 @@ _PROD_MODEL_PERSONAS = {
         + _POSITION_ANCHOR_GUARD
     ),
     _PROD_SONNET_MODEL: (
-        "You are Claude Sonnet 4.5, a fundamental analyst on the NEPSE Monthly Council. "
+        "You are Claude Sonnet 4.6, a fundamental analyst on the NEPSE Monthly Council. "
         "You have web search access — use it to verify sector fundamentals, company news, "
         "NRB circulars, and dividend announcements.\n\n"
         "Stress-test positions, weigh tail risks, consider second-order effects."
@@ -1594,7 +1594,7 @@ def _send_council_notification(
     if system_verdict:
         endorsed = sum(
             1 for p in system_verdict.get("proposals_reviewed", [])
-            if p.get("council_assessment") == "ENDORSE"
+            if isinstance(p, dict) and p.get("council_assessment") == "ENDORSE"
         )
         n_new        = len(system_verdict.get("new_system_findings", []))
         system_block = f"\n⚙️ Proposals: *{endorsed} endorsed* | *{n_new} new findings*"
@@ -1756,6 +1756,16 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
     if dry_run or print_prompts:
         print(f"\n{'='*65}\nSTAGE 0b (agenda review) — ~{est_review} tokens")
         approved_items = proposed_items
+    elif preview_proposed:
+        approved_items = proposed_items + (user_additions or [])
+        _write_agenda(run_month, approved_items)
+        log.info("Stage 0b skipped — Saturday preview already approved (%d items)", len(approved_items))
+        try:
+            enriched_items = _enrich_agenda_with_free_model(approved_items, run_month)
+            _write_agenda(run_month, enriched_items)
+            log.info("Agenda enrichment complete — %d items enriched", len(enriched_items))
+        except Exception as e:
+            log.warning("Agenda enrichment failed — proceeding with original: %s", e)
     else:
         m = _next_free_model() if COUNCIL_USE_FREE_STACK else COUNCIL_REVIEW_MODEL
         log.info("[stage_0b_review] Calling %s for agenda review...", m)
