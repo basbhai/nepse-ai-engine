@@ -81,7 +81,7 @@ from telegram.ext import (
 
 from sheets import (
     read_tab, write_row, upsert_row,
-    update_row, run_raw_sql, get_setting,
+    update_row, run_raw_sql, get_setting, update_setting,
 )
 from db.connection import _db
 from calendar_guard import is_open as market_is_open, get_status as market_status
@@ -1882,6 +1882,73 @@ async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# COUNCIL AGENDA COMMAND  — admin only
+# ═══════════════════════════════════════════════════════════════════════════
+
+async def cmd_council_agenda(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("🚫 Admin only command.")
+        return
+
+    raw = get_setting("COUNCIL_AGENDA_MANUAL", "[]")
+    try:
+        items = json.loads(raw)
+    except Exception:
+        items = []
+    if not isinstance(items, list):
+        items = []
+
+    if not ctx.args:
+        await update.message.reply_text(
+            "📋 *Council Agenda Commands*\n\n"
+            "/council_agenda add <text> — add item to next council\n"
+            "/council_agenda list — show queued items\n"
+            "/council_agenda clear — clear all items\n\n"
+            "_Items are picked up automatically when council runs._",
+            parse_mode="Markdown",
+        )
+        return
+
+    sub = ctx.args[0].lower()
+
+    if sub == "add":
+        item = " ".join(ctx.args[1:]).strip()
+        if not item:
+            await update.message.reply_text("Usage: /council_agenda add <text>")
+            return
+        items.append(item)
+        update_setting("COUNCIL_AGENDA_MANUAL", json.dumps(items), set_by="telegram_admin")
+        await update.message.reply_text(
+            f"✅ Added to council agenda:\n_{item}_\n\nQueued items: {len(items)}",
+            parse_mode="Markdown",
+        )
+
+    elif sub == "list":
+        if not items:
+            await update.message.reply_text("📋 No manual agenda items queued.")
+        else:
+            numbered = "\n".join(f"{i+1}. {item}" for i, item in enumerate(items))
+            await update.message.reply_text(
+                f"📋 *Council agenda queue ({len(items)} items):*\n{numbered}",
+                parse_mode="Markdown",
+            )
+
+    elif sub == "clear":
+        update_setting("COUNCIL_AGENDA_MANUAL", "[]", set_by="telegram_admin")
+        await update.message.reply_text("🗑 Council agenda cleared.")
+
+    else:
+        await update.message.reply_text(
+            "📋 *Council Agenda Commands*\n\n"
+            "/council_agenda add <text> — add item to next council\n"
+            "/council_agenda list — show queued items\n"
+            "/council_agenda clear — clear all items\n\n"
+            "_Items are picked up automatically when council runs._",
+            parse_mode="Markdown",
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # NLP FALLBACK
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -2137,8 +2204,9 @@ def main():
     app.add_handler(CommandHandler("start",    cmd_help))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, nlp_fallback))
         # Gate tuning commands (admin only)
-    app.add_handler(CommandHandler("gate_review", cmd_gate_review))
-    app.add_handler(CommandHandler("gate_stats",  cmd_gate_stats))
+    app.add_handler(CommandHandler("gate_review",     cmd_gate_review))
+    app.add_handler(CommandHandler("gate_stats",      cmd_gate_stats))
+    app.add_handler(CommandHandler("council_agenda",  cmd_council_agenda))
 
     # Pattern-matched /approve_N and /reject_N
     app.add_handler(MessageHandler(

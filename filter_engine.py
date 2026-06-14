@@ -2017,7 +2017,7 @@ def format_candidate_for_gemini(c: FilterCandidate) -> str:
     """
     candle = f"{c.best_candle}(T{c.candle_tier},{c.candle_conf}%)" if c.best_candle else "none"
     cstar  = "Y" if c.cstar_signal else "N"
-    momentum_str = f" | momentum={c.momentum_status}"
+    momentum_str = f" | momentum={c.momentum_status} rsi_d={c.rsi_slope_3d:+.2f}"
     if c.bounce_failed:
         momentum_str += " BOUNCE_FAILED"
     elif c.reversal_days > 0:

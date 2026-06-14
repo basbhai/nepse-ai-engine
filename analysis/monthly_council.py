@@ -70,7 +70,7 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 from AI.openrouter import _call
-from sheets import run_raw_sql, write_row, upsert_row, get_setting
+from sheets import run_raw_sql, write_row, upsert_row, update_row, get_setting, update_setting
 
 NST = ZoneInfo("Asia/Kathmandu")
 
@@ -183,6 +183,77 @@ def _check_already_run(run_month: str) -> bool:
         return cnt > 0
     except Exception:
         return False
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SMART GATE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _should_council_run() -> tuple[bool, str]:
+    """
+    Evaluate three triggers in order. Returns (should_run, reason).
+    Called every Sunday — council decides internally whether to proceed.
+    """
+    t1_count   = 0
+    t3_streak  = 0
+    t3_blocked = 0
+
+    # ── Trigger 1: Evidence gate ──────────────────────────────────────────────
+    try:
+        rows = run_raw_sql("SELECT MAX(inserted_at) AS last_run FROM monthly_council_log") or []
+        last_run_date = (rows[0].get("last_run") or "1970-01-01") if rows else "1970-01-01"
+        cnt_rows = run_raw_sql(
+            "SELECT COUNT(*) AS cnt FROM trade_journal "
+            "WHERE exit_date IS NOT NULL AND exit_date != '' AND exit_date > %s",
+            (str(last_run_date),),
+        ) or []
+        t1_count = int(cnt_rows[0].get("cnt", 0)) if cnt_rows else 0
+        if t1_count >= 10:
+            return (True, f"T1_EVIDENCE: {t1_count} closed trades since last council")
+    except Exception as e:
+        log.warning("_should_council_run T1 failed: %s", e)
+
+    # ── Trigger 2: Manual agenda gate ────────────────────────────────────────
+    try:
+        items = json.loads(get_setting("COUNCIL_AGENDA_MANUAL", "[]"))
+        if isinstance(items, list) and items:
+            return (True, f"T2_MANUAL: {len(items)} manual agenda items queued")
+    except Exception as e:
+        log.warning("_should_council_run T2 failed: %s", e)
+
+    # ── Trigger 3: Crisis gate ────────────────────────────────────────────────
+    try:
+        rows = run_raw_sql("SELECT value FROM financials WHERE kpi_name = 'loss_streak'") or []
+        raw = str((rows[0].get("value") or "") if rows else "")
+        t3_streak = int(raw.strip() or 0)
+        if t3_streak >= 5:
+            return (True, f"T3_CRISIS: loss_streak={t3_streak}")
+    except Exception as e:
+        log.warning("_should_council_run T3a (loss_streak) failed: %s", e)
+
+    try:
+        rows = run_raw_sql(
+            "SELECT buy_blocked, run_month FROM monthly_override ORDER BY run_month DESC LIMIT 3"
+        ) or []
+        t3_blocked = sum(1 for r in rows if str(r.get("buy_blocked", "")).lower() == "true")
+        if t3_blocked >= 2:
+            return (True, f"T3_CRISIS: buy_blocked {t3_blocked}/3 months")
+    except Exception as e:
+        log.warning("_should_council_run T3b (buy_blocked) failed: %s", e)
+
+    # No trigger fired — notify and return False
+    reason = (
+        f"no trigger: T1={t1_count} trades, T2=no manual agenda, "
+        f"T3=streak={t3_streak} blocked={t3_blocked}/3"
+    )
+    try:
+        from helper.notifier import _send_admin_only
+        _send_admin_only(
+            f"⏭ Council skipped this Sunday — {reason}. Next check: next Sunday."
+        )
+    except Exception as e:
+        log.warning("Council skip notification failed: %s", e)
+    return (False, reason)
 
 
 # ── Permanent agenda items ────────────────────────────────────────────────────
@@ -1447,8 +1518,7 @@ def _send_agenda_preview(
         f"🗓 *NEPSE MONTHLY COUNCIL — Draft Agenda{stack_tag}*\n"
         f"_{run_month} — Preview (council runs tomorrow)_\n\n"
         f"*Proposed agenda items:*\n{items_str}\n\n"
-        f"📝 To add an item: `/agenda_add Your item here`\n"
-        f"✅ To approve as-is: `/agenda_ok`\n\n"
+        f"📝 To add an item: `/council_agenda add Your item here`\n\n"
         f"_If no response by 9:00 AM NST tomorrow, agenda auto-approves._"
     )
 
@@ -1482,11 +1552,10 @@ def _send_agenda_preview(
 
 
 def _load_agenda_preview() -> tuple[list[str], list[str]]:
-    proposed  = []
-    additions = []
+    proposed = []
     try:
         rows = run_raw_sql(
-            "SELECT key, value FROM settings WHERE key IN (%s, %s, 'COUNCIL_AGENDA_ADDITIONS')",
+            "SELECT key, value FROM settings WHERE key IN (%s, %s)",
             (AGENDA_PREVIEW_SETTING, AGENDA_PREVIEW_OK_SETTING),
         ) or []
         settings = {r["key"]: r["value"] for r in rows}
@@ -1495,17 +1564,12 @@ def _load_agenda_preview() -> tuple[list[str], list[str]]:
         if raw_proposed:
             proposed = json.loads(raw_proposed)
 
-        raw_additions = settings.get("COUNCIL_AGENDA_ADDITIONS", "")
-        if raw_additions:
-            additions = json.loads(raw_additions)
-
         status = settings.get(AGENDA_PREVIEW_OK_SETTING, "pending")
-        log.info("Agenda preview: %d items, %d additions, status=%s",
-                 len(proposed), len(additions), status)
+        log.info("Agenda preview: %d items, status=%s", len(proposed), status)
     except Exception as e:
         log.error("Failed to load agenda preview: %s", e)
 
-    return proposed, additions
+    return proposed, []
 
 
 def run_preview(dry_run: bool = False) -> None:
@@ -1630,16 +1694,18 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
     run_month = now_nst.strftime("%Y-%m")
     now_str   = now_nst.strftime("%Y-%m-%d %H:%M:%S")
 
-    # ── Day guard ─────────────────────────────────────────────────────────────
-    if not force and not dry_run and not print_prompts:
-        if not _is_first_sunday_of_month():
-            log.warning("Today is not the first Sunday of the month. Use --force to override.")
-            return
-
     # ── Duplicate guard ───────────────────────────────────────────────────────
     if not dry_run and not print_prompts and not force and _check_already_run(run_month):
         log.warning("Council for %s already has log entries — aborting.", run_month)
         return
+
+    # ── Smart gate (every Sunday — council decides internally) ────────────────
+    if not force and not dry_run and not print_prompts:
+        should_run, reason = _should_council_run()
+        if not should_run:
+            log.info("Council gate: skipped — %s", reason)
+            return
+        log.info("Council gate: proceeding — %s", reason)
 
     log.info("=" * 65)
     log.info("NEPSE MONTHLY COUNCIL — %s", run_month)
@@ -1726,20 +1792,17 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
     # ═════════════════════════════════════════════════════════════════════════
     # STAGE 0b: Agenda review
     # ═════════════════════════════════════════════════════════════════════════
-    # Load hembro_manual agenda items — must be preserved verbatim by reviewer
+    # Load COUNCIL_AGENDA_MANUAL items — must be preserved verbatim by reviewer
     mandatory_items: list[str] = []
     try:
-        mandatory_rows = run_raw_sql(
-            "SELECT agenda_item FROM monthly_council_agenda "
-            "WHERE run_month = %s AND approved_by = 'hembro_manual' "
-            "ORDER BY item_number",
-            (run_month,),
-        ) or []
-        mandatory_items = [str(r["agenda_item"]) for r in mandatory_rows if r.get("agenda_item")]
+        raw_manual = get_setting("COUNCIL_AGENDA_MANUAL", "[]")
+        parsed = json.loads(raw_manual)
+        if isinstance(parsed, list):
+            mandatory_items = [str(i) for i in parsed if i]
         if mandatory_items:
-            log.info("[stage_0b] Found %d hembro_manual mandatory items", len(mandatory_items))
+            log.info("[stage_0b] Found %d COUNCIL_AGENDA_MANUAL mandatory items", len(mandatory_items))
     except Exception as e:
-        log.warning("[stage_0b] Could not load hembro_manual items (non-fatal): %s", e)
+        log.warning("[stage_0b] Could not load COUNCIL_AGENDA_MANUAL (non-fatal): %s", e)
 
     # Separate proposed_items: remove mandatory duplicates from AI list so they
     # are not passed twice, then pass mandatory_items separately to the reviewer.
@@ -1757,7 +1820,7 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
         print(f"\n{'='*65}\nSTAGE 0b (agenda review) — ~{est_review} tokens")
         approved_items = proposed_items
     elif preview_proposed:
-        approved_items = proposed_items + (user_additions or [])
+        approved_items = mandatory_items + proposed_items + (user_additions or [])
         _write_agenda(run_month, approved_items)
         log.info("Stage 0b skipped — Saturday preview already approved (%d items)", len(approved_items))
         try:
@@ -2005,6 +2068,11 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
     # STAGE 8: Telegram notification
     # ═════════════════════════════════════════════════════════════════════════
     if not dry_run and not print_prompts:
+        try:
+            update_setting("COUNCIL_AGENDA_MANUAL", "[]", set_by="monthly_council")
+            log.info("COUNCIL_AGENDA_MANUAL cleared after successful council run")
+        except Exception as e:
+            log.warning("Failed to clear COUNCIL_AGENDA_MANUAL: %s", e)
         _send_council_notification(
             run_month, confidence_score, approved_items, lessons_written,
             checklist, system_verdict=system_verdict,
@@ -2091,19 +2159,15 @@ def _run_quarterly_pattern_review(dry_run: bool = False) -> dict:
                 tally["unchanged"] += 1
 
             if new_status and not dry_run:
-                upsert_row(
+                update_row(
                     "news_effect_patterns",
-                    {"id": str(pat_id)},
-                    {
-                        "id":                str(pat_id),
+                    updates={
                         "status":            new_status,
                         "weighted_accuracy": str(acc),
                         "occurrence_count":  str(resolved),
-                        "notes": (
-                            f"[{now_str} quarterly-review] {status}→{new_status} "
-                            f"acc={acc:.3f} resolved={resolved}"
-                        ),
+                        "notes": f"[{now_str} quarterly-review] {status}→{new_status} acc={acc:.3f} resolved={resolved}",
                     },
+                    where={"id": str(pat_id)},
                 )
                 log.info("Pattern %s: %s→%s (acc=%.3f, n=%d)", et, status, new_status, acc, resolved)
             elif new_status and dry_run:

@@ -25,7 +25,6 @@ from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 load_dotenv()
 
-from analysis.monthly_council import _is_first_sunday_of_month
 
 logging.basicConfig(
     level=logging.INFO,
@@ -52,9 +51,8 @@ def _step(name: str, fn, dry_run: bool):
 
 
 def _is_quarterly_review_month() -> bool:
-    """True on the first Sunday of March, June, September, or December (NST)."""
-    now = datetime.now(tz=NST)
-    return now.month in (3, 6, 9, 12) and _is_first_sunday_of_month()
+    """True in March, June, September, or December (NST)."""
+    return datetime.now(tz=NST).month in (3, 6, 9, 12)
 
 
 def _should_run_interest_scraper() -> bool:
@@ -85,25 +83,22 @@ def run(dry_run: bool = False) -> int:
         run_hub()
     results["learning_hub"] = _step("learning_hub (GPT review)", _learning_hub, dry_run)
 
-    # ── Step 1b: Monthly council (first Sunday of month only) ────────────────
-    if _is_first_sunday_of_month():
-        def _council():
-            from analysis.monthly_council import run as run_council
-            run_council()
-        results["monthly_council"] = _step("monthly_council", _council, dry_run)
+    # ── Step 1b: Monthly council (every Sunday — internal gate decides) ──────
+    def _council():
+        from analysis.monthly_council import run as run_council
+        run_council()
+    results["monthly_council"] = _step("monthly_council", _council, dry_run)
 
-        # ── Step 1c: Quarterly lesson weight review (Mar/Jun/Sep/Dec only) ──
-        if _is_quarterly_review_month():
-            def _weight_review():
-                from analysis.monthly_council import _run_weight_review
-                _run_weight_review(dry_run=dry_run)
-            results["weight_review"] = _step(
-                "lesson_weight_review (DeepSeek quarterly)", _weight_review, dry_run,
-            )
-        else:
-            log.info("── weight_review — skipped (not quarterly month)")
+    # ── Step 1c: Quarterly lesson weight review (Mar/Jun/Sep/Dec only) ──────
+    if _is_quarterly_review_month() and results.get("monthly_council"):
+        def _weight_review():
+            from analysis.monthly_council import _run_weight_review
+            _run_weight_review(dry_run=dry_run)
+        results["weight_review"] = _step(
+            "lesson_weight_review (DeepSeek quarterly)", _weight_review, dry_run,
+        )
     else:
-        log.info("── monthly_council — skipped (not first Sunday of month)")
+        log.info("── weight_review — skipped (not quarterly month or council did not run)")
 
     # ── Step 2: Capital allocator (deep weekly) ───────────────────────────────
     def _allocator():
