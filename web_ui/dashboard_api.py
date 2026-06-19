@@ -28,7 +28,8 @@ from typing import Optional
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from db.connection import _db
-from sheets import upsert_row, read_tab
+from sheets import upsert_row, read_tab, run_raw_sql, update_row
+from config import NST
 
 logging.basicConfig(
     level=logging.INFO,
@@ -134,9 +135,16 @@ class NRBPayload(BaseModel):
     key_risks:                             Optional[str] = None
 
 
+class RegisterUserPayload(BaseModel):
+    full_name:   str
+    telegram_id: Optional[str] = None
+    discord_id:  Optional[str] = None
+
+
 # ── Static ────────────────────────────────────────────────────────────────────
 
-_NRB_HTML = os.path.join(os.path.dirname(__file__), "nrb_entry.html")
+_NRB_HTML      = os.path.join(os.path.dirname(__file__), "nrb_entry.html")
+_REGISTER_HTML = os.path.join(os.path.dirname(__file__), "register.html")
 
 
 @app.get("/robots.txt", response_class=PlainTextResponse)
@@ -153,6 +161,70 @@ def serve_dashboard():
 @app.get("/nrb")
 def serve_nrb():
     return FileResponse(_NRB_HTML)
+
+
+@app.get("/register")
+def serve_register():
+    return FileResponse(_REGISTER_HTML)
+
+
+# ── Register ──────────────────────────────────────────────────────────────────
+
+@app.post("/register")
+def register_user(body: RegisterUserPayload):
+    full_name   = body.full_name.strip()
+    telegram_id = (body.telegram_id or "").strip()
+    discord_id  = (body.discord_id or "").strip()
+
+    if not full_name:
+        raise HTTPException(status_code=400, detail="full_name is required")
+    if not telegram_id and not discord_id:
+        raise HTTPException(
+            status_code=400,
+            detail="At least one of telegram_id or discord_id is required",
+        )
+
+    try:
+        existing = None
+        if telegram_id:
+            rows = run_raw_sql(
+                'SELECT * FROM "paper_users" WHERE telegram_id = %s',
+                (telegram_id,),
+            )
+            existing = rows[0] if rows else None
+        if existing is None and discord_id:
+            rows = run_raw_sql(
+                'SELECT * FROM "paper_users" WHERE discord_id = %s',
+                (discord_id,),
+            )
+            existing = rows[0] if rows else None
+
+        if existing:
+            updates = {"full_name": full_name}
+            if telegram_id:
+                updates["telegram_id"] = telegram_id
+            if discord_id:
+                updates["discord_id"] = discord_id
+            update_row("paper_users", updates, where={"id": existing["id"]})
+            return {"status": "updated", "id": existing["id"]}
+
+        effective_telegram_id = telegram_id or f"discord_only_{discord_id}"
+        upsert_row(
+            "paper_users",
+            {
+                "telegram_id":   effective_telegram_id,
+                "discord_id":    discord_id or None,
+                "full_name":     full_name,
+                "status":        "APPROVED",
+                "registered_at": datetime.datetime.now(NST).isoformat(),
+            },
+            conflict_columns=["telegram_id"],
+        )
+        return {"status": "created", "telegram_id": effective_telegram_id}
+
+    except Exception as e:
+        log.exception("register_user failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ── Health ────────────────────────────────────────────────────────────────────

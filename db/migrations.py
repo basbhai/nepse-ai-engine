@@ -122,6 +122,33 @@ def get_all_existing_columns() -> dict[str, set[str]]:
         return result
 
 
+def get_existing_indexes() -> set[str]:
+    """Return set of index names currently in the public schema."""
+    with _db() as cur:
+        cur.execute("""
+            SELECT indexname
+            FROM pg_indexes
+            WHERE schemaname = 'public'
+        """)
+        return {row["indexname"] for row in cur.fetchall()}
+
+
+def _parse_indexes_from_ddl(ddl: str) -> dict[str, str]:
+    """
+    Extract individual CREATE INDEX statements from a table's DDL block.
+    Returns {index_name: full_statement_with_semicolon}.
+    """
+    import re
+    statements = {}
+    for m in re.finditer(
+        r'(CREATE INDEX IF NOT EXISTS\s+(\w+)\s+ON\s+"[^"]+"\s*\([^)]+\)\s*;)',
+        ddl,
+    ):
+        full_stmt, idx_name = m.group(1), m.group(2)
+        statements[idx_name] = full_stmt
+    return statements
+
+
 # ─────────────────────────────────────────
 # DIFF — what needs to change?
 # ─────────────────────────────────────────
@@ -154,12 +181,24 @@ def compute_drift() -> dict:
         if missing:
             missing_columns[table] = missing
 
+    # Indexes defined in TABLE_DDL but not present in the live DB
+    existing_indexes = get_existing_indexes()
+    missing_indexes: dict[str, list[str]] = {}
+    for table, ddl in TABLE_DDL.items():
+        if table not in existing_tables:
+            continue   # will be created (with its indexes) by CREATE TABLE — skip
+        expected_idx = _parse_indexes_from_ddl(ddl)
+        missing = [name for name in expected_idx if name not in existing_indexes]
+        if missing:
+            missing_indexes[table] = missing
+
     # Tables in DB but not in schema (informational only)
     extra_tables = existing_tables - schema_tables - {"db_schema"}
 
     return {
         "missing_tables":  sorted(missing_tables),
         "missing_columns": missing_columns,
+        "missing_indexes": missing_indexes,
         "extra_tables":    sorted(extra_tables),
     }
 
@@ -205,6 +244,27 @@ def add_column(table: str, column: str) -> bool:
         return False
 
 
+def add_index(table: str, index_name: str) -> bool:
+    """
+    Run a single CREATE INDEX IF NOT EXISTS statement for one missing index,
+    extracted from that table's TABLE_DDL entry.
+    """
+    ddl = TABLE_DDL.get(table, "")
+    statements = _parse_indexes_from_ddl(ddl)
+    stmt = statements.get(index_name)
+    if not stmt:
+        log.error("  ❌ Could not find DDL for index %s on table %s", index_name, table)
+        return False
+    try:
+        with _db() as cur:
+            cur.execute(stmt)
+        log.info("  ✅ Created index: %s on %s", index_name, table)
+        return True
+    except Exception as e:
+        log.error("  ❌ Failed to create index %s on %s: %s", index_name, table, e)
+        return False
+
+
 def apply_drift(drift: dict) -> dict:
     """
     Apply all detected drift — create missing tables, add missing columns.
@@ -218,7 +278,10 @@ def apply_drift(drift: dict) -> dict:
             "columns_failed":  int,
         }
     """
-    stats = dict(tables_created=0, columns_added=0, tables_failed=0, columns_failed=0)
+    stats = dict(
+        tables_created=0, columns_added=0, indexes_added=0,
+        tables_failed=0, columns_failed=0, indexes_failed=0,
+    )
 
     # ── Create missing tables ──────────────────────────────────────────────
     for table in drift["missing_tables"]:
@@ -248,6 +311,21 @@ def apply_drift(drift: dict) -> dict:
                 )
             else:
                 stats["columns_failed"] += 1
+
+    # ── Add missing indexes ────────────────────────────────────────────────
+    for table, index_names in drift.get("missing_indexes", {}).items():
+        log.info("Adding %d missing index(es) to %s: %s", len(index_names), table, index_names)
+        for idx_name in index_names:
+            ok = add_index(table, idx_name)
+            if ok:
+                stats["indexes_added"] += 1
+                _record(
+                    f"auto_add_idx_{table}_{idx_name}",
+                    f"auto: add index {idx_name} on {table}",
+                    notes="auto-detected missing index",
+                )
+            else:
+                stats["indexes_failed"] += 1
 
     return stats
 
@@ -325,7 +403,7 @@ def run_migrations() -> dict:
     _bootstrap()
 
     drift = compute_drift()
-    needs_work = drift["missing_tables"] or drift["missing_columns"]
+    needs_work = drift["missing_tables"] or drift["missing_columns"] or drift.get("missing_indexes")
 
     if not needs_work:
         log.info("Schema is up to date — no changes needed")
@@ -333,9 +411,10 @@ def run_migrations() -> dict:
         return {"status": "up_to_date", "tables_created": 0, "columns_added": 0}
 
     log.info(
-        "Drift detected — %d missing tables, %d tables with missing columns",
+        "Drift detected — %d missing tables, %d tables with missing columns, %d tables with missing indexes",
         len(drift["missing_tables"]),
         len(drift["missing_columns"]),
+        len(drift.get("missing_indexes", {})),
     )
 
     stats = apply_drift(drift)
@@ -443,7 +522,9 @@ if __name__ == "__main__":
             print(f"  ✅ Migration complete:")
             print(f"     Tables created : {result.get('tables_created', 0)}")
             print(f"     Columns added  : {result.get('columns_added', 0)}")
-            if result.get("tables_failed") or result.get("columns_failed"):
+            print(f"     Indexes added  : {result.get('indexes_added', 0)}")
+            if result.get("tables_failed") or result.get("columns_failed") or result.get("indexes_failed"):
                 print(f"     ⚠️  Tables failed : {result.get('tables_failed', 0)}")
                 print(f"     ⚠️  Columns failed: {result.get('columns_failed', 0)}")
+                print(f"     ⚠️  Indexes failed: {result.get('indexes_failed', 0)}")
             print()

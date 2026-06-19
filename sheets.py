@@ -803,6 +803,58 @@ def get_telegram_chat_ids() -> list[str]:
         log.error("get_telegram_chat_ids failed: %s", e)
         return []
 
+def resolve_telegram_id(platform_user_id: str, medium: str) -> Optional[str]:
+    """
+    Translate a platform-specific user ID into the canonical telegram_id
+    used as the join key across paper_capital, paper_portfolio, and
+    paper_trade_log.
+
+    Args:
+        platform_user_id: The user's ID on whichever platform sent the
+                           command (a Telegram chat ID or a Discord
+                           snowflake ID), always passed as a string.
+        medium:            "TELEGRAM" or "DISCORD"
+
+    Returns:
+        The canonical telegram_id string if a matching paper_users row
+        exists, else None. Never raises.
+
+    Example:
+        tid = resolve_telegram_id(str(update.effective_user.id), "DISCORD")
+        if tid is None:
+            # not a registered user — handle accordingly
+            ...
+        capital = get_paper_capital(tid)
+    """
+    medium = medium.upper().strip()
+    pid    = str(platform_user_id)
+
+    try:
+        if medium == "TELEGRAM":
+            rows = run_raw_sql(
+                'SELECT telegram_id FROM "paper_users" WHERE telegram_id = %s',
+                (pid,),
+            )
+        elif medium == "DISCORD":
+            rows = run_raw_sql(
+                'SELECT telegram_id FROM "paper_users" WHERE discord_id = %s',
+                (pid,),
+            )
+        else:
+            log.warning("resolve_telegram_id: unknown medium '%s'", medium)
+            return None
+
+        if not rows:
+            return None
+        return rows[0]["telegram_id"]
+
+    except Exception as e:
+        log.error("resolve_telegram_id(%s, %s) failed: %s", pid, medium, e)
+        return None
+
+
+
+
 def read_today_indicators(date: str = None) -> dict[str, dict]:
     """
     Read today's pre-computed indicators.
@@ -1315,3 +1367,6 @@ def execute_dml(sql: str, params: tuple = None) -> bool:
     except Exception as e:
         log.error("execute_dml failed: %s", e)
         return False
+
+
+

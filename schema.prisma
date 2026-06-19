@@ -1087,14 +1087,16 @@ model share_sectors {
 model paper_users {
   id            Serial
   telegram_id   Text!  @unique
+  discord_id    Text
   username      Text
   full_name     Text
-  status        Text   @default("PENDING")  // PENDING | APPROVED | BLOCKED
+  status        Text   @default("PENDING")
   registered_at Text
   approved_at   Text
   approved_by   Text
 
   @@index([status])
+  @@index([discord_id])
 }
 
 model paper_capital {

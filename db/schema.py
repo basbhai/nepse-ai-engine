@@ -1062,6 +1062,7 @@ TABLE_DDL: dict[str, str] = {
     CREATE TABLE IF NOT EXISTS "paper_users" (
         id SERIAL PRIMARY KEY,
         telegram_id TEXT NOT NULL,
+        discord_id TEXT,
         username TEXT,
         full_name TEXT,
         status TEXT DEFAULT 'PENDING',
@@ -1073,6 +1074,8 @@ TABLE_DDL: dict[str, str] = {
     );
     CREATE INDEX IF NOT EXISTS ix_paper_users_status
         ON "paper_users" (status);
+    CREATE INDEX IF NOT EXISTS ix_paper_users_discord_id
+        ON "paper_users" (discord_id);
     """,
 
     "paper_capital": """
@@ -1721,7 +1724,7 @@ TABLE_COLUMNS: dict[str, list[str]] = {
     "fd_rate_summary": ["fetch_date", "avg_rate_pct", "max_rate_pct", "min_rate_pct", "benchmark_rate_pct", "benchmark_products", "best_bank_name", "best_bank_rate", "best_tenure", "rate_vs_prev_pct", "rate_direction", "fd_score_signal", "total_products"],
     "international_prices": ["date", "variable_name", "close_price", "source"],
     "share_sectors": ["externalid", "companyname", "symbol", "securityname", "status", "companyemail", "website", "sectorname", "regulatorybody", "instrumenttype"],
-    "paper_users": ["telegram_id", "username", "full_name", "status", "registered_at", "approved_at", "approved_by"],
+    "paper_users": ["telegram_id", "discord_id", "username", "full_name", "status", "registered_at", "approved_at", "approved_by"],
     "paper_capital": ["telegram_id", "starting_capital", "current_capital", "total_realised_pnl", "total_fees_paid", "total_cgt_paid", "total_trades", "total_wins", "total_losses", "last_updated", "test_mode"],
     "paper_portfolio": ["telegram_id", "symbol", "status", "total_shares", "wacc", "total_cost", "first_buy_date", "last_buy_date", "buy_count", "exit_date", "exit_price", "exit_shares", "gross_pnl", "sell_fees", "cgt_paid", "net_pnl", "result", "created_at", "updated_at", "test_mode", "audited"],
     "paper_trade_log": ["telegram_id", "symbol", "action", "shares", "price", "gross_amount", "brokerage", "sebon", "dp_fee", "cgt", "total_fees", "net_amount", "capital_before", "capital_after", "wacc_before", "wacc_after", "note", "created_at", "test_mode"],

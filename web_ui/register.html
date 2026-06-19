@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Register — NEPSE AI Engine</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:        #0d0f0e;
+    --surface:   #141714;
+    --surface2:  #1a1d1a;
+    --border:    #2a2e2a;
+    --border2:   #353a35;
+    --green:     #4ade80;
+    --green-dim: #22c55e44;
+    --amber:     #fbbf24;
+    --red:       #f87171;
+    --blue:      #60a5fa;
+    --text:      #e2e8e2;
+    --text-dim:  #6b7a6b;
+    --text-mid:  #9aaa9a;
+    --mono:      'IBM Plex Mono', monospace;
+    --sans:      'IBM Plex Sans', sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 13px;
+    min-height: 100vh;
+    line-height: 1.5;
+  }
+  .header {
+    border-bottom: 1px solid var(--border);
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 100;
+  }
+  .header-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 8px var(--green);
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:1}50%{opacity:.4} }
+  .header-title { font-size: 12px; letter-spacing: .15em; color: var(--text-mid); text-transform: uppercase; }
+  .header-title span { color: var(--green); }
+  .header-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+  .api-status { font-size: 11px; color: var(--text-dim); display: flex; align-items: center; gap: 6px; }
+  .api-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-dim); }
+  .api-dot.online  { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .api-dot.offline { background: var(--red); }
+
+  .page-body {
+    display: flex;
+    justify-content: center;
+    padding: 48px 24px;
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    width: 100%;
+    max-width: 480px;
+  }
+  .card-header {
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    font-size: 10px;
+    letter-spacing: .12em;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .card-header::before {
+    content: '';
+    display: inline-block;
+    width: 3px;
+    height: 12px;
+    background: var(--green);
+  }
+  .card-body { padding: 24px 20px; display: flex; flex-direction: column; gap: 20px; }
+  .field-group { display: flex; flex-direction: column; gap: 6px; }
+  label {
+    font-size: 10px;
+    letter-spacing: .1em;
+    color: var(--text-dim);
+    text-transform: uppercase;
+  }
+  input {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 13px;
+    padding: 8px 12px;
+    border-radius: 3px;
+    outline: none;
+    transition: border-color .15s;
+    width: 100%;
+  }
+  input:focus { border-color: var(--green); }
+  .helper {
+    font-size: 11px;
+    color: var(--text-dim);
+    line-height: 1.4;
+  }
+  .card-footer {
+    padding: 16px 20px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .btn {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    padding: 10px 24px;
+    border-radius: 3px;
+    border: 1px solid;
+    cursor: pointer;
+    transition: all .15s;
+    width: 100%;
+  }
+  .btn-green { background: transparent; border-color: var(--green); color: var(--green); }
+  .btn-green:hover { background: var(--green-dim); }
+  .btn:disabled { opacity: .3; cursor: not-allowed; }
+  .status-banner {
+    font-size: 12px;
+    padding: 10px 14px;
+    border-radius: 3px;
+    display: none;
+    align-items: center;
+    gap: 8px;
+    line-height: 1.5;
+  }
+  .status-banner.success { display:flex; background:#4ade8018; border:1px solid #4ade8044; color:var(--green); }
+  .status-banner.error   { display:flex; background:#f8717118; border:1px solid #f8717144; color:var(--red); }
+  .status-banner.loading { display:flex; background:#60a5fa18; border:1px solid #60a5fa44; color:var(--blue); }
+  .spinner {
+    display: inline-block; width: 10px; height: 10px;
+    border: 1px solid currentColor; border-top-color: transparent;
+    border-radius: 50%; animation: spin .6s linear infinite;
+    flex-shrink: 0;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-dot"></div>
+  <div class="header-title">NEPSE AI Engine / <span>Register</span></div>
+  <div class="header-right">
+    <div class="api-status">
+      <div class="api-dot" id="apiDot"></div>
+      <span id="apiStatusText">checking api...</span>
+    </div>
+  </div>
+</div>
+
+<div class="page-body">
+  <div class="card">
+    <div class="card-header">Link Telegram &amp; Discord Identity</div>
+    <form class="card-body" id="registerForm" onsubmit="handleSubmit(event)">
+      <div class="field-group">
+        <label for="fullName">Full Name <span style="color:var(--red)">*</span></label>
+        <input type="text" id="fullName" placeholder="Your name" required autocomplete="off">
+      </div>
+      <div class="field-group">
+        <label for="telegramId">Telegram ID</label>
+        <input type="text" id="telegramId" placeholder="e.g. 123456789" autocomplete="off">
+        <span class="helper">Leave blank if you don't have one yet</span>
+      </div>
+      <div class="field-group">
+        <label for="discordId">Discord ID</label>
+        <input type="text" id="discordId" placeholder="e.g. 987654321012345678" autocomplete="off">
+        <span class="helper">Right-click your username in Discord with Developer Mode enabled and choose 'Copy User ID'</span>
+      </div>
+    </form>
+    <div class="card-footer">
+      <div class="status-banner" id="statusBanner"></div>
+      <button class="btn btn-green" id="registerBtn" onclick="handleSubmit(event)">Register</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = `http://${window.location.hostname}:8766`;
+
+async function checkAPI() {
+  try {
+    const r = await fetch(`${API}/health`, { signal: AbortSignal.timeout(2000) });
+    if (r.ok) {
+      document.getElementById('apiDot').className = 'api-dot online';
+      document.getElementById('apiStatusText').textContent = 'api online :8766';
+    } else throw new Error();
+  } catch {
+    document.getElementById('apiDot').className = 'api-dot offline';
+    document.getElementById('apiStatusText').textContent = 'api offline — start uvicorn';
+  }
+}
+
+async function handleSubmit(e) {
+  e.preventDefault();
+
+  const fullName   = document.getElementById('fullName').value.trim();
+  const telegramId = document.getElementById('telegramId').value.trim() || null;
+  const discordId  = document.getElementById('discordId').value.trim() || null;
+
+  const banner = document.getElementById('statusBanner');
+  const btn    = document.getElementById('registerBtn');
+
+  banner.className = 'status-banner loading';
+  banner.innerHTML = '<span class="spinner"></span> Registering...';
+  btn.disabled = true;
+
+  try {
+    const r = await fetch(`${API}/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ full_name: fullName, telegram_id: telegramId, discord_id: discordId }),
+    });
+    const d = await r.json();
+    if (r.ok) {
+      const detail = d.status === 'updated'
+        ? `Updated existing record (id ${d.id})`
+        : `Created — telegram_id: ${d.telegram_id}`;
+      banner.className = 'status-banner success';
+      banner.innerHTML = `✓ ${d.status.charAt(0).toUpperCase() + d.status.slice(1)}: ${detail}`;
+    } else {
+      throw new Error(d.detail || 'Unknown error');
+    }
+  } catch (err) {
+    banner.className = 'status-banner error';
+    banner.innerHTML = `✗ Failed: ${err.message}`;
+  }
+
+  btn.disabled = false;
+}
+
+checkAPI();
+setInterval(checkAPI, 15000);
+</script>
+</body>
+</html>
