@@ -31,6 +31,7 @@ CLI:
 
 import logging
 import os
+import re
 import smtplib
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -54,6 +55,48 @@ EMAIL_RECEIVERS  = [e.strip() for e in os.getenv("EMAIL_RECEIVER", "").split(","
 TELEGRAM_API     = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 TELEGRAM_TIMEOUT = 8       # reduced from 15 — parallel sends make this safe
 MAX_TG_LENGTH    = 4000    # Telegram limit is 4096, keep buffer
+
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
+DISCORD_TIMEOUT     = 8
+MAX_DISCORD_LENGTH  = 2000   # Discord hard limit
+
+
+def _notify_channel() -> str:
+    """TELEGRAM | DISCORD | BOTH — from settings table. Default DISCORD."""
+    try:
+        from sheets import get_setting
+        return get_setting("NOTIFY_CHANNEL", "DISCORD").upper()
+    except Exception:
+        return "DISCORD"
+
+
+def send_discord(message: str, silent: bool = False) -> bool:
+    """
+    Send a message to the configured Discord channel via webhook.
+    Converts Telegram-style *bold* to Discord-style **bold**. Never raises.
+    """
+    if not DISCORD_WEBHOOK_URL:
+        logger.debug("Discord: webhook URL not configured")
+        return False
+
+    discord_msg = re.sub(r'(?<!\*)\*(?!\*)([^*]+)\*(?!\*)', r'**\1**', message)
+    if len(discord_msg) > MAX_DISCORD_LENGTH:
+        discord_msg = discord_msg[:MAX_DISCORD_LENGTH - 20] + "\n...(truncated)"
+
+    try:
+        resp = requests.post(DISCORD_WEBHOOK_URL, json={"content": discord_msg}, timeout=DISCORD_TIMEOUT)
+        if resp.status_code in (200, 204):
+            logger.info("Discord sent (%d chars)", len(discord_msg))
+            return True
+        logger.error("Discord: HTTP %d — %s", resp.status_code, resp.text[:200])
+        return False
+    except requests.exceptions.Timeout:
+        logger.error("Discord: request timed out")
+        return False
+    except Exception as exc:
+        logger.error("Discord: unexpected error — %s", exc)
+        return False
+
 
 # ── Paper mode prefix ─────────────────────────────────────────────────────────
 PAPER_PREFIX = "[SIMULATION] "
@@ -107,10 +150,19 @@ def _send_admin_only(message: str, parse_mode: str = "Markdown") -> bool:
     Send to admin chat ID only.
     Used for WAIT signals, error alerts, heartbeats, system messages.
     """
+    channel = _notify_channel()
+    discord_result = False
+
+    if channel in ("DISCORD", "BOTH"):
+        discord_result = send_discord(message)
+
+    if channel == "DISCORD":
+        return discord_result
+
     admin_id = os.getenv("TELEGRAM_CHAT_ID", "")
     if not admin_id or not TELEGRAM_TOKEN:
         logger.debug("Telegram admin-only: token or admin ID not set")
-        return False
+        return discord_result
     try:
         payload = {"chat_id": admin_id, "text": message}
         if parse_mode:
@@ -127,13 +179,13 @@ def _send_admin_only(message: str, parse_mode: str = "Markdown") -> bool:
                 logger.info("Telegram (admin-only) sent to %s (plain retry)", admin_id)
                 return True
         logger.error("Telegram admin-only: HTTP %d — %s", resp.status_code, resp.text[:200])
-        return False
+        return discord_result
     except requests.exceptions.Timeout:
         logger.error("Telegram admin-only: request timed out for %s", admin_id)
-        return False
+        return discord_result
     except Exception as exc:
         logger.error("Telegram admin-only error: %s", exc)
-        return False
+        return discord_result
 
 
 def send_telegram(
@@ -151,6 +203,16 @@ def send_telegram(
         parse_mode: "Markdown" or "HTML" or "" (plain)
         silent:     If True, sends without notification sound (heartbeat)
     """
+    channel = _notify_channel()
+    discord_result = False
+
+    if channel in ("DISCORD", "BOTH"):
+        discord_result = send_discord(message, silent=silent)
+
+    if channel == "DISCORD":
+        return discord_result
+
+    # ── everything below this line is the existing Telegram logic ──
     if not TELEGRAM_TOKEN:
         logger.debug("Telegram: bot token not configured")
         return False
@@ -204,7 +266,7 @@ def send_telegram(
         futures = {executor.submit(_send_one, cid): cid for cid in chat_ids}
         results = [f.result() for f in as_completed(futures)]
 
-    return any(results)
+    return any(results) or discord_result
 
 
 # ══════════════════════════════════════════════════════════════════════════════

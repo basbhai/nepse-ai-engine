@@ -487,8 +487,8 @@ _NEPSE_TREND_KEYS = (
 
 _CLAUDE_AUDIT_KEYS = (
     "review_week", "buy_count", "buy_win_rate", "buy_avg_return",
-    "wait_count", "wait_accuracy", "avoid_count", "avoid_accuracy",
-    "false_avoid_rate", "missed_entry_rate", "overall_accuracy",
+    "wait_count", "wait_accuracy", "avoid_count", "avoid_evaluated_count",
+    "avoid_accuracy", "false_avoid_rate", "missed_entry_rate", "overall_accuracy",
     "macro_accuracy", "audit_summary",
 )
 
@@ -596,6 +596,34 @@ ANTI-OVERFITTING RULES  -  ENFORCE STRICTLY:
 7. Maximum 5 new lessons per review. Prefer highest-impact patterns only.
 8. wait_accuracy = correct_waits / (correct_waits + false_waits) among EVALUATED waits only.
    Do NOT divide by total WAITs including PENDING/EXPIRED.
+9. avoid_accuracy = correct_avoids / (correct_avoids + false_avoids) among EVALUATED AVOIDs only.
+   CORRECT_AVOID = price fell ≤ -2% by evaluation. FALSE_AVOID = price rose ≥ +5% (we missed a winner).
+   EXPIRED_AVOID = price moved between -2% and +5% — inconclusive, do NOT include in denominator.
+   false_avoid_rate = false_avoids / (correct_avoids + false_avoids) — same denominator as avoid_accuracy.
+   Evaluation window uses resolve_hold_days() per primary_signal: MACD/CANDLE/COMBO=17td, SMA=33td, BB=60td.
+   FALSE_AVOID action: identify which lesson or gate condition caused the block. If a specific lesson recurs
+   across multiple FALSE_AVOIDs, flag it for REDUCE_CONFIDENCE adjustment (NOT removal) per rule #1 tiers.
+10. THRESHOLD CONSISTENCY CHECK — before writing any new lesson whose condition
+    includes a numeric threshold (nepal_score_entry, combined_geo_entry, rsi_14,
+    tech_score, conf_score, pe_ratio, etc.), scan active_lessons for any existing
+    lesson on the SAME or an OVERLAPPING sector/symbol scope that already uses a
+    threshold on the SAME field. If one exists:
+      - Prefer reusing that exact threshold value rather than introducing a new one,
+        unless the evidence in this week's data specifically justifies a different
+        cutoff (state that justification explicitly in gpt_reasoning).
+      - If your new threshold is stricter or looser than the existing one without
+        new evidence to justify the difference, do not write the lesson as a fresh
+        rule — instead consider whether it should supersede the existing lesson
+        (via supersedes_lesson_id) or be reworded to align with it.
+      - Note any such alignment or deliberate divergence explicitly in gpt_reasoning,
+        e.g. "aligned to lesson 72's -3 threshold rather than introducing a new
+        -1 cutoff" or "diverged from lesson 38's -5 because this week's data shows
+        the effect onsets earlier, evidenced by rows X,Y,Z."
+    This applies most often to MACRO_FILTER and SIGNAL_FILTER lessons extending
+    coverage to a new sector/symbol under an existing family of sector-scoped rules
+    (e.g. extending a banking/finance lending-rate lesson to cover microfinance or
+    cooperatives) — check whether the new sector should inherit the same threshold
+    as its siblings before picking an independent one.  
 
 GATE PROPOSAL RULES:
 - Only propose threshold changes if gate_misses sample >= 20 for that category
@@ -646,7 +674,10 @@ LESSON SCHEMA (each lesson you write):
   "geo_delta_avg": "<avg geo delta or omit>",
   "nepal_delta_avg": "<avg nepal delta or omit>",
   "alpha_vs_nepse_avg": "<avg alpha or omit>",
-  "gpt_reasoning": "<detailed causal explanation, separate from finding>",
+  "gpt_reasoning": "<detailed causal explanation, separate from finding. If this
+  lesson's condition shares a threshold field with an existing active lesson on
+  an overlapping sector/symbol scope, explicitly state whether the threshold was
+  aligned to that existing lesson or deliberately diverges, and why.>",
   "supersedes_lesson_id": <integer id or null>,
   "trade_journal_ids": "<comma-separated ids of trades that support this lesson>",
   "market_log_ids": "<comma-separated ids of market_log rows used>"
@@ -677,6 +708,7 @@ Use [] for empty arrays. Use exact key names shown  -  any deviation silently br
     "wait_accuracy": 0.0,
     "wait_evaluated_count": 0,
     "avoid_count": 0,
+    "avoid_evaluated_count": 0,
     "avoid_accuracy": 0.0,
     "false_avoid_rate": 0.0,
     "missed_entry_rate": 0.0,
@@ -764,7 +796,8 @@ def _build_user_prompt(
     missed_entries = sum(1 for r in wait_avoid if r.get("outcome") == "MISSED_ENTRY")
     correct_waits  = sum(1 for r in wait_avoid if r.get("outcome") == "CORRECT_WAIT")
     false_waits    = sum(1 for r in wait_avoid if r.get("outcome") == "FALSE_WAIT")
-    evaluated_wait_count = correct_waits + false_waits
+    evaluated_wait_count  = correct_waits + false_waits
+    evaluated_avoid_count = correct_avoids + false_avoids
 
     # BUY decision stats
     buys_with_outcome  = sum(1 for b in buy_decisions if b.get("tj_result"))
@@ -781,8 +814,11 @@ BUY decisions shown: {len(buy_decisions)} ({buys_with_outcome} closed, {buys_ope
 Evaluated WAIT/AVOID shown: {len(wait_avoid)} total rows (PENDING + stamped)
   Stamped WAITs with outcome: {evaluated_wait_count}
   CORRECT_AVOID: {correct_avoids} | FALSE_AVOID: {false_avoids}
+  EXPIRED_AVOID: {sum(1 for r in wait_avoid if r.get("outcome") == "EXPIRED_AVOID")} (inconclusive — exclude from avoid_accuracy denominator)
   MISSED_ENTRY: {missed_entries} | CORRECT_WAIT: {correct_waits}
-  wait_accuracy = correct_waits / evaluated_wait_count = {correct_waits} / {evaluated_wait_count} — do NOT divide by {len(wait_avoid)}
+  wait_accuracy  = correct_waits  / evaluated_wait_count  = {correct_waits}  / {evaluated_wait_count}  — do NOT divide by {len(wait_avoid)}
+  avoid_accuracy = correct_avoids / evaluated_avoid_count = {correct_avoids} / {evaluated_avoid_count} — do NOT include EXPIRED_AVOID in denominator
+  false_avoid_rate = false_avoids / evaluated_avoid_count = {false_avoids} / {evaluated_avoid_count}
 Daily context rows: {len(daily_context)} trading days
 Active lessons: {len(active_lessons)}
 
@@ -1249,10 +1285,11 @@ def _write_claude_audit(audit: dict, review_week: str) -> bool:
             "buy_count":         str(audit.get("buy_count", "")),
             "buy_win_rate":      str(audit.get("buy_win_rate", "")),
             "buy_avg_return":    str(audit.get("buy_avg_return", "")),
-            "wait_count":        str(audit.get("wait_count", "")),
-            "wait_accuracy":     str(audit.get("wait_accuracy", "")),
-            "avoid_count":       str(audit.get("avoid_count", "")),
-            "avoid_accuracy":    str(audit.get("avoid_accuracy", "")),
+            "wait_count":          str(audit.get("wait_count", "")),
+            "wait_accuracy":       str(audit.get("wait_accuracy", "")),
+            "avoid_count":         str(audit.get("avoid_count", "")),
+            "avoid_evaluated_count": str(audit.get("avoid_evaluated_count", "")),
+            "avoid_accuracy":      str(audit.get("avoid_accuracy", "")),
             "false_avoid_rate":  str(audit.get("false_avoid_rate", "")),
             "missed_entry_rate": str(audit.get("missed_entry_rate", "")),
             "overall_accuracy":  str(audit.get("overall_accuracy", "")),

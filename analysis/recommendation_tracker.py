@@ -408,23 +408,6 @@ def evaluate_wait_avoid(dry_run: bool = False) -> list[dict]:
 
         cal_days = calendar_days_between(sig_date, today)
 
-        # ── AVOID safety net ─────────────────────────────────────────────────
-        if action == "AVOID":
-            log.info("AVOID %s still PENDING after %d days -- force CLOSED", symbol, cal_days)
-            if not dry_run:
-                try:
-                    update_row(
-                        "market_log",
-                        updates={"outcome": "CLOSED", "eval_date": today},
-                        where={"id": str(row_id)},
-                    )
-                except Exception as e:
-                    log.error("Force-close AVOID failed: %s", e)
-            evaluated.append({"symbol": symbol, "action": action,
-                               "outcome": "CLOSED", "signal_date": sig_date,
-                               "price_change_pct": None, "eval_alpha": None})
-            continue
-
         # ── WAIT: force expiry after WAIT_EXPIRY_DAYS ────────────────────────
         if action == "WAIT" and cal_days >= WAIT_EXPIRY_DAYS:
             log.info("WAIT %s expired after %d calendar days -- stamping", symbol, cal_days)

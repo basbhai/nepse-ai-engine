@@ -1498,16 +1498,6 @@ def run_analysis(flags: list) -> list[AnalystResult]:
         _write_to_db(result, flag=flag)
         logger.info("Result: %s", result.summary())
 
-        # Stamp AVOID closed immediately -- no hold period needed
-        if result.action == "AVOID":
-            mid = getattr(flag, "market_log_id", None)
-            if mid:
-                try:
-                    from analysis.recommendation_tracker import stamp_avoid_closed
-                    stamp_avoid_closed(mid, result.symbol)
-                except Exception as exc:
-                    logger.warning("stamp_avoid_closed failed: %s", exc)
-
     buys   = [r for r in results if r.action == "BUY"]
     waits  = [r for r in results if r.action == "WAIT"]
     avoids = [r for r in results if r.action == "AVOID"]
