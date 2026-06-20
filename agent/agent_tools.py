@@ -778,30 +778,20 @@ def _handle_wait_to_buy(
     except Exception as e:
         log.error("[agent_tools] Failed to write BUY row for %s: %s", symbol, e)
 
-    # Step 3: Telegram alert
+    # Step 3: alert
     try:
-        from sheets import get_telegram_chat_ids
-        import requests, os
-        token    = os.getenv("TELEGRAM_BOT_TOKEN", "")
-        chat_ids = get_telegram_chat_ids()
-
-        if token and chat_ids:
-            entry = claude_response.get("entry_price", "?")
-            stop  = claude_response.get("stop_loss",   "?")
-            conf  = claude_response.get("confidence",  "?")
-            text  = (
-                f"⚡ WAIT→BUY: {symbol}\n"
-                f"Condition met — agent escalated to Claude\n"
-                f"Entry: NPR {entry} | Stop: NPR {stop} | Conf: {conf}%\n"
-                f"Reason: {reasoning[:120]}"
-            )
-            for chat_id in chat_ids:
-                requests.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
-                    json={"chat_id": chat_id, "text": text},
-                    timeout=10,
-                )
-            result["telegram_sent"] = True
-            log.info("[agent_tools] Telegram WAIT→BUY alert sent for %s", symbol)
+        from helper.notifier import send_telegram
+        entry = claude_response.get("entry_price", "?")
+        stop  = claude_response.get("stop_loss",   "?")
+        conf  = claude_response.get("confidence",  "?")
+        text  = (
+            f"⚡ WAIT→BUY: {symbol}\n"
+            f"Condition met — agent escalated to Claude\n"
+            f"Entry: NPR {entry} | Stop: NPR {stop} | Conf: {conf}%\n"
+            f"Reason: {reasoning[:120]}"
+        )
+        send_telegram(text)
+        result["telegram_sent"] = True
+        log.info("[agent_tools] WAIT→BUY alert sent for %s", symbol)
     except Exception as e:
-        log.warning("[agent_tools] Telegram send failed for %s: %s", symbol, e)
+        log.warning("[agent_tools] Alert send failed for %s: %s", symbol, e)

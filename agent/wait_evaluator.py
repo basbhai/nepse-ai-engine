@@ -51,7 +51,6 @@ Rules
 
 import json
 import logging
-import os
 from datetime import datetime
 
 from config import NST
@@ -234,23 +233,16 @@ def _maybe_alert_ambiguous(
         return parsed
 
     try:
-        token   = os.getenv("TELEGRAM_ERROR_BOT", "")
-        chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
-        if token and chat_id:
-            import requests
-            text = (
-                f"[WAIT EVALUATOR] Ambiguous condition detected\n"
-                f"Symbol: {symbol} | Wait ID: {wait_log_id}\n"
-                f"Condition: {description[:200]}\n"
-                f"This cannot be evaluated automatically. Manual review may be needed."
-            )
-            requests.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                json={"chat_id": chat_id, "text": text},
-                timeout=10,
-            )
+        from helper.notifier import send_telegram
+        text = (
+            f"[WAIT EVALUATOR] Ambiguous condition detected\n"
+            f"Symbol: {symbol} | Wait ID: {wait_log_id}\n"
+            f"Condition: {description[:200]}\n"
+            f"This cannot be evaluated automatically. Manual review may be needed."
+        )
+        send_telegram(text)
     except Exception as exc:
-        log.warning("[evaluator] Telegram ambiguous alert failed: %s", exc)
+        log.warning("[evaluator] Ambiguous alert failed: %s", exc)
 
     alerted.append(key)
     return parsed

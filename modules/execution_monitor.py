@@ -125,10 +125,6 @@ INSTANT_EXIT_TIR = -0.50
 # Liquidity shock threshold
 LIQUIDITY_DROP_THRESH = -0.35
 
-# Telegram
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
-
 # ─────────────────────────────────────────────────────────────────────────────
 # IMPORTS (after env loaded)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -670,19 +666,12 @@ def _check_guard(pos: dict, ltp: float, state_store: dict) -> Optional[str]:
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _send_telegram(text: str) -> None:
-    """Send Telegram message to admin. Non-blocking best-effort."""
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        log.warning("Telegram not configured — alert suppressed: %s", text[:80])
-        return
+    """Send alert to admin via notifier (respects NOTIFY_CHANNEL setting)."""
     try:
-        import requests
-        requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-            json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"},
-            timeout=10,
-        )
+        from helper.notifier import send_telegram
+        send_telegram(text, parse_mode="Markdown")
     except Exception as e:
-        log.error("Telegram send failed: %s", e)
+        log.error("Alert send failed: %s", e)
 
 
 def _format_guard_alert(symbol: str, reason: str, ltp: float,

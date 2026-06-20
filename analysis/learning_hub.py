@@ -33,7 +33,6 @@ Called by:
     weekly_review.yml (GitHub Actions, Sunday ~5:45 PM NST)
 """
 
-import os
 import sys
 import json
 import logging
@@ -41,7 +40,6 @@ import argparse
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from AI import ask_deepseek_review
-import requests
 
 from sheets import run_raw_sql, upsert_row, write_row, get_setting
 
@@ -1095,7 +1093,7 @@ def _write_lessons(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _send_telegram_summary(
+def _send_review_summary(
     review_week: str,
     review_summary: str,
     written: int,
@@ -1104,13 +1102,7 @@ def _send_telegram_summary(
     total_wait_avoid: int,
     gate_proposals: list = None,
 ) -> None:
-    """Send weekly review summary to Telegram."""
-    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    chat_id   = os.environ.get("TELEGRAM_CHAT_ID", "")
-    if not bot_token or not chat_id:
-        log.warning("Telegram not configured  -  skipping notification")
-        return
-
+    """Send weekly review summary via notifier (respects NOTIFY_CHANNEL setting)."""
     gate_line = (
         f"🔧 Gate proposals: {len(gate_proposals)} pending  -  /gate_review to see them\n"
         if gate_proposals else ""
@@ -1129,15 +1121,11 @@ def _send_telegram_summary(
     )
 
     try:
-        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-        requests.post(url, json={
-            "chat_id":    chat_id,
-            "text":       msg,
-            "parse_mode": "Markdown",
-        }, timeout=10)
-        log.info("Telegram summary sent")
+        from helper.notifier import send_telegram
+        send_telegram(msg, parse_mode="Markdown")
+        log.info("Review summary sent")
     except Exception as e:
-        log.warning("Telegram send failed: %s", e)
+        log.warning("Review summary send failed: %s", e)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1466,7 +1454,7 @@ def run(dry_run: bool = False):
 
     # ── Telegram notification
     if not dry_run:
-        _send_telegram_summary(
+        _send_review_summary(
             review_week, review_summary,
             written, deactivated,
             int(trade_agg.get("total", 0) or 0), len(wait_avoid),

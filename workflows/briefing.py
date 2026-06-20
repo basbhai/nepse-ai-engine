@@ -26,13 +26,12 @@ import logging
 import os
 import sys
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
-import requests
 from dotenv import load_dotenv
 
 from sheets import get_setting, read_tab, get_latest_geo, get_latest_pulse,run_raw_sql
 from db.connection import _db
+from helper.notifier import send_morning_brief
 
 load_dotenv()
 
@@ -45,9 +44,6 @@ log = logging.getLogger(__name__)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 NST            = timezone(timedelta(hours=5, minutes=45))
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-ADMIN_CHAT_ID  = os.getenv("TELEGRAM_CHAT_ID", "")   # admin / live trading recipient
-TELEGRAM_URL   = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 MAX_MSG_LENGTH = 4000
 
 
@@ -416,29 +412,30 @@ def _build_live_brief(nst_now: datetime) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SECTION 4 — TELEGRAM SENDER
+# SECTION 4 — SENDER
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _send_telegram(chat_id: str, message: str) -> bool:
-    """Send message to a specific chat_id."""
-    if not TELEGRAM_TOKEN or not chat_id:
+def _send_to_user(chat_id: str, message: str) -> bool:
+    """Send per-user paper brief directly to a specific chat_id.
+    Direct Telegram call is necessary here because notifier has no per-user routing."""
+    import requests
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    if not token or not chat_id:
         log.error("Telegram credentials missing — token=%s chat_id=%s",
-                  bool(TELEGRAM_TOKEN), bool(chat_id))
+                  bool(token), bool(chat_id))
         return False
     try:
-        payload = {
-            "chat_id":    chat_id,
-            "text":       message,
-            
-        }
-        r = requests.post(TELEGRAM_URL, json=payload, timeout=15)
+        r = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": message},
+            timeout=15,
+        )
         if r.status_code == 200:
             log.info("Brief sent to chat_id=%s", chat_id)
             return True
-        else:
-            log.error("Telegram send failed for %s: HTTP %d — %s",
-                      chat_id, r.status_code, r.text[:200])
-            return False
+        log.error("Telegram send failed for %s: HTTP %d — %s",
+                  chat_id, r.status_code, r.text[:200])
+        return False
     except Exception as exc:
         log.error("Telegram send error for %s: %s", chat_id, exc)
         return False
@@ -494,7 +491,7 @@ def run(print_only: bool = False) -> bool:
                 print(message)
                 results.append(True)
             else:
-                ok = _send_telegram(telegram_id, message)
+                ok = _send_to_user(telegram_id, message)
                 results.append(ok)
 
         return any(results)
@@ -507,7 +504,7 @@ def run(print_only: bool = False) -> bool:
             print(message)
             return True
 
-        return _send_telegram(ADMIN_CHAT_ID, message)
+        return send_morning_brief(message)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
