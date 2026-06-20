@@ -355,6 +355,7 @@ def seed_settings():
         ("BROKERAGE_RATE_PCT",     "0.4",      "Broker commission %"),
         ("SEBON_FEE_PCT",          "0.015",    "SEBON fee %"),
         ("DP_FEE_NPR",             "25",       "Depository fee per transaction NPR"),
+        ("NOTIFY_CHANNEL",         "BOTH",     "Notification channel: TELEGRAM | DISCORD | BOTH"),
         ("TELEGRAM_ENABLED",       "false",    "Send Telegram alerts"),
         ("TELEGRAM_CHAT_ID",       "",         "Your Telegram chat ID"),
         ("MARKET_OPEN_TIME",       "10:45",    "NEPSE open time NST"),

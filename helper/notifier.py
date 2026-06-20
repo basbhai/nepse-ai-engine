@@ -62,12 +62,12 @@ MAX_DISCORD_LENGTH  = 2000   # Discord hard limit
 
 
 def _notify_channel() -> str:
-    """TELEGRAM | DISCORD | BOTH — from settings table. Default DISCORD."""
+    """TELEGRAM | DISCORD | BOTH — from settings table. Default BOTH."""
     try:
         from sheets import get_setting
-        return get_setting("NOTIFY_CHANNEL", "DISCORD").upper()
+        return get_setting("NOTIFY_CHANNEL", "BOTH").upper()
     except Exception:
-        return "DISCORD"
+        return "BOTH"
 
 
 def send_discord(message: str, silent: bool = False) -> bool:
