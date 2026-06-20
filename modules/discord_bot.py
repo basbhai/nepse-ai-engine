@@ -106,7 +106,7 @@ async def _resolve(interaction: discord.Interaction) -> str | None:
     """
     tid = resolve_telegram_id(str(interaction.user.id), "DISCORD")
     if tid is None:
-        await interaction.response.send_message(
+        await interaction.followup.send(
             "You're not registered. Register at the dashboard:\n"
             f"{REGISTER_URL}",
             ephemeral=True,
@@ -146,6 +146,7 @@ async def on_ready():
 @tree.command(guild=GUILD, name="help", description="List available commands")
 async def cmd_help(interaction: discord.Interaction):
     try:
+        await interaction.response.defer(ephemeral=True)
         embed = discord.Embed(
             title=f"Nepal Paper Trading Bot {sandbox_label()}",
             description=mode_label(),
@@ -169,7 +170,7 @@ async def cmd_help(interaction: discord.Interaction):
             inline=False,
         )
         embed.set_footer(text="All replies are visible only to you.")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
     except Exception:
         log.exception("cmd_help failed for user %s", interaction.user.id)
         await _safe_error(interaction)
@@ -182,12 +183,13 @@ async def cmd_help(interaction: discord.Interaction):
 @tree.command(guild=GUILD, name="mode", description="Show current trading mode (PAPER/LIVE + sandbox)")
 async def cmd_mode(interaction: discord.Interaction):
     try:
+        await interaction.response.defer(ephemeral=True)
         tid = await _resolve(interaction)
         if tid is None:
             return
         label = mode_label()
         cb    = circuit_label(tid)
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"{label} | {cb}",
             ephemeral=True,
         )
@@ -203,6 +205,7 @@ async def cmd_mode(interaction: discord.Interaction):
 @tree.command(guild=GUILD, name="capital", description="Show your paper capital state")
 async def cmd_capital(interaction: discord.Interaction):
     try:
+        await interaction.response.defer(ephemeral=True)
         tid = await _resolve(interaction)
         if tid is None:
             return
@@ -243,7 +246,7 @@ async def cmd_capital(interaction: discord.Interaction):
             value=str(cap.get("total_trades", "0")),
             inline=True,
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
     except Exception:
         log.exception("cmd_capital failed for user %s", interaction.user.id)
         await _safe_error(interaction)
@@ -256,6 +259,7 @@ async def cmd_capital(interaction: discord.Interaction):
 @tree.command(guild=GUILD, name="status", description="Show your open positions")
 async def cmd_status(interaction: discord.Interaction):
     try:
+        await interaction.response.defer(ephemeral=True)
         tid = await _resolve(interaction)
         if tid is None:
             return
@@ -269,7 +273,7 @@ async def cmd_status(interaction: discord.Interaction):
         curr = Decimal(str(cap.get("current_capital", "0")))
 
         if not positions:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"No open positions | {mode_label()}\nAvailable cash: {fmt_npr(curr)}",
                 ephemeral=True,
             )
@@ -296,7 +300,7 @@ async def cmd_status(interaction: discord.Interaction):
                 inline=False,
             )
         embed.set_footer(text=f"Available cash: {fmt_npr(curr)}")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
     except Exception:
         log.exception("cmd_status failed for user %s", interaction.user.id)
         await _safe_error(interaction)
@@ -309,6 +313,7 @@ async def cmd_status(interaction: discord.Interaction):
 @tree.command(guild=GUILD, name="pnl", description="Show closed trades and win rate")
 async def cmd_pnl(interaction: discord.Interaction):
     try:
+        await interaction.response.defer(ephemeral=True)
         tid = await _resolve(interaction)
         if tid is None:
             return
@@ -365,7 +370,7 @@ async def cmd_pnl(interaction: discord.Interaction):
                     inline=False,
                 )
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
     except Exception:
         log.exception("cmd_pnl failed for user %s", interaction.user.id)
         await _safe_error(interaction)
@@ -462,12 +467,13 @@ class BuyView(discord.ui.View):
 )
 async def cmd_buy(interaction: discord.Interaction, symbol: str, shares: int, price: float):
     try:
+        await interaction.response.defer(ephemeral=True)
         tid = await _resolve(interaction)
         if tid is None:
             return
 
         if _circuit_breakers.get(tid):
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "🔴 Circuit breaker ACTIVE. Use /resume first.",
                 ephemeral=True,
             )
@@ -475,20 +481,20 @@ async def cmd_buy(interaction: discord.Interaction, symbol: str, shares: int, pr
 
         gate = market_gate_message()
         if gate:
-            await interaction.response.send_message(gate, ephemeral=True)
+            await interaction.followup.send(gate, ephemeral=True)
             return
 
         sym = symbol.upper()
         matches = lookup_symbols(sym)
         if not matches:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"❌ Symbol **{sym}** not found in NEPSE.",
                 ephemeral=True,
             )
             return
         if matches[0].upper() != sym:
             suggestion = ", ".join(f"`{s}`" for s in matches)
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"❌ Symbol **{sym}** not found. Did you mean: {suggestion}?",
                 ephemeral=True,
             )
@@ -499,7 +505,7 @@ async def cmd_buy(interaction: discord.Interaction, symbol: str, shares: int, pr
             d_shares = Decimal(str(int(shares)))
             d_price  = Decimal(str(price))
         except (InvalidOperation, ValueError) as e:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"❌ Parse error: {e}", ephemeral=True
             )
             return
@@ -510,7 +516,7 @@ async def cmd_buy(interaction: discord.Interaction, symbol: str, shares: int, pr
         available = Decimal(str(cap.get("current_capital", "0")))
 
         if total_out > available:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"❌ Insufficient capital.\n"
                 f"Required:  {fmt_npr(total_out)}\n"
                 f"Available: {fmt_npr(available)}",
@@ -553,7 +559,7 @@ async def cmd_buy(interaction: discord.Interaction, symbol: str, shares: int, pr
         embed.set_footer(text="Expires in 60 seconds.")
 
         view = BuyView(interaction.user.id, tid, sym, d_shares, d_price)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
     except Exception:
         log.exception("cmd_buy failed for user %s", interaction.user.id)
         await _safe_error(interaction)
@@ -654,26 +660,27 @@ class SellView(discord.ui.View):
 )
 async def cmd_sell(interaction: discord.Interaction, symbol: str, shares: int, price: float):
     try:
+        await interaction.response.defer(ephemeral=True)
         tid = await _resolve(interaction)
         if tid is None:
             return
 
         gate = market_gate_message()
         if gate:
-            await interaction.response.send_message(gate, ephemeral=True)
+            await interaction.followup.send(gate, ephemeral=True)
             return
 
         sym = symbol.upper()
         matches = lookup_symbols(sym)
         if not matches:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"❌ Symbol **{sym}** not found in NEPSE.",
                 ephemeral=True,
             )
             return
         if matches[0].upper() != sym:
             suggestion = ", ".join(f"`{s}`" for s in matches)
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"❌ Symbol **{sym}** not found. Did you mean: {suggestion}?",
                 ephemeral=True,
             )
@@ -684,14 +691,14 @@ async def cmd_sell(interaction: discord.Interaction, symbol: str, shares: int, p
             d_shares = Decimal(str(int(shares)))
             d_price  = Decimal(str(price))
         except (InvalidOperation, ValueError) as e:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"❌ Parse error: {e}", ephemeral=True
             )
             return
 
         pos = get_paper_position(tid, sym)
         if not pos:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"❌ No open position for **{sym}**. Use /status.",
                 ephemeral=True,
             )
@@ -699,7 +706,7 @@ async def cmd_sell(interaction: discord.Interaction, symbol: str, shares: int, p
 
         held = Decimal(str(pos["total_shares"]))
         if d_shares > held:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"❌ You hold {held:.0f} shares of {sym}. Cannot sell {d_shares:.0f}.",
                 ephemeral=True,
             )
@@ -737,7 +744,7 @@ async def cmd_sell(interaction: discord.Interaction, symbol: str, shares: int, p
         embed.set_footer(text="Expires in 60 seconds.")
 
         view = SellView(interaction.user.id, tid, sym, d_shares, d_price)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
     except Exception:
         log.exception("cmd_sell failed for user %s", interaction.user.id)
         await _safe_error(interaction)
@@ -746,15 +753,15 @@ async def cmd_sell(interaction: discord.Interaction, symbol: str, shares: int, p
 # ─── Shared error reply ───────────────────────────────────────────────────────
 
 async def _safe_error(interaction: discord.Interaction):
-    """Send a generic error reply without raising. Handles already-responded interactions."""
+    """Send a generic error reply without raising. Primary path is followup (defer always runs first)."""
     msg = "An internal error occurred. Please try again in a moment."
     try:
-        if interaction.response.is_done():
-            await interaction.followup.send(msg, ephemeral=True)
-        else:
-            await interaction.response.send_message(msg, ephemeral=True)
+        await interaction.followup.send(msg, ephemeral=True)
     except Exception:
-        log.exception("_safe_error itself failed for interaction %s", interaction.id)
+        try:
+            await interaction.response.send_message(msg, ephemeral=True)
+        except Exception:
+            log.exception("_safe_error itself failed for interaction %s", interaction.id)
 
 
 # ─── Entrypoint ──────────────────────────────────────────────────────────────
