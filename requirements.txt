@@ -25,3 +25,4 @@ uvicorn[standard]
 pydantic
 openpyxl
 pandas_ta
+discord.py>=2.3
