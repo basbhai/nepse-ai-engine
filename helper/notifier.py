@@ -145,6 +145,51 @@ def _get_telegram_chat_ids() -> List[str]:
     return chat_ids
 
 
+def send_to_user(telegram_chat_id: str, message: str) -> bool:
+    """
+    Send a personalised message to a specific paper_users member (morning brief,
+    per-user signals, trade confirmations).
+
+    Routing:
+      - Always uses Telegram today (direct chat_id send, no parse_mode — briefs
+        are plain text with emojis, not Markdown).
+      - Discord per-user DMs require DISCORD_BOT_TOKEN (not yet configured).
+        When that env var is added, the Discord DM path belongs here so all
+        callers get it for free.
+
+    Never raises. Returns True if the message was delivered.
+    """
+    if not telegram_chat_id:
+        logger.warning("send_to_user: no telegram_chat_id provided — skipping")
+        return False
+    if not TELEGRAM_TOKEN:
+        logger.debug("send_to_user: TELEGRAM_BOT_TOKEN not configured")
+        return False
+
+    text = message
+    if len(text) > MAX_TG_LENGTH:
+        text = text[:MAX_TG_LENGTH - 50] + "\n...(truncated)"
+
+    try:
+        resp = requests.post(
+            TELEGRAM_API,
+            json={"chat_id": telegram_chat_id, "text": text},
+            timeout=TELEGRAM_TIMEOUT,
+        )
+        if resp.status_code == 200:
+            logger.info("send_to_user: sent to %s (%d chars)", telegram_chat_id, len(text))
+            return True
+        logger.error("send_to_user: HTTP %d for %s — %s",
+                     resp.status_code, telegram_chat_id, resp.text[:200])
+        return False
+    except requests.exceptions.Timeout:
+        logger.error("send_to_user: request timed out for %s", telegram_chat_id)
+        return False
+    except Exception as exc:
+        logger.error("send_to_user: unexpected error for %s — %s", telegram_chat_id, exc)
+        return False
+
+
 def _send_admin_only(message: str, parse_mode: str = "Markdown") -> bool:
     """
     Send to admin chat ID only.

@@ -117,10 +117,10 @@ def run(dry_run: bool = False) -> int:
     else:
         log.info("── interest_scraper — throttled (< 25 days since last run)")
 
-    # ── Step 4: Weekly Telegram summary ──────────────────────────────────────
+    # ── Step 4: Weekly notification summary ──────────────────────────────────
     def _weekly_summary():
-        _send_weekly_telegram()
-    results["telegram"] = _step("weekly Telegram summary", _weekly_summary, dry_run)
+        _send_weekly_summary()
+    results["notification"] = _step("weekly notification summary", _weekly_summary, dry_run)
 
     # ── Summary ───────────────────────────────────────────────────────────────
     passed = sum(1 for v in results.values() if v)
@@ -133,17 +133,10 @@ def run(dry_run: bool = False) -> int:
     return 0
 
 
-def _send_weekly_telegram():
-    """Build and send a weekly performance summary to Telegram."""
-    import os
-    import requests
+def _send_weekly_summary():
+    """Build and send a weekly performance summary via notifier (TELEGRAM/DISCORD/BOTH)."""
     from sheets import read_tab, get_setting
-
-    token   = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
-    if not token or not chat_id:
-        log.warning("Telegram not configured — skipping weekly summary")
-        return
+    from helper.notifier import _send_admin_only
 
     now = datetime.now(tz=NST)
 
@@ -170,19 +163,11 @@ def _send_weekly_telegram():
         "━" * 22,
     ]
 
-    msg = "\n".join(lines)
-    try:
-        r = requests.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"},
-            timeout=15,
-        )
-        if r.status_code == 200:
-            log.info("Weekly Telegram summary sent")
-        else:
-            log.error("Telegram send failed: HTTP %d", r.status_code)
-    except Exception as e:
-        log.error("Telegram send error: %s", e)
+    ok = _send_admin_only("\n".join(lines), parse_mode="Markdown")
+    if ok:
+        log.info("Weekly summary sent")
+    else:
+        log.error("Weekly summary: all channels failed")
 
 
 if __name__ == "__main__":

@@ -23,7 +23,6 @@ CLI:
 """
 
 import logging
-import os
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -416,29 +415,9 @@ def _build_live_brief(nst_now: datetime) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _send_to_user(chat_id: str, message: str) -> bool:
-    """Send per-user paper brief directly to a specific chat_id.
-    Direct Telegram call is necessary here because notifier has no per-user routing."""
-    import requests
-    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    if not token or not chat_id:
-        log.error("Telegram credentials missing — token=%s chat_id=%s",
-                  bool(token), bool(chat_id))
-        return False
-    try:
-        r = requests.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat_id, "text": message},
-            timeout=15,
-        )
-        if r.status_code == 200:
-            log.info("Brief sent to chat_id=%s", chat_id)
-            return True
-        log.error("Telegram send failed for %s: HTTP %d — %s",
-                  chat_id, r.status_code, r.text[:200])
-        return False
-    except Exception as exc:
-        log.error("Telegram send error for %s: %s", chat_id, exc)
-        return False
+    """Send per-user paper brief to a specific user via notifier."""
+    from helper.notifier import send_to_user
+    return send_to_user(chat_id, message)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
