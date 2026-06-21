@@ -1554,6 +1554,35 @@
       color: #000;
     }
 
+    /* ── Register link button ─────────────────────────────────────────── */
+    #register-link {
+      position: fixed;
+      top: 12px;
+      right: 60px;
+      z-index: 9999;
+      height: 34px;
+      padding: 0 12px;
+      border-radius: 6px;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-decoration: none;
+      letter-spacing: 0.05em;
+      transition: background .15s, border-color .15s, color .15s;
+    }
+
+    #register-link:hover {
+      background: var(--green);
+      border-color: var(--green);
+      color: #000;
+    }
+
     /* ── Stealth tab styles ───────────────────────────────────────────── */
     .st-stats-row {
       display: grid;
@@ -1750,6 +1779,7 @@
 </head>
 
 <body>
+  <a id="register-link" href="register.html" title="Register">Register</a>
   <button id="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark">☀</button>
 
   <!-- ═══════════════════════ SIDEBAR ═══════════════════════════ -->
