@@ -1802,6 +1802,7 @@
       <a href="#s-nrb">&#9632; NRB Entry</a>
       <a href="#s-reporter">&#9632; Query</a>
       <a href="#s-stealth">&#9632; Stealth</a>
+      <a href="#s-gate-tracker">&#9632; Gate Tracker</a>
     </nav>
     <div class="refresh-info">
       Auto-refresh: <span>5 min</span><br />
@@ -2257,6 +2258,83 @@
 
     </div><!-- /s-stealth -->
 
+    <!-- ═══════════════════════ GATE TRACKER ═════════════════════════════ -->
+    <div class="section" id="s-gate-tracker">
+      <div class="section-header">
+        <h2>&#128300; Gate Tracker</h2><span class="tag">FORENSIC</span>
+      </div>
+
+      <!-- Stats row: 4 cards -->
+      <div class="st-stats-row">
+        <div class="st-stat">
+          <div class="st-stat-label">&#128202; Total Tracked</div>
+          <div class="st-stat-val" id="gt-total">&#8212;</div>
+        </div>
+        <div class="st-stat" style="border-left:3px solid var(--amber)">
+          <div class="st-stat-label">&#9203; Pending</div>
+          <div class="st-stat-val" id="gt-pending">&#8212;</div>
+        </div>
+        <div class="st-stat">
+          <div class="st-stat-label">&#9888; False Block Rate</div>
+          <div class="st-stat-val" id="gt-fb-rate">&#8212;</div>
+        </div>
+        <div class="st-stat">
+          <div class="st-stat-label">&#127919; Would've Caught</div>
+          <div class="st-stat-val" id="gt-wc-rate">&#8212;</div>
+        </div>
+      </div>
+
+      <!-- Attribution table -->
+      <div class="st-section">
+        <div class="st-section-hdr">Gate Attribution by Category &amp; Decision Type</div>
+        <div class="tbl-wrap">
+          <table class="st-tbl">
+            <thead>
+              <tr>
+                <th>Gate Category</th>
+                <th>Decision Type</th>
+                <th>Total</th>
+                <th>Stamped</th>
+                <th>False Block</th>
+                <th>Correct Block</th>
+                <th>FB Rate</th>
+                <th>Would've Caught</th>
+                <th>Caught Rate</th>
+              </tr>
+            </thead>
+            <tbody id="gt-category-body">
+              <tr><td colspan="9" class="st-empty">Loading&#8230;</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Recent False Blocks table -->
+      <div class="st-section">
+        <div class="st-section-hdr">Recent False Blocks (last 20)</div>
+        <div class="tbl-wrap">
+          <table class="st-tbl">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Symbol</th>
+                <th>Gate</th>
+                <th>Decision</th>
+                <th>Return %</th>
+                <th>Outcome Tier</th>
+                <th>Would've Caught</th>
+                <th>Market State</th>
+              </tr>
+            </thead>
+            <tbody id="gt-fb-body">
+              <tr><td colspan="8" class="st-empty">Loading&#8230;</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div><!-- /s-gate-tracker -->
+
   </div><!-- /main -->
 
   <!-- ═══════════════════════ BOTTOM NAV (mobile) ═══════════════ -->
@@ -2273,6 +2351,7 @@
       <a href="#s-nrb"><span class="bico">⊞</span>NRB</a>
       <a href="#s-reporter"><span class="bico">⊟</span>Query</a>
       <a href="#s-stealth"><span class="bico">◈</span>Stealth</a>
+      <a href="#s-gate-tracker"><span class="bico">&#128300;</span>Gates</a>
     </div>
   </nav>
 
@@ -2954,7 +3033,7 @@
     }
 
     /* ── Sidebar / bottom-nav active tracking ────────────────────────── */
-    const NAV_SECTIONS = ['s-dashboard', 's-marketlog', 's-learning', 's-audit', 's-council', 's-trades', 's-portfolio', 's-logs', 's-nrb', 's-reporter', 's-stealth'];
+    const NAV_SECTIONS = ['s-dashboard', 's-marketlog', 's-learning', 's-audit', 's-council', 's-trades', 's-portfolio', 's-logs', 's-nrb', 's-reporter', 's-stealth', 's-gate-tracker'];
 
     function updateActiveNav() {
       let current = NAV_SECTIONS[0];
@@ -2983,9 +3062,11 @@
       nrbCheckAPI();
       loadReporter();
       loadStealth();
+      loadGateTracker();
       setInterval(refreshAll, 5 * 60 * 1000);
       setInterval(nrbCheckAPI, 15000);
       setInterval(loadStealth, 30000);
+      setInterval(loadGateTracker, 5 * 60 * 1000);
     });
 
 
@@ -3738,6 +3819,96 @@
         loadStealthTriggered(),
         loadStealthHistory(),
       ]);
+    }
+
+    /* ── Gate Tracker ──────────────────────────────────────────────────── */
+
+    async function loadGateTracker() {
+      try {
+        const d = await fetchJSON('/dashboard/gate_tracker');
+        const ov = d.overall || {};
+
+        // Stat cards
+        document.getElementById('gt-total').textContent   = ov.total   ?? '—';
+        document.getElementById('gt-pending').textContent = ov.pending  ?? '—';
+
+        const fbPct = ov.false_block_rate != null
+          ? (ov.false_block_rate * 100).toFixed(1) + '%'
+          : '—';
+        const fbEl = document.getElementById('gt-fb-rate');
+        fbEl.textContent = fbPct;
+        fbEl.style.color = ov.false_block_rate >= 0.60 ? 'var(--red)'
+                         : ov.false_block_rate >= 0.40 ? 'var(--amber)'
+                         : ov.false_block_rate > 0     ? 'var(--green)'
+                         : '';
+
+        const wcPct = ov.would_have_caught_rate != null
+          ? (ov.would_have_caught_rate * 100).toFixed(1) + '%'
+          : '—';
+        document.getElementById('gt-wc-rate').textContent = wcPct;
+
+        // Attribution table
+        const cats = d.by_category || [];
+        const catBody = document.getElementById('gt-category-body');
+        if (!cats.length) {
+          catBody.innerHTML = '<tr><td colspan="9" class="st-empty">No data yet</td></tr>';
+        } else {
+          catBody.innerHTML = cats.map(r => {
+            const fb = r.false_block_rate ?? 0;
+            const fbColor = fb >= 0.60 ? 'color:var(--red)'
+                          : fb >= 0.40 ? 'color:var(--amber)'
+                          : fb  < 0.20 && fb > 0 ? 'color:var(--green)'
+                          : '';
+            return `<tr>
+              <td>${esc(r.gate_category)}</td>
+              <td>${esc(r.decision)}</td>
+              <td>${r.total}</td>
+              <td>${r.stamped}</td>
+              <td>${r.false_block}</td>
+              <td>${r.correct_block}</td>
+              <td style="${fbColor}">${(fb * 100).toFixed(1)}%</td>
+              <td>${r.would_have_caught}</td>
+              <td>${(r.would_have_caught_rate * 100).toFixed(1)}%</td>
+            </tr>`;
+          }).join('');
+        }
+
+        // Recent false blocks table
+        const fbs = d.recent_false_blocks || [];
+        const fbBody = document.getElementById('gt-fb-body');
+        if (!fbs.length) {
+          fbBody.innerHTML = '<tr><td colspan="8" class="st-empty">No false blocks yet</td></tr>';
+        } else {
+          fbBody.innerHTML = fbs.map(r => {
+            const ret = r.outcome_return_pct != null
+              ? (parseFloat(r.outcome_return_pct) > 0 ? '+' : '') + parseFloat(r.outcome_return_pct).toFixed(2) + '%'
+              : '—';
+            const retColor = parseFloat(r.outcome_return_pct) > 0
+              ? 'color:var(--green)' : 'color:var(--red)';
+            const caught = r.would_have_caught === 'true'
+              ? '<span style="color:var(--green)">YES</span>'
+              : r.would_have_caught === 'false'
+              ? '<span style="color:var(--muted)">no</span>'
+              : '—';
+            return `<tr>
+              <td>${esc(r.date || '')}</td>
+              <td><strong>${esc(r.symbol || '')}</strong></td>
+              <td>${esc(r.gate_category || '')}</td>
+              <td>${esc(r.decision || '')}</td>
+              <td style="${retColor}">${ret}</td>
+              <td>${esc(r.outcome_tier || '—')}</td>
+              <td>${caught}</td>
+              <td>${esc(r.market_state || '—')}</td>
+            </tr>`;
+          }).join('');
+        }
+      } catch (e) {
+        console.warn('gate_tracker:', e);
+        document.getElementById('gt-category-body').innerHTML =
+          `<tr><td colspan="9" style="color:var(--red)">Error: ${esc(e.message)}</td></tr>`;
+        document.getElementById('gt-fb-body').innerHTML =
+          `<tr><td colspan="8" style="color:var(--red)">Error: ${esc(e.message)}</td></tr>`;
+      }
     }
 
     /* ── Logs ──────────────────────────────────────────────────────────── */

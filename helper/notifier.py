@@ -98,6 +98,78 @@ def send_discord(message: str, silent: bool = False) -> bool:
         return False
 
 
+def send_discord_dm(discord_id: str, message: str) -> bool:
+    """
+    Send a private DM to a Discord user via bot REST API.
+    Used for personalised per-user briefings.
+    Requires DISCORD_BOT_TOKEN in .env.
+    Never raises.
+    """
+    token = os.getenv("DISCORD_BOT_TOKEN", "")
+    if not token:
+        logger.error("send_discord_dm: DISCORD_BOT_TOKEN not set")
+        return False
+    if not discord_id or str(discord_id).strip() in ("", "None", "null"):
+        logger.warning("send_discord_dm: no discord_id provided")
+        return False
+
+    headers = {
+        "Authorization": f"Bot {token}",
+        "Content-Type": "application/json",
+    }
+
+    text = message
+    if len(text) > 1900:
+        text = text[:1900] + "\n...(truncated)"
+
+    try:
+        # Step 1: open or retrieve existing DM channel
+        r = requests.post(
+            "https://discord.com/api/v10/users/@me/channels",
+            headers=headers,
+            json={"recipient_id": str(discord_id)},
+            timeout=10,
+        )
+        if r.status_code != 200:
+            logger.error(
+                "send_discord_dm: DM channel create failed %d for %s — %s",
+                r.status_code, discord_id, r.text[:200],
+            )
+            return False
+
+        channel_id = r.json().get("id")
+        if not channel_id:
+            logger.error("send_discord_dm: no channel_id in response for %s", discord_id)
+            return False
+
+        # Step 2: send message to DM channel
+        r2 = requests.post(
+            f"https://discord.com/api/v10/channels/{channel_id}/messages",
+            headers=headers,
+            json={"content": text},
+            timeout=10,
+        )
+        if r2.status_code in (200, 201):
+            logger.info(
+                "send_discord_dm: sent to discord_id=%s (%d chars)",
+                discord_id, len(text),
+            )
+            return True
+
+        logger.error(
+            "send_discord_dm: message failed %d for %s — %s",
+            r2.status_code, discord_id, r2.text[:200],
+        )
+        return False
+
+    except requests.exceptions.Timeout:
+        logger.error("send_discord_dm: timeout for discord_id=%s", discord_id)
+        return False
+    except Exception as exc:
+        logger.error("send_discord_dm: unexpected error for %s — %s", discord_id, exc)
+        return False
+
+
 # ── Paper mode prefix ─────────────────────────────────────────────────────────
 PAPER_PREFIX = "[SIMULATION] "
 

@@ -468,6 +468,99 @@ def get_audit():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Gate Tracker ──────────────────────────────────────────────────────────────
+
+@app.get("/dashboard/gate_tracker")
+def get_gate_tracker():
+    try:
+        with _db() as cur:
+            # Overall stats
+            cur.execute("""
+                SELECT
+                    COUNT(*)                                                AS total,
+                    SUM(CASE WHEN outcome IS NULL     THEN 1 ELSE 0 END)   AS pending,
+                    SUM(CASE WHEN outcome IS NOT NULL THEN 1 ELSE 0 END)   AS stamped,
+                    SUM(CASE WHEN outcome = 'FALSE_BLOCK'   THEN 1 ELSE 0 END) AS false_blocks,
+                    SUM(CASE WHEN outcome IS NOT NULL THEN 1 ELSE 0 END)   AS total_stamped,
+                    SUM(CASE WHEN would_have_caught = 'true'
+                              AND outcome IS NOT NULL THEN 1 ELSE 0 END)   AS would_caught
+                FROM gate_misses
+            """)
+            ov = dict(cur.fetchone() or {})
+            total        = int(ov.get("total",        0) or 0)
+            pending      = int(ov.get("pending",      0) or 0)
+            stamped      = int(ov.get("stamped",      0) or 0)
+            false_blocks = int(ov.get("false_blocks", 0) or 0)
+            would_caught = int(ov.get("would_caught", 0) or 0)
+            fb_rate      = round(false_blocks / stamped, 4) if stamped else 0.0
+            wc_rate      = round(would_caught / stamped, 4) if stamped else 0.0
+
+            overall = {
+                "total":                   total,
+                "pending":                 pending,
+                "stamped":                 stamped,
+                "false_block_rate":        fb_rate,
+                "would_have_caught_rate":  wc_rate,
+            }
+
+            # By category breakdown
+            cur.execute("""
+                SELECT
+                    gate_category,
+                    COALESCE(decision, 'TECH_GATE')                             AS decision,
+                    COUNT(*)                                                     AS total,
+                    SUM(CASE WHEN outcome IS NOT NULL THEN 1 ELSE 0 END)        AS stamped,
+                    SUM(CASE WHEN outcome = 'FALSE_BLOCK'   THEN 1 ELSE 0 END)  AS false_block,
+                    SUM(CASE WHEN outcome = 'CORRECT_BLOCK' THEN 1 ELSE 0 END)  AS correct_block,
+                    SUM(CASE WHEN outcome = 'NEUTRAL'       THEN 1 ELSE 0 END)  AS neutral,
+                    SUM(CASE WHEN would_have_caught = 'true'
+                              AND outcome IS NOT NULL       THEN 1 ELSE 0 END)  AS would_caught
+                FROM gate_misses
+                GROUP BY gate_category, COALESCE(decision, 'TECH_GATE')
+                ORDER BY total DESC
+            """)
+            cat_rows = _rows(cur)
+            by_category = []
+            for r in cat_rows:
+                st = int(r.get("stamped", 0) or 0)
+                fb = int(r.get("false_block", 0) or 0)
+                wc = int(r.get("would_caught", 0) or 0)
+                by_category.append({
+                    "gate_category":         r.get("gate_category") or "OTHER",
+                    "decision":              r.get("decision") or "TECH_GATE",
+                    "total":                 int(r.get("total", 0) or 0),
+                    "stamped":               st,
+                    "false_block":           fb,
+                    "correct_block":         int(r.get("correct_block", 0) or 0),
+                    "neutral":               int(r.get("neutral", 0) or 0),
+                    "false_block_rate":      round(fb / st, 4) if st else 0.0,
+                    "would_have_caught":     wc,
+                    "would_have_caught_rate": round(wc / st, 4) if st else 0.0,
+                })
+
+            # Recent false blocks (last 20)
+            cur.execute("""
+                SELECT date, symbol, gate_category,
+                       COALESCE(decision, 'TECH_GATE') AS decision,
+                       outcome_return_pct, outcome_tier,
+                       would_have_caught, market_state
+                FROM gate_misses
+                WHERE outcome = 'FALSE_BLOCK'
+                ORDER BY outcome_stamped_at DESC NULLS LAST, date DESC
+                LIMIT 20
+            """)
+            recent_fb = _rows(cur)
+
+        return {
+            "overall":              overall,
+            "by_category":          by_category,
+            "recent_false_blocks":  recent_fb,
+        }
+    except Exception as e:
+        log.exception("gate_tracker failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ── Council ───────────────────────────────────────────────────────────────────
 
 @app.get("/dashboard/council")

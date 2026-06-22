@@ -109,7 +109,7 @@ def _get_approved_users() -> list:
     try:
         with _db() as cur:
             cur.execute("""
-                SELECT telegram_id, username, full_name
+                SELECT telegram_id, username, full_name, discord_id
                 FROM paper_users
                 WHERE status = 'APPROVED'
                 ORDER BY telegram_id
@@ -414,10 +414,42 @@ def _build_live_brief(nst_now: datetime) -> str:
 # SECTION 4 — SENDER
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _send_to_user(chat_id: str, message: str) -> bool:
-    """Send per-user paper brief to a specific user via notifier."""
-    from helper.notifier import send_to_user
-    return send_to_user(chat_id, message)
+def _send_to_user(telegram_id: str, message: str,
+                  discord_id: str = "") -> bool:
+    """
+    Send per-user brief. Routing priority:
+      1. Discord DM — if user has discord_id AND channel includes Discord
+      2. Telegram   — if channel includes Telegram AND TELEGRAM_ENABLED
+      3. Warning    — if neither delivery method available
+    Never raises.
+    """
+    from helper.notifier import send_discord_dm, send_to_user, _notify_channel
+    channel     = _notify_channel()
+    has_discord = bool(discord_id and str(discord_id).strip()
+                       not in ("", "None", "null"))
+
+    # Route 1: Discord DM
+    if has_discord and channel in ("DISCORD", "BOTH"):
+        ok = send_discord_dm(str(discord_id), message)
+        if ok:
+            return True
+        log.warning(
+            "_send_to_user: Discord DM failed for discord_id=%s, "
+            "falling through to Telegram", discord_id,
+        )
+
+    # Route 2: Telegram
+    if channel in ("TELEGRAM", "BOTH"):
+        return send_to_user(telegram_id, message)
+
+    # Route 3: No delivery method
+    log.warning(
+        "_send_to_user: no delivery method for telegram_id=%s "
+        "(discord_id=%s, channel=%s). "
+        "User should register Discord via /register.",
+        telegram_id, discord_id, channel,
+    )
+    return False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -453,24 +485,26 @@ def run(print_only: bool = False) -> bool:
 
         log.info("Sending paper briefs to %d approved user(s).", len(users))
         results = []
+
+        import sys
+        out = open(sys.stdout.fileno(), mode="w", encoding="utf-8", buffering=1, closefd=False)
+
         for user in users:
             telegram_id = str(user.get("telegram_id", ""))
             username    = user.get("username") or user.get("full_name") or telegram_id
-
+            discord_id  = str(user.get("discord_id") or "")
             if not telegram_id:
                 log.warning("Skipping user with no telegram_id: %s", user)
                 continue
-
             message = _build_paper_brief_for_user(telegram_id, username, nst_now)
-
             if print_only:
-                print(f"\n{'='*60}")
-                print(f"  Brief for: {username} ({telegram_id})")
-                print(f"{'='*60}")
-                print(message)
+                out.write(f"\n{'='*60}\n")
+                out.write(f"  Brief for: {username} ({telegram_id})\n")
+                out.write(f"{'='*60}\n")
+                out.write(message + "\n")
                 results.append(True)
             else:
-                ok = _send_to_user(telegram_id, message)
+                ok = _send_to_user(telegram_id, message, discord_id=discord_id)
                 results.append(ok)
 
         return any(results)

@@ -69,7 +69,7 @@ def flush_near_misses_to_db() -> None:
     """
     from sheets import upsert_row
 
-    NON_TRACKABLE = {"MUTUAL_FUND", "NON_EQUITY", "HISTORY"}
+    NON_TRACKABLE = {"MUTUAL_FUND", "NON_EQUITY", "HISTORY", "NO_LTP"}
 
     misses = get_last_near_misses()
     if not misses:
@@ -117,6 +117,85 @@ def flush_near_misses_to_db() -> None:
         "flush_near_misses_to_db: wrote %d/%d near-misses to gate_misses (skipped %d non-trackable/no-price)",
         written, len(misses), skipped,
     )
+
+# ══════════════════════════════════════════════════════════════════════════════
+# GEMINI SKIP FLUSH
+# ══════════════════════════════════════════════════════════════════════════════
+
+def flush_gemini_skips_to_db(
+    gemini_result: dict,
+    candidates: list,
+    date: str = None,
+) -> None:
+    """
+    Write Gemini-skipped symbols from the `skipped` array in gemini_result to gate_misses.
+    Upsert on (symbol, date) — same conflict key as existing near-miss rows.
+    Fail silently — never blocks the pipeline.
+    """
+    from sheets import upsert_row
+
+    if date is None:
+        date = datetime.now(tz=NST).strftime("%Y-%m-%d")
+
+    skipped_list = gemini_result.get("skipped", [])
+    if not skipped_list:
+        return
+
+    cand_map = {c.symbol: c for c in candidates}
+    written  = 0
+    skipped  = 0
+
+    for item in skipped_list:
+        sym    = str(item.get("symbol", "")).upper()
+        reason = str(item.get("reason", ""))[:500]
+        if not sym:
+            skipped += 1
+            continue
+
+        c = cand_map.get(sym)
+        if not c:
+            skipped += 1
+            continue
+
+        price = float(getattr(c, "ltp", 0) or 0)
+        if not price:
+            skipped += 1
+            continue
+
+        try:
+            upsert_row(
+                "gate_misses",
+                {
+                    "symbol":                   sym,
+                    "date":                     date,
+                    "sector":                   getattr(c, "sector", "") or "",
+                    "gate_reason":              reason,
+                    "gate_category":            "GEMINI_SKIP",
+                    "decision":                 "GEMINI_SKIP",
+                    "price_at_block":           str(price),
+                    "market_state":             getattr(c, "market_state", "") or "",
+                    "tech_score":               str(getattr(c, "tech_score", "") or ""),
+                    "conf_score":               str(getattr(c, "conf_score", "") or ""),
+                    "composite_score_would_be": str(getattr(c, "composite_score", "") or ""),
+                    "volume_os_ratio":          str(getattr(c, "volume_os_ratio", 0) or 0),
+                    "vwap_dev":                 str(getattr(c, "vwap_dev",        0) or 0),
+                    "bid_ask_ratio":            str(getattr(c, "bid_ask_ratio",   0) or 0),
+                    "dpr_proximity":            str(getattr(c, "dpr_proximity",   0) or 0),
+                    "outcome":                  None,
+                    "tracking_days":            "0",
+                },
+                conflict_columns=["symbol", "date"],
+            )
+            written += 1
+        except Exception as exc:
+            logger.warning("flush_gemini_skips_to_db: failed for %s — %s", sym, exc)
+            skipped += 1
+
+    logger.info(
+        "flush_gemini_skips_to_db: wrote %d/%d Gemini SKIPs to gate_misses (skipped %d no-candidate/no-price)",
+        written, len(skipped_list), skipped,
+    )
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # GEMINI FLAG DATACLASS
@@ -989,6 +1068,12 @@ def run_gemini_filter(
 
     if flags:
         _write_log(gemini_result, flags, candidates)
+
+    # Flush Gemini SKIPs to gate_misses for forensic tracking
+    try:
+        flush_gemini_skips_to_db(gemini_result, candidates, date=date)
+    except Exception as _skip_exc:
+        logger.warning("flush_gemini_skips_to_db failed (non-fatal): %s", _skip_exc)
 
     fallback_note = " [FALLBACK]" if gemini_result.get("fallback_used") else ""
     logger.info(

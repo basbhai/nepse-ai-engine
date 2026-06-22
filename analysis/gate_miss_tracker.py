@@ -68,6 +68,8 @@ TRACKABLE_CATEGORIES = {
     "HISTORY",
     "ILLIQUID",
     "BROKER_FLOW",
+    "GEMINI_SKIP",
+    "AI_VETO",
 }
 
 # Minimum sample size before a proposal is surfaced
@@ -142,6 +144,87 @@ def _get_price_on_or_before(symbol: str, target_date: str) -> float | None:
     return None
 
 
+def _get_price_path(symbol: str, start_date: str, max_days: int = 20) -> list[float]:
+    """
+    Fetch up to max_days daily close prices for symbol starting from start_date (inclusive).
+    Returns list of floats ordered by date ASC. Empty list if no data.
+    """
+    rows = run_raw_sql(
+        """
+        SELECT date, close, ltp FROM price_history
+        WHERE symbol = %s
+          AND date >= %s
+          AND (close IS NOT NULL OR ltp IS NOT NULL)
+        ORDER BY date ASC
+        LIMIT %s
+        """,
+        (symbol, start_date, max_days)
+    )
+    if not rows:
+        return []
+    result = []
+    for row in rows:
+        val = row.get("close") or row.get("ltp")
+        if val:
+            try:
+                result.append(float(val))
+            except (ValueError, TypeError):
+                pass
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OUTCOME TIER CLASSIFIER
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _classify_outcome_tier(
+    price_at_block: float,
+    max_high: float,
+    max_drawdown: float,
+    day20_close: float,
+) -> str:
+    """
+    Richer outcome classifier than simple FALSE_BLOCK/CORRECT_BLOCK.
+    Evaluates quality of the missed opportunity across the 20-day window.
+    """
+    max_return = (max_high       - price_at_block) / price_at_block * 100
+    drawdown   = (max_drawdown   - price_at_block) / price_at_block * 100
+    end_return = (day20_close    - price_at_block) / price_at_block * 100
+
+    if max_return >= 10 and drawdown > -5:
+        return "BIG_WIN"
+    if max_return >= 5 and drawdown > -3:
+        return "CLEAN_WIN"
+    if max_return >= 5 and drawdown <= -3:
+        return "VOLATILE_WIN"
+    if max_return >= 10 and end_return < 3:
+        return "FAKE_WIN"
+    if abs(end_return) <= 3:
+        return "TIMEOUT_FLAT"
+    return "LOSER"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WOULD-HAVE-CAUGHT SIMULATOR
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _simulate_would_have_caught(price_at_block: float, price_path: list[float]) -> bool:
+    """
+    Simulate: entry = price_at_block, stop = -8% (structural floor), target = +5% (T1).
+    Walk the price path. Return True if +5% target hit before -8% stop.
+    """
+    if not price_path or price_at_block <= 0:
+        return False
+    target = price_at_block * 1.05
+    stop   = price_at_block * 0.92
+    for price in price_path:
+        if price >= target:
+            return True
+        if price <= stop:
+            return False
+    return False
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # DB READERS
 # ─────────────────────────────────────────────────────────────────────────────
@@ -213,23 +296,37 @@ def _stamp_outcome(
     return_pct: float,
     tracking_days: int,
     dry_run: bool,
+    max_high: float | None = None,
+    max_drawdown: float | None = None,
+    peak_day: int | None = None,
+    would_have_caught: bool | None = None,
+    outcome_tier: str | None = None,
 ) -> None:
-    """Write outcome, return_pct, tracking_days, and stamped_at to gate_misses row."""
+    """Write outcome, return_pct, tracking_days, stamped_at, and new path columns to gate_misses row."""
     if dry_run:
-        log.info("[DRY-RUN] Would stamp id=%s → %s (%.2f%%)", row_id, outcome, return_pct)
+        log.info("[DRY-RUN] Would stamp id=%s → %s (%.2f%%) tier=%s caught=%s",
+                 row_id, outcome, return_pct, outcome_tier, would_have_caught)
         return
     try:
-        update_row(
-            "gate_misses",
-            {
-                "outcome":             outcome,
-                "outcome_return_pct":  str(round(return_pct, 4)),
-                "tracking_days":       str(tracking_days),
-                "outcome_stamped_at":  today_str(),
-            },
-            where={"id": row_id},
-        )
-        log.info("Stamped id=%s → %s (%.2f%%)", row_id, outcome, return_pct)
+        updates = {
+            "outcome":             outcome,
+            "outcome_return_pct":  str(round(return_pct, 4)),
+            "tracking_days":       str(tracking_days),
+            "outcome_stamped_at":  today_str(),
+        }
+        if max_high is not None:
+            updates["max_high_20d"] = str(round(max_high, 4))
+        if max_drawdown is not None:
+            updates["max_drawdown_20d"] = str(round(max_drawdown, 4))
+        if peak_day is not None:
+            updates["peak_day"] = str(peak_day)
+        if would_have_caught is not None:
+            updates["would_have_caught"] = "true" if would_have_caught else "false"
+        if outcome_tier is not None:
+            updates["outcome_tier"] = outcome_tier
+        update_row("gate_misses", updates, where={"id": row_id})
+        log.info("Stamped id=%s → %s (%.2f%%) tier=%s caught=%s",
+                 row_id, outcome, return_pct, outcome_tier, would_have_caught)
     except Exception as e:
         log.error("_stamp_outcome failed for id=%s: %s", row_id, e)
 
@@ -322,27 +419,44 @@ def run_eod(dry_run: bool = False) -> dict:
             summary["skipped"] += 1
             continue
 
-        # Current price
-        price_now = _get_price_on_or_before(symbol, today)
-        if not price_now:
-            log.warning("%s — cannot find current price. Skipping.", symbol)
+        # Fetch full price path over 20-day window
+        price_path = _get_price_path(symbol, block_date, max_days=20)
+        if not price_path:
+            log.warning("%s — empty price path. Skipping.", symbol)
             summary["no_price"] += 1
             summary["skipped"] += 1
             continue
 
-        # Compute return
-        return_pct = ((price_now - price_at_block) / price_at_block) * 100
+        # Path-based metrics
+        max_high     = max(price_path)
+        max_drawdown = min(price_path)
+        peak_day     = price_path.index(max_high) + 1  # 1-based
+        day20_close  = price_path[-1]
 
-        # Classify
+        # Compute return (day-20 close vs block price — preserves existing classification logic)
+        return_pct = ((day20_close - price_at_block) / price_at_block) * 100
+
+        # Classify (backward-compat outcome unchanged)
         outcome = _classify_outcome(return_pct)
 
+        # New rich columns
+        outcome_tier      = _classify_outcome_tier(price_at_block, max_high, max_drawdown, day20_close)
+        would_have_caught = _simulate_would_have_caught(price_at_block, price_path)
+
         log.info(
-            "%s [%s] → price_at_block=%.2f price_now=%.2f return=%.2f%% outcome=%s",
-            symbol, category, price_at_block, price_now, return_pct, outcome
+            "%s [%s] → block=%.2f day20=%.2f return=%.2f%% outcome=%s tier=%s caught=%s",
+            symbol, category, price_at_block, day20_close, return_pct, outcome, outcome_tier, would_have_caught
         )
 
         # Stamp
-        _stamp_outcome(row_id, outcome, return_pct, days_elapsed, dry_run)
+        _stamp_outcome(
+            row_id, outcome, return_pct, days_elapsed, dry_run,
+            max_high=max_high,
+            max_drawdown=max_drawdown,
+            peak_day=peak_day,
+            would_have_caught=would_have_caught,
+            outcome_tier=outcome_tier,
+        )
 
         summary["evaluated"] += 1
         if outcome == "FALSE_BLOCK":
@@ -444,7 +558,7 @@ def get_summary_for_gpt(days: int = 90) -> dict:
         all_rows = run_raw_sql(
             """
             SELECT gate_category, market_state, outcome, outcome_return_pct,
-                   date, symbol, gate_reason
+                   date, symbol, gate_reason, would_have_caught, outcome_tier
             FROM gate_misses
             WHERE date >= %s
             ORDER BY date ASC
@@ -473,6 +587,7 @@ def get_summary_for_gpt(days: int = 90) -> dict:
     # ── By category — all rows for totals, stamped rows for outcome breakdown ─
     by_category: dict[str, dict] = defaultdict(lambda: {
         "total": 0, "stamped": 0, "false_block": 0, "correct_block": 0, "neutral": 0,
+        "would_have_caught_true": 0, "outcome_tiers": defaultdict(int),
     })
 
     for row in all_rows:
@@ -489,16 +604,25 @@ def get_summary_for_gpt(days: int = 90) -> dict:
             by_category[cat]["correct_block"] += 1
         else:
             by_category[cat]["neutral"] += 1
+        if row.get("would_have_caught") == "true":
+            by_category[cat]["would_have_caught_true"] += 1
+        tier = row.get("outcome_tier")
+        if tier:
+            by_category[cat]["outcome_tiers"][tier] += 1
 
     # Compute rates (based on stamped rows only)
     for cat, stats in by_category.items():
         n = stats["stamped"]
         if n > 0:
-            stats["false_block_rate"]   = round(stats["false_block"]   / n, 3)
-            stats["correct_block_rate"] = round(stats["correct_block"] / n, 3)
+            stats["false_block_rate"]      = round(stats["false_block"]   / n, 3)
+            stats["correct_block_rate"]    = round(stats["correct_block"] / n, 3)
+            stats["would_have_caught_rate"] = round(stats["would_have_caught_true"] / n, 3)
         else:
-            stats["false_block_rate"]   = 0.0
-            stats["correct_block_rate"] = 0.0
+            stats["false_block_rate"]       = 0.0
+            stats["correct_block_rate"]     = 0.0
+            stats["would_have_caught_rate"] = 0.0
+        # Convert defaultdict to plain dict for JSON serialisation
+        stats["outcome_tiers"] = dict(stats["outcome_tiers"])
 
     # ── By market state — all rows for totals, stamped rows for outcome rates ─
     by_market_state: dict[str, dict] = defaultdict(lambda: {
@@ -667,6 +791,96 @@ def _suggest_adjustment(
             return "0.02"
 
     return f"Loosen slightly (current: {current})"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AI VETO FLUSH (called by summary_workflow.py after run_eod)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def flush_ai_vetoes_to_db(dry_run: bool = False) -> int:
+    """
+    Read market_log WHERE action='AVOID' AND date=today.
+    Upsert each into gate_misses as decision=AI_VETO.
+    Returns count written.
+    Fail silently — never blocks EOD pipeline.
+    """
+    today = today_str()
+    try:
+        avoid_rows = run_raw_sql(
+            """
+            SELECT id, symbol, date, sector, reasoning, entry_price,
+                   market_state, confidence, outcome
+            FROM market_log
+            WHERE action = 'AVOID'
+              AND date = %s
+            ORDER BY id ASC
+            """,
+            (today,)
+        ) or []
+    except Exception as e:
+        log.error("flush_ai_vetoes_to_db: failed to read market_log: %s", e)
+        return 0
+
+    if not avoid_rows:
+        log.info("flush_ai_vetoes_to_db: no AVOID rows for %s", today)
+        return 0
+
+    written = 0
+    skipped = 0
+    for row in avoid_rows:
+        symbol = row.get("symbol", "")
+        if not symbol:
+            skipped += 1
+            continue
+
+        entry_price = None
+        try:
+            entry_price = float(row.get("entry_price") or 0)
+        except (ValueError, TypeError):
+            pass
+
+        if not entry_price:
+            skipped += 1
+            continue
+
+        reasoning = (row.get("reasoning") or "")[:200]
+
+        if dry_run:
+            log.info("[DRY-RUN] Would upsert AI_VETO: %s @ %s", symbol, today)
+            written += 1
+            continue
+
+        try:
+            from sheets import upsert_row
+            upsert_row(
+                "gate_misses",
+                {
+                    "symbol":        symbol,
+                    "date":          today,
+                    "sector":        row.get("sector") or "",
+                    "gate_reason":   reasoning,
+                    "gate_category": "AI_VETO",
+                    "decision":      "AI_VETO",
+                    "price_at_block": str(entry_price),
+                    "market_state":  row.get("market_state") or "",
+                    "tech_score":    row.get("confidence") or "",
+                    "conf_score":    None,
+                    "composite_score_would_be": None,
+                    "outcome":       None,
+                    "tracking_days": "0",
+                },
+                conflict_columns=["symbol", "date"],
+            )
+            written += 1
+        except Exception as exc:
+            log.warning("flush_ai_vetoes_to_db: failed for %s — %s", symbol, exc)
+            skipped += 1
+
+    log.info(
+        "flush_ai_vetoes_to_db: wrote %d/%d AI_VETO rows (skipped %d)",
+        written, len(avoid_rows), skipped,
+    )
+    return written
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -142,6 +142,16 @@ def run(dry_run: bool = False, skip_guard: bool = False) -> int:
         run_eod(dry_run=False)
     results["gate_tracker"] = _step("gate_miss_tracker", _gate_tracker, dry_run)
 
+    # ── Step 6b: Flush AI VETOs (Claude AVOIDs) to gate_misses ──────────────
+    def _ai_veto_flush():
+        from analysis.gate_miss_tracker import flush_ai_vetoes_to_db
+        try:
+            count = flush_ai_vetoes_to_db(dry_run=False)
+            log.info("flush_ai_vetoes_to_db: %d rows written", count)
+        except Exception as e:
+            log.error("flush_ai_vetoes_to_db failed (non-fatal): %s", e)
+    results["ai_veto_flush"] = _step("flush_ai_vetoes (AI_VETO → gate_misses)", _ai_veto_flush, dry_run)
+
     # ── Step 7: Floorsheet ────────────────────────────────────────────────────
     def _floorsheet():
         from modules.floorsheet_scraper import run_daily

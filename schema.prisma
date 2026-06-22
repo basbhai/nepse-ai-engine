@@ -1198,6 +1198,14 @@ model gate_misses {
   outcome_return_pct       Text
   outcome_stamped_at       Text
 
+  // ── Extended forensic columns — added 2026-06-22 ─────────────────────────
+  decision          Text   // TECH_GATE | GEMINI_SKIP | AI_VETO (NULL = TECH_GATE for old rows)
+  max_high_20d      Text   // highest close reached in 20-day tracking window
+  max_drawdown_20d  Text   // lowest close reached in 20-day tracking window
+  peak_day          Text   // 1-based trading day index when max_high occurred
+  would_have_caught Text   // "true"/"false" — did +5% hit before -8% stop?
+  outcome_tier      Text   // CLEAN_WIN|VOLATILE_WIN|BIG_WIN|FAKE_WIN|TIMEOUT_FLAT|LOSER
+
   @@unique([symbol, date])
   @@index([date])
   @@index([outcome])
