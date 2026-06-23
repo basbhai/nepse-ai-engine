@@ -546,8 +546,9 @@ def get_gate_tracker():
                        would_have_caught, market_state
                 FROM gate_misses
                 WHERE outcome = 'FALSE_BLOCK'
+                and  gate_category != 'HISTORY' 
                 ORDER BY outcome_stamped_at DESC NULLS LAST, date DESC
-                LIMIT 20
+                LIMIT 10
             """)
             recent_fb = _rows(cur)
 

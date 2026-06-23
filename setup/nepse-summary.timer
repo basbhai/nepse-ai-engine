@@ -1,9 +1,9 @@
 [Unit]
-Description=NEPSE AI — Nightly Summary Timer (9:00 PM NST = 15:15 UTC, Mon–Fri)
+Description=NEPSE AI — Nightly Summary Timer (3:30 pm PM NST = 09:30 UTC, Mon–Fri)
 
 [Timer]
-# 9:00 PM NST = 15:15 UTC
-OnCalendar=Mon,Tue,Wed,Thu,Fri 15:15:00 UTC
+# 3:30 PM NST = 9:30 UTC
+OnCalendar=Mon,Tue,Wed,Thu,Fri 9:45:00 UTC
 Persistent=true
 AccuracySec=60s
 
