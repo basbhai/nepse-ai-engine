@@ -517,49 +517,60 @@ def merge_market_data(
 
 def compute_market_breadth(
     merged_data: dict[str, PriceRow],
-    indices:     list[dict],
+    trade_stats: dict = None,
+    index_data:  dict = None,
 ) -> dict:
     """
     Compute market breadth statistics from merged price data.
 
+    trade_stats: result of atrad_scraper.fetch_trade_stats() — authoritative adv/dec counts.
+                 Falls back to manual PriceRow counting if empty or None.
+    index_data:  result of atrad_scraper.fetch_nepse_index() — NEPSE index value.
+                 Falls back to 0.0 if empty or None.
+
     Returns dict ready to write to MARKET_BREADTH tab.
     """
-    advancing  = 0
-    declining  = 0
-    unchanged  = 0
-    new_52w_high = 0
-    new_52w_low  = 0
+    if trade_stats is None:
+        trade_stats = {}
+    if index_data is None:
+        index_data = {}
+
+    new_52w_high   = 0
+    new_52w_low    = 0
     total_turnover = 0.0
     total_volume   = 0
 
     for row in merged_data.values():
         if row.ltp <= 0:
             continue
-
-        # Direction
-        if row.change_pct > 0:
-            advancing += 1
-        elif row.change_pct < 0:
-            declining += 1
-        else:
-            unchanged += 1
-
-        # 52W extremes — LTP at or above/below 52W mark
         if row.high_52w > 0 and row.ltp >= row.high_52w:
             new_52w_high += 1
         if row.low_52w > 0 and row.ltp <= row.low_52w:
             new_52w_low += 1
-
         total_turnover += row.turnover
         total_volume   += row.volume
 
-    # Simple breadth score: (advancing - declining) / total active
+    if trade_stats:
+        advancing = trade_stats["advancing"]
+        declining = trade_stats["declining"]
+        unchanged = trade_stats["unchanged"]
+    else:
+        advancing = declining = unchanged = 0
+        for row in merged_data.values():
+            if row.ltp <= 0:
+                continue
+            if row.change_pct > 0:
+                advancing += 1
+            elif row.change_pct < 0:
+                declining += 1
+            else:
+                unchanged += 1
+
     total_active = advancing + declining + unchanged
     breadth_score = round(
         (advancing - declining) / total_active * 100, 2
     ) if total_active > 0 else 0.0
 
-    # Market signal from breadth
     if breadth_score >= 30:
         market_signal = "STRONGLY_BULLISH"
     elif breadth_score >= 10:
@@ -571,32 +582,33 @@ def compute_market_breadth(
     else:
         market_signal = "STRONGLY_BEARISH"
 
-    # Find NEPSE composite index
-    nepse_value = 0.0
-    nepse_change_pct = 0.0
-    for idx in indices:
-        code = idx.get("index_code", "").upper()
-        if "NEPSE" in code and "FLOAT" not in code and "SENSITIVE" not in code:
-            nepse_value      = idx.get("current_value", 0.0)
-            nepse_change_pct = idx.get("change_pct", 0.0)
-            break
+    nepse_value      = index_data.get("nepse_index",      0.0)
+    nepse_change_pct = index_data.get("nepse_change_pct", 0.0)
+    sensitive_index      = str(index_data.get("sensitive_index",      "") or "")
+    sensitive_change_pct = str(index_data.get("sensitive_change_pct", "") or "")
+    total_trades_idx     = str(index_data.get("total_trades",         "") or "")
+    market_cash_in       = str(index_data.get("market_cash_in",       "") or "")
 
     nst_now = datetime.now(tz=NST)
 
     return {
-        "Date":              nst_now.strftime("%Y-%m-%d"),
-        "Advancing":         advancing,
-        "Declining":         declining,
-        "Unchanged":         unchanged,
-        "New_52W_High":      new_52w_high,
-        "New_52W_Low":       new_52w_low,
+        "Date":               nst_now.strftime("%Y-%m-%d"),
+        "Advancing":          advancing,
+        "Declining":          declining,
+        "Unchanged":          unchanged,
+        "New_52W_High":       new_52w_high,
+        "New_52W_Low":        new_52w_low,
         "Total_Turnover_NPR": round(total_turnover, 2),
-        "Total_Volume":      total_volume,
-        "Breadth_Score":     breadth_score,
-        "Market_Signal":     market_signal,
-        "NEPSE_Index":       nepse_value,
-        "NEPSE_Change_Pct":  nepse_change_pct,
-        "Timestamp":         nst_now.strftime("%Y-%m-%d %H:%M:%S"),
+        "Total_Volume":       total_volume,
+        "Breadth_Score":      breadth_score,
+        "Market_Signal":      market_signal,
+        "NEPSE_Index":        nepse_value,
+        "NEPSE_Change_Pct":   nepse_change_pct,
+        "Sensitive_Index":      sensitive_index,
+        "Sensitive_Change_Pct": sensitive_change_pct,
+        "Total_Trades":         total_trades_idx,
+        "Market_Cash_In":       market_cash_in,
+        "Timestamp":          nst_now.strftime("%Y-%m-%d %H:%M:%S"),
     }
 
 
@@ -624,6 +636,10 @@ def write_market_breadth(breadth: dict) -> bool:
         "Market_Signal":      "market_signal",
         "NEPSE_Index":        "nepse_index",
         "NEPSE_Change_Pct":   "nepse_change_pct",
+        "Sensitive_Index":      "sensitive_index",
+        "Sensitive_Change_Pct": "sensitive_change_pct",
+        "Total_Trades":         "total_trades",
+        "Market_Cash_In":       "market_cash_in",
         "Timestamp":          "timestamp",
     }
     normalised = {
@@ -721,7 +737,9 @@ def _fetch_sharesansar_full(write_breadth: bool = True) -> dict[str, PriceRow]:
             row.conf_signal = "NEUTRAL"
 
     if write_breadth and live_data:
-        breadth = compute_market_breadth(live_data, [])
+        trade_stats = atrad_scraper.fetch_trade_stats()
+        index_data  = atrad_scraper.fetch_nepse_index()
+        breadth = compute_market_breadth(live_data, trade_stats, index_data)
         write_market_breadth(breadth)
 
     logger.info("scraper: %d symbols | source=sharesansar_fallback", len(live_data))
@@ -765,9 +783,11 @@ def get_all_market_data(
         except Exception as exc:
             logger.warning("Conf score fetch failed (non-fatal): %s", exc)
 
-        # Step 3: Market breadth computed from ATrad data
+        # Step 3: Market breadth computed from ATrad data + authoritative stats
         if write_breadth and market_data:
-            breadth = compute_market_breadth(market_data, [])
+            trade_stats = atrad_scraper.fetch_trade_stats()
+            index_data  = atrad_scraper.fetch_nepse_index()
+            breadth = compute_market_breadth(market_data, trade_stats, index_data)
             write_market_breadth(breadth)
 
         logger.info("scraper: %d symbols | source=atrad", len(market_data))

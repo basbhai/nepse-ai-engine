@@ -108,6 +108,10 @@ TABLE_DDL: dict[str, str] = {
         market_signal TEXT,
         nepse_index TEXT,
         nepse_change_pct TEXT,
+        sensitive_index TEXT,
+        sensitive_change_pct TEXT,
+        total_trades TEXT,
+        market_cash_in TEXT,
         timestamp TEXT,
         inserted_at TIMESTAMPTZ DEFAULT NOW(),
         CONSTRAINT ux_market_breadth_date_timestamp UNIQUE (date, timestamp)
@@ -1700,7 +1704,7 @@ TABLE_DDL: dict[str, str] = {
 
 TABLE_COLUMNS: dict[str, list[str]] = {
     "price_history": ["date", "symbol", "open", "high", "low", "close", "ltp", "volume", "turnover", "vwap", "prev_close", "transactions", "conf_score", "avg_120d", "avg_180d", "week52_high", "week52_low", "source"],
-    "market_breadth": ["date", "advancing", "declining", "unchanged", "new_52w_high", "new_52w_low", "total_turnover_npr", "total_volume", "breadth_score", "market_signal", "nepse_index", "nepse_change_pct", "timestamp"],
+    "market_breadth": ["date", "advancing", "declining", "unchanged", "new_52w_high", "new_52w_low", "total_turnover_npr", "total_volume", "breadth_score", "market_signal", "nepse_index", "nepse_change_pct", "sensitive_index", "sensitive_change_pct", "total_trades", "market_cash_in", "timestamp"],
     "portfolio": ["symbol", "entry_date", "entry_price", "shares", "total_cost", "current_price", "current_value", "pnl_npr", "pnl_pct", "peak_price", "stop_type", "stop_level", "trail_active", "trail_stop", "status", "exit_date", "exit_price", "exit_reason"],
     "market_log": ["date", "time", "symbol", "sector", "action", "confidence", "entry_price", "stop_loss", "target", "allocation_npr", "shares", "breakeven", "risk_reward", "rsi_14", "ema_20", "ema_50", "ema_200", "primary_signal", "macd_line", "macd_signal", "macd_histogram", "bb_pct_b", "bb_upper", "bb_lower", "bollinger_upper", "bollinger_lower", "ema_20_50_cross", "ema_50_200_cross", "volume", "volume_ratio", "obv_trend", "vwap", "vwap_dev", "bid_ask_ratio", "dpr_proximity", "volume_os_ratio", "atr_14", "support_level", "resistance_level", "candle_pattern", "conf_score", "pe_ratio", "eps", "roe", "npl_pct", "fundamental_score", "geo_score", "macro_score", "sector_mult", "cstar_signal", "market_state", "gemini_reason", "gemini_risk", "reasoning", "wait_condition", "wait_condition_parsed", "last_reviewed_date", "herding_note", "lesson_applied", "outcome", "actual_pnl", "exit_price", "exit_date", "exit_reason", "timestamp", "eval_date", "eval_geo_score", "eval_nepal_score", "eval_nepse_index", "eval_market_state", "eval_policy_rate", "eval_fd_rate_pct", "eval_geo_delta", "eval_nepal_delta", "eval_key_news", "eval_price_change_pct", "eval_nepse_change_pct", "eval_alpha", "headlines_politics", "headlines_economy", "headlines_stock", "momentum_status", "rsi_slope_3d", "macd_hist_slope", "bb_pct_b_slope", "bounce_failed", "reversal_days"],
     "indicators": ["symbol", "date", "volume", "history_days", "rsi_14", "rsi_signal", "ema_20", "ema_50", "ema_200", "ema_trend", "ema_20_50_cross", "ema_50_200_cross", "macd_line", "macd_signal", "macd_histogram", "macd_cross", "bb_upper", "bb_middle", "bb_lower", "bb_width", "bb_pct_b", "bb_signal", "atr_14", "atr_pct", "obv", "obv_trend", "support_level", "resistance_level", "tech_score", "tech_signal", "timestamp"],

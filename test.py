@@ -1,254 +1,311 @@
-#!/usr/bin/env python3
 """
-force_close_open_positions.py
-──────────────────────────────────────────────────────────────────────────
-ONE-TIME cutover script: force-close all currently OPEN paper_portfolio
-positions at TODAY'S live intraday low, ahead of the Telegram→Discord
-migration and the "fresh start" reset.
+test_atrad_endpoints.py
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Standalone test — no DB, no imports from nepse-engine.
 
-Mirrors the EXACT write pattern of execute_sell() in modules/telegram_bot.py
-(verified against db/schema.py) — same paper_portfolio columns
-(exit_date, exit_price, exit_shares, gross_pnl, sell_fees, cgt_paid,
-net_pnl, result), same paper_capital update (additive current_capital,
-::int total_trades casts), same paper_trade_log insert (gross_amount,
-brokerage, sebon, dp_fee, cgt, total_fees, net_amount, capital_before/after,
-wacc_before/after) — so these closes are indistinguishable in the DB from a
-real /sell, and DO count toward win_rate / total_trades per your decision.
+Tests 3 ATrad endpoints using the existing session:
+  1. fullWatch       — current (542 symbols, adv/dec computed manually)
+  2. getTradeStats   — NEW (authoritative adv/dec/unchanged from exchange)
+  3. getSectorDataAll — NEW (NEPSE index, sensitive index, turnover, volume)
 
-SAFE BY DEFAULT: running with no flags only PRINTS what would happen.
-Nothing is written to the DB until you re-run with --confirm.
+Run from anywhere on Ubuntu:
+    cd ~/nepse-engine
+    python test_atrad_endpoints.py
 
-IMPORTANT: uses db.connection._db() directly (the same context manager
-telegram_bot.py uses for atomic writes) — NOT run_raw_sql(), which cannot
-execute DML per project convention.
-
-Usage:
-    python force_close_open_positions.py             # dry run, prints only
-    python force_close_open_positions.py --confirm    # actually writes
-
-Open positions being closed (from DB query on 2026-06-17):
-    5432461414 (admin)  — ALBSL 100sh @ WACC 1104.0450
-    5432461414 (admin)  — GBBL   100sh @ WACC  420.0784
-    7860783056          — KSBBL 100sh @ WACC  492.0875
+Reads credentials from .env in current directory.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
-import sys
-from datetime import date, datetime
-from decimal import Decimal, ROUND_HALF_UP
-
+import ast
+import os
+import time
+import logging
+import requests
 from dotenv import load_dotenv
+
 load_dotenv()
 
-from modules.scraper import get_watchlist_data
-from sheets import run_raw_sql          # read-only lookups only
-from db.connection import _db           # atomic DML — same pattern as telegram_bot.py
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)s  %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger("atrad_test")
 
-# ─── Constants (mirrored from modules/telegram_bot.py) ──────────────────────
-SEBON_PCT = Decimal("0.00015")
-DP_FEE    = Decimal("25")
-CGT_RATE  = Decimal("0.075")
+# ── Credentials ───────────────────────────────────────────────────────────────
+BASE_URL    = "https://tms.roadshowsecurities.com.np/atsweb"
+USERNAME    = os.getenv("TMS_ROADSHOW_USER")
+PASSWORD    = os.getenv("TMS_ROADSHOW_PASS")
+WATCH_ID    = os.getenv("TMS_ROADSHOW_WATCH_ID", "8643")
+BOOK_DEF_ID = "1"
 
-POSITIONS_TO_CLOSE = [
-    {"telegram_id": "5432461414", "symbol": "ALBSL", "shares": Decimal("100"), "wacc": Decimal("1104.0450")},
-    {"telegram_id": "5432461414", "symbol": "GBBL",  "shares": Decimal("100"), "wacc": Decimal("420.0784")},
-    {"telegram_id": "7860783056", "symbol": "KSBBL", "shares": Decimal("100"), "wacc": Decimal("492.0875")},
-]
-
-
-def _brokerage(gross: Decimal) -> Decimal:
-    if gross <= Decimal("2500"):
-        return Decimal("10")
-    elif gross <= Decimal("50000"):
-        rate = Decimal("0.0036")
-    elif gross <= Decimal("500000"):
-        rate = Decimal("0.0033")
-    elif gross <= Decimal("2000000"):
-        rate = Decimal("0.0031")
-    elif gross <= Decimal("10000000"):
-        rate = Decimal("0.0027")
-    else:
-        rate = Decimal("0.0024")
-    return (gross * rate).quantize(Decimal("0.01"), ROUND_HALF_UP)
+if not USERNAME or not PASSWORD:
+    raise SystemExit("❌  TMS_ROADSHOW_USER / TMS_ROADSHOW_PASS not set in .env")
 
 
-def calc_sell_fees(price: Decimal, shares: Decimal, wacc: Decimal) -> dict:
-    """Mirrors modules/telegram_bot.py calc_sell_fees() exactly."""
-    gross        = (price * shares).quantize(Decimal("0.01"), ROUND_HALF_UP)
-    brokerage    = _brokerage(gross)
-    sebon        = (gross * SEBON_PCT).quantize(Decimal("0.01"), ROUND_HALF_UP)
-    total_fees   = brokerage + sebon + DP_FEE
-    cost_basis   = (wacc * shares).quantize(Decimal("0.01"), ROUND_HALF_UP)
-    gross_pnl    = gross - cost_basis
-    cgt          = (max(Decimal("0"), gross_pnl) * CGT_RATE).quantize(Decimal("0.01"), ROUND_HALF_UP)
-    net_pnl      = gross_pnl - total_fees - cgt
-    net_proceeds = gross - total_fees - cgt
+# ── Helpers ───────────────────────────────────────────────────────────────────
+def _headers() -> dict:
     return {
-        "gross": gross, "brokerage": brokerage, "sebon": sebon, "dp_fee": DP_FEE,
-        "total_fees": total_fees, "cgt": cgt, "gross_pnl": gross_pnl,
-        "net_pnl": net_pnl, "net_proceeds": net_proceeds,
+        "User-Agent"       : "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept"           : "application/json, text/javascript, */*; q=0.01",
+        "X-Requested-With" : "XMLHttpRequest",
+        "Referer"          : f"{BASE_URL}/login",
     }
 
 
-def get_paper_position(telegram_id: str, symbol: str):
-    rows = run_raw_sql(
-        "SELECT * FROM paper_portfolio WHERE telegram_id = %s AND symbol = %s AND status = 'OPEN'",
-        (telegram_id, symbol),
+def _parse(r: requests.Response) -> dict:
+    """ATrad responses use Python literals, not JSON."""
+    text = (r.text.strip()
+            .replace("true",  "True")
+            .replace("false", "False")
+            .replace("null",  "None"))
+    try:
+        return ast.literal_eval(text)
+    except Exception as e:
+        log.error("Parse error: %s | raw: %s", e, r.text[:300])
+        return {}
+
+
+def _sf(val, default=0.0) -> float:
+    try:
+        return float(str(val).replace(",", ""))
+    except Exception:
+        return default
+
+
+def _si(val, default=0) -> int:
+    try:
+        return int(str(val).replace(",", ""))
+    except Exception:
+        return default
+
+
+def _ts() -> str:
+    return str(int(time.time() * 1000))
+
+
+# ── Step 1: Login ─────────────────────────────────────────────────────────────
+def login() -> requests.Session:
+    print("\n" + "═" * 60)
+    print("  STEP 1 — LOGIN")
+    print("═" * 60)
+
+    s = requests.Session()
+    s.headers.update(_headers())
+
+    r = s.get(
+        f"{BASE_URL}/login",
+        params={
+            "action"           : "login",
+            "format"           : "json",
+            "txtUserName"      : USERNAME,
+            "txtPassword"      : PASSWORD,
+            "dojo.preventCache": _ts(),
+        },
+        timeout=15,
     )
-    return rows[0] if rows else None
+    data = _parse(r)
+
+    print(f"  HTTP status : {r.status_code}")
+    print(f"  code        : {data.get('code')}")
+    print(f"  description : {data.get('description')}")
+    print(f"  broker_code : {data.get('broker_code')}")
+    print(f"  watchID     : {data.get('watchID')}")
+
+    if data.get("code") != "0":
+        raise SystemExit(f"❌  Login failed: {data}")
+
+    print("  ✅  Login successful")
+    return s
 
 
-def get_capital_row(telegram_id: str):
-    rows = run_raw_sql("SELECT * FROM paper_capital WHERE telegram_id = %s", (telegram_id,))
-    return rows[0] if rows else None
+# ── Step 2: getTradeStats (NEW) ───────────────────────────────────────────────
+def test_trade_stats(s: requests.Session):
+    print("\n" + "═" * 60)
+    print("  STEP 2 — getTradeStats  (NEW — authoritative adv/dec)")
+    print("  URL: /marketdetails?action=getTradeStats")
+    print("═" * 60)
+
+    r = s.get(
+        f"{BASE_URL}/marketdetails",
+        params={
+            "action"           : "getTradeStats",
+            "format"           : "json",
+            "dojo.preventCache": _ts(),
+        },
+        timeout=10,
+    )
+    data = _parse(r)
+
+    print(f"  HTTP status : {r.status_code}")
+    print(f"  Raw response: {r.text[:500]}")
+    print()
+
+    if data.get("code") == "0":
+        d = data.get("data", {})
+        print(f"  ✅  Parsed:")
+        print(f"      advancing  (up)       : {d.get('up')}")
+        print(f"      declining  (down)     : {d.get('down')}")
+        print(f"      unchanged             : {d.get('unchanged')}")
+        print(f"      total                 : {d.get('total')}")
+
+        # Compare what our manual count would give
+        up  = _si(d.get("up",        0))
+        dn  = _si(d.get("down",      0))
+        unc = _si(d.get("unchanged", 0))
+        tot = _si(d.get("total",     0))
+        if tot > 0:
+            score = round((up - dn) / tot * 100, 2)
+            print(f"\n      → breadth_score (our formula) : {score}%")
+    else:
+        print(f"  ❌  Failed: {data}")
+
+    return data
 
 
-def main():
-    confirm = "--confirm" in sys.argv
+# ── Step 3: getSectorDataAll (NEW) ────────────────────────────────────────────
+def test_sector_data(s: requests.Session):
+    print("\n" + "═" * 60)
+    print("  STEP 3 — getSectorDataAll  (NEW — NEPSE index + market totals)")
+    print("  URL: /sector?action=getSectorDataAll")
+    print("═" * 60)
 
-    symbols = [p["symbol"] for p in POSITIONS_TO_CLOSE]
-    print(f"Fetching live intraday data for: {symbols}")
-    market_data = get_watchlist_data(symbols)
+    r = s.get(
+        f"{BASE_URL}/sector",
+        params={
+            "action"           : "getSectorDataAll",
+            "format"           : "json",
+            "exchange"         : "NEPSE",
+            "sectorId"         : "NEPSE",
+            "sectorIdSL"       : "SENSIND",
+            "dojo.preventCache": _ts(),
+        },
+        timeout=10,
+    )
+    data = _parse(r)
 
-    today_str = date.today().isoformat()
-    now_str   = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"\n{'='*70}")
-    print(f"FORCE-CLOSE PREVIEW — {today_str}  ({'WRITE MODE' if confirm else 'DRY RUN — no DB writes'})")
-    print(f"{'='*70}\n")
+    print(f"  HTTP status : {r.status_code}")
+    print(f"  Raw response: {r.text[:500]}")
+    print()
 
-    closes = []
-    for pos in POSITIONS_TO_CLOSE:
-        sym = pos["symbol"]
-        row = market_data.get(sym)
-        if row is None:
-            print(f"❌ {sym}: no live data returned — SKIPPING. "
-                  f"(Market may be closed, or symbol outside ATrad's 542-symbol set.)")
-            continue
+    if data.get("code") == "0":
+        sectors = data.get("data", {}).get("sector", [])
+        if sectors:
+            d = sectors[0]
+            print(f"  ✅  Parsed (first/only row):")
+            print(f"      pr1  NEPSE index        : {d.get('pr1')}  → {_sf(d.get('pr1')):.2f}")
+            print(f"      pr2  Sensitive index    : {d.get('pr2')}  → {_sf(d.get('pr2')):.2f}")
+            print(f"      n1   index change (abs) : {d.get('n1')}   → {_sf(d.get('n1')):.2f}")
+            print(f"      p1   index change (%)   : {d.get('p1')}   → {_sf(d.get('p1')):.2f}%")
+            print(f"      n2   sensitive chg (abs): {d.get('n2')}")
+            print(f"      p2   sensitive chg (%)  : {d.get('p2')}")
+            print(f"      v    total volume        : {d.get('v')}    → {_si(d.get('v')):,}")
+            print(f"      to   total turnover NPR  : {d.get('to')}")
+            print(f"      tr   total trades        : {d.get('tr')}   → {_si(d.get('tr')):,}")
+            print(f"      marketCashIn            : {d.get('marketCashIn')!r}")
+            print(f"      marketCashInVal         : {d.get('marketCashInVal')!r}")
+            print(f"      marketCashOutVal        : {d.get('marketCashOutVal')!r}")
+            print()
+            print(f"  All keys in response: {list(d.keys())}")
+        else:
+            print("  ⚠️   sector list is empty")
+    else:
+        print(f"  ❌  Failed: {data}")
 
-        low_price = Decimal(str(row.low))
-        if low_price <= 0:
-            print(f"❌ {sym}: live low price is {low_price} — SKIPPING (invalid).")
-            continue
-
-        existing = get_paper_position(pos["telegram_id"], sym)
-        if not existing:
-            print(f"⚠️  {sym} ({pos['telegram_id']}): no OPEN row found in DB right now "
-                  f"(already closed, or data changed since last check) — SKIPPING.")
-            continue
-
-        actual_shares = Decimal(str(existing["total_shares"]))
-        actual_wacc   = Decimal(str(existing["wacc"]))
-        if actual_shares != pos["shares"] or actual_wacc != pos["wacc"]:
-            print(f"⚠️  {sym}: DB values differ from script's hardcoded expectation "
-                  f"(DB: {actual_shares}sh @ {actual_wacc} vs expected {pos['shares']}sh @ {pos['wacc']}). "
-                  f"Using LIVE DB values, not hardcoded ones.")
-
-        fees = calc_sell_fees(low_price, actual_shares, actual_wacc)
-        result = "WIN" if fees["net_pnl"] > 0 else ("LOSS" if fees["net_pnl"] < 0 else "BREAKEVEN")
-
-        print(f"--- {sym}  (telegram_id={pos['telegram_id']}, portfolio.id={existing['id']}) ---")
-        print(f"  Shares:          {actual_shares}")
-        print(f"  Entry WACC:      NPR {actual_wacc}")
-        print(f"  Today's low:     NPR {low_price}   <-- forced close price")
-        print(f"  Gross sale:      NPR {fees['gross']}")
-        print(f"  Brokerage:       NPR {fees['brokerage']}")
-        print(f"  SEBON:           NPR {fees['sebon']}")
-        print(f"  DP fee:          NPR {fees['dp_fee']}")
-        print(f"  CGT:             NPR {fees['cgt']}")
-        print(f"  Net P&L:         NPR {fees['net_pnl']}  -> {result}")
-        print(f"  Net proceeds:    NPR {fees['net_proceeds']}")
-        print()
-
-        closes.append({
-            "telegram_id": pos["telegram_id"], "symbol": sym,
-            "portfolio_id": existing["id"], "shares": actual_shares, "wacc": actual_wacc,
-            "exit_price": low_price, "fees": fees, "result": result,
-        })
-
-    if not closes:
-        print("Nothing to close — no valid live prices / open rows found. Exiting.")
-        return
-
-    print(f"{'='*70}")
-    print(f"SUMMARY: {len(closes)} position(s) will be closed.")
-    for c in closes:
-        print(f"  {c['symbol']:8s} ({c['telegram_id']}): {c['result']:9s} net {c['fees']['net_pnl']:+.2f}")
-    print(f"{'='*70}\n")
-
-    if not confirm:
-        print("This was a DRY RUN. No database writes were made.")
-        print("Review the numbers above. If correct, re-run with --confirm to write.")
-        return
-
-    print("⚠️  WRITE MODE — committing to database now...\n")
-
-    for c in closes:
-        tid, sym, pf_id, shares, wacc, exit_price, fees, result = (
-            c["telegram_id"], c["symbol"], c["portfolio_id"], c["shares"], c["wacc"],
-            c["exit_price"], c["fees"], c["result"],
-        )
-        cap = get_capital_row(tid)
-        if not cap:
-            print(f"  ❌ {sym}: no paper_capital row for {tid} — SKIPPING WRITE for this position.")
-            continue
-        available = Decimal(str(cap["current_capital"]))
-        new_capital = available + fees["net_proceeds"]
-        is_win  = fees["net_pnl"] > 0
-        is_loss = fees["net_pnl"] < 0
-
-        with _db() as cur:
-            # 1. Close the paper_portfolio row — same columns as real execute_sell
-            cur.execute("""
-                UPDATE paper_portfolio SET
-                    status      = 'CLOSED',
-                    exit_date   = %s,
-                    exit_price  = %s,
-                    exit_shares = %s,
-                    gross_pnl   = %s,
-                    sell_fees   = %s,
-                    cgt_paid    = %s,
-                    net_pnl     = %s,
-                    result      = %s,
-                    updated_at  = %s
-                WHERE id = %s
-            """, (today_str, str(exit_price), str(shares),
-                  str(fees["gross_pnl"]), str(fees["total_fees"]), str(fees["cgt"]),
-                  str(fees["net_pnl"]), f"FORCE_CLOSE_{result}", now_str, pf_id))
-
-            # 2. Update paper_capital — additive, same as real execute_sell
-            cur.execute("""
-                UPDATE paper_capital SET
-                    current_capital    = %s,
-                    total_realised_pnl = (total_realised_pnl::numeric + %s)::text,
-                    total_fees_paid    = (total_fees_paid::numeric + %s)::text,
-                    total_cgt_paid     = (total_cgt_paid::numeric + %s)::text,
-                    total_trades       = (total_trades::int + 1)::text,
-                    total_wins         = (total_wins::int + %s)::text,
-                    total_losses       = (total_losses::int + %s)::text,
-                    last_updated       = %s
-                WHERE telegram_id = %s
-            """, (str(new_capital), str(fees["net_pnl"]), str(fees["total_fees"]), str(fees["cgt"]),
-                  1 if is_win else 0, 1 if is_loss else 0, now_str, tid))
-
-            # 3. Append paper_trade_log — exact real columns
-            cur.execute("""
-                INSERT INTO paper_trade_log
-                    (telegram_id, symbol, action, shares, price, gross_amount,
-                     brokerage, sebon, dp_fee, cgt, total_fees, net_amount,
-                     capital_before, capital_after, wacc_before, wacc_after,
-                     note, created_at, test_mode)
-                VALUES (%s,%s,'SELL',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-            """, (str(tid), sym, str(shares), str(exit_price), str(fees["gross"]),
-                  str(fees["brokerage"]), str(fees["sebon"]), str(DP_FEE), str(fees["cgt"]),
-                  str(fees["total_fees"]), str(fees["net_proceeds"]),
-                  str(available), str(new_capital), str(wacc), str(wacc),
-                  "FORCE_CLOSE: Telegram->Discord migration cutover", now_str, "false"))
-
-        print(f"  ✅ Closed {sym} for {tid} — {result}, net {fees['net_pnl']:+.2f}, "
-              f"capital now {new_capital}")
-
-    print("\nDone. All positions force-closed and written to DB.")
-    print("Next step: run the reset/cleanup script for the fresh-start cutover.")
+    return data
 
 
+# ── Step 4: fullWatch (EXISTING) ──────────────────────────────────────────────
+def test_full_watch(s: requests.Session):
+    print("\n" + "═" * 60)
+    print("  STEP 4 — fullWatch  (EXISTING — 542 symbols)")
+    print("  URL: /watch?action=fullWatch")
+    print("═" * 60)
+
+    r = s.get(
+        f"{BASE_URL}/watch",
+        params={
+            "action"           : "fullWatch",
+            "format"           : "json",
+            "exchange"         : "NEPSE",
+            "bookDefId"        : BOOK_DEF_ID,
+            "watchId"          : WATCH_ID,
+            "lastUpdatedId"    : "0",
+            "dojo.preventCache": _ts(),
+        },
+        timeout=30,
+    )
+    data = _parse(r)
+
+    print(f"  HTTP status  : {r.status_code}")
+    print(f"  code         : {data.get('code')}")
+
+    if data.get("code") == "0":
+        records = data.get("data", {}).get("watch", [])
+        print(f"  ✅  Total symbols returned: {len(records)}")
+
+        if records:
+            # Manual adv/dec count (current approach)
+            adv = sum(1 for rec in records if _sf(rec.get("perchange", 0)) > 0)
+            dec = sum(1 for rec in records if _sf(rec.get("perchange", 0)) < 0)
+            unc = sum(1 for rec in records if _sf(rec.get("perchange", 0)) == 0)
+            tot = len(records)
+            score = round((adv - dec) / tot * 100, 2) if tot > 0 else 0.0
+
+            print(f"\n  Manually computed from perchange field:")
+            print(f"      advancing : {adv}")
+            print(f"      declining : {dec}")
+            print(f"      unchanged : {unc}")
+            print(f"      total     : {tot}")
+            print(f"      breadth_score : {score}%")
+
+            print(f"\n  First symbol sample:")
+            rec = records[0]
+            print(f"      keys available: {list(rec.keys())}")
+            print(f"      symbol    : {rec.get('security')}")
+            print(f"      ltp       : {rec.get('tradeprice')}")
+            print(f"      perchange : {rec.get('perchange')}")
+            print(f"      totvolume : {rec.get('totvolume')}")
+    else:
+        print(f"  ❌  Failed: {data}")
+
+    return data
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    main()
+    print("\n" + "█" * 60)
+    print("  ATrad Endpoint Test — NEPSE AI Engine")
+    print("█" * 60)
+
+    session = login()
+
+    stats  = test_trade_stats(session)
+    sector = test_sector_data(session)
+    watch  = test_full_watch(session)
+
+    print("\n" + "═" * 60)
+    print("  SUMMARY — adv/dec comparison")
+    print("═" * 60)
+
+    # getTradeStats numbers
+    if stats.get("code") == "0":
+        d = stats.get("data", {})
+        print(f"  getTradeStats  → up={d.get('up')}  down={d.get('down')}  unch={d.get('unchanged')}  total={d.get('total')}")
+
+    # fullWatch manual count
+    if watch.get("code") == "0":
+        records = watch.get("data", {}).get("watch", [])
+        adv = sum(1 for rec in records if _sf(rec.get("perchange", 0)) > 0)
+        dec = sum(1 for rec in records if _sf(rec.get("perchange", 0)) < 0)
+        unc = sum(1 for rec in records if _sf(rec.get("perchange", 0)) == 0)
+        print(f"  fullWatch calc → up={adv}  down={dec}  unch={unc}  total={len(records)}")
+
+    # NEPSE index
+    if sector.get("code") == "0":
+        sectors = sector.get("data", {}).get("sector", [])
+        if sectors:
+            d = sectors[0]
+            print(f"  NEPSE index    → {_sf(d.get('pr1')):.2f}  ({_sf(d.get('p1')):+.2f}%)")
+
+    print("\n  Done.\n")

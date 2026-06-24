@@ -749,7 +749,8 @@ def get_intraday_breadth(date: str = None) -> list[dict]:
         with _db() as cur:
             cur.execute("""
                 SELECT timestamp, advancing, declining, unchanged,
-                       breadth_score, market_signal, nepse_index, nepse_change_pct
+                       breadth_score, market_signal, nepse_index, nepse_change_pct,
+                       sensitive_index, sensitive_change_pct, total_trades, market_cash_in
                 FROM market_breadth
                 WHERE date = %s
                 ORDER BY timestamp ASC

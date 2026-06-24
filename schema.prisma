@@ -79,6 +79,10 @@ model market_breadth {
   market_signal      Text
   nepse_index        Text
   nepse_change_pct   Text
+  sensitive_index      Text
+  sensitive_change_pct Text
+  total_trades         Text
+  market_cash_in       Text
   timestamp          Text
 
   @@unique([date, timestamp])

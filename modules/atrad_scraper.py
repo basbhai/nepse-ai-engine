@@ -246,6 +246,89 @@ def _write_market_watch(df: pd.DataFrame, now_nst: datetime) -> None:
             log.debug(f"Write skip {row.get('symbol')}: {e}")
 
 
+def fetch_trade_stats() -> dict:
+    """
+    Fetch authoritative advancing/declining/unchanged counts from ATrad getTradeStats.
+    Returns empty dict on any failure — never raises.
+    """
+    if not _ensure_session():
+        log.warning("fetch_trade_stats: no session")
+        return {}
+    try:
+        r = _session.get(
+            f"{BASE_URL}/marketdetails",
+            params={
+                "action":            "getTradeStats",
+                "format":            "json",
+                "dojo.preventCache": str(int(time.time() * 1000)),
+            },
+            timeout=15,
+        )
+        data = _parse(r)
+        if data.get("code") != "0":
+            log.warning("fetch_trade_stats: non-zero code: %s", data.get("code"))
+            return {}
+        d = data.get("data", {})
+        return {
+            "advancing": int(_safe_float(d.get("up",        0))),
+            "declining": int(_safe_float(d.get("down",      0))),
+            "unchanged": int(_safe_float(d.get("unchanged", 0))),
+            "total":     int(_safe_float(d.get("total",     0))),
+        }
+    except Exception as e:
+        log.warning("fetch_trade_stats failed: %s", e)
+        return {}
+
+
+def fetch_nepse_index() -> dict:
+    """
+    Fetch NEPSE composite index value and market totals from ATrad getSectorDataAll.
+    Returns empty dict on any failure — never raises.
+    """
+    if not _ensure_session():
+        log.warning("fetch_nepse_index: no session")
+        return {}
+    try:
+        r = _session.get(
+            f"{BASE_URL}/sector",
+            params={
+                "action":            "getSectorDataAll",
+                "format":            "json",
+                "exchange":          "NEPSE",
+                "sectorId":          "NEPSE",
+                "sectorIdSL":        "SENSIND",
+                "dojo.preventCache": str(int(time.time() * 1000)),
+            },
+            timeout=15,
+        )
+        data = _parse(r)
+        if data.get("code") != "0":
+            log.warning("fetch_nepse_index: non-zero code: %s", data.get("code"))
+            return {}
+        sector_list = data.get("data", {}).get("sector", [])
+        if not sector_list:
+            log.warning("fetch_nepse_index: empty sector list")
+            return {}
+        s = sector_list[0]
+        return {
+            "nepse_index":          _safe_float(s.get("pr1", 0)),
+            "nepse_change_abs":     _safe_float(s.get("n1",  0)),
+            "nepse_change_pct":     _safe_float(s.get("p1",  0)),
+            "sensitive_index":      _safe_float(s.get("pr2", 0)),
+            "sensitive_change_abs": _safe_float(s.get("n2",  0)),
+            "sensitive_change_pct": _safe_float(s.get("p2",  0)),
+            "total_volume":         int(_safe_float(s.get("v",   0))),
+            "total_turnover":       _safe_float(s.get("to",  0)),
+            "total_trades":         int(_safe_float(s.get("tr",  0))),
+            "market_cash_in":       str(s.get("marketCashIn",    "") or ""),
+            "market_cash_in_val":   str(s.get("marketCashInVal", "") or ""),
+            "market_cash_out_val":  str(s.get("marketCashOutVal","") or ""),
+        }
+    except Exception as e:
+        log.warning("fetch_nepse_index failed: %s", e)
+        return {}
+
+
 # Keep the rest of the functions (fetch_order_book, fetch_trades, get_ltp, run) unchanged
 # ... (they are already correct)
 
