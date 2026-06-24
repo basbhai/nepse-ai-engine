@@ -1056,6 +1056,7 @@ def _write_lessons(
             "source":           "monthly_council",
             "lesson_type":      lesson.get("lesson_type"),
             "applies_to":       lesson.get("applies_to", "ALL"),
+            "consumer":         lesson.get("consumer", "ALL"),
             "condition":        lesson.get("condition"),
             "finding":          lesson.get("finding"),
             "action":           lesson.get("action"),
@@ -1443,8 +1444,27 @@ def _build_chairman_messages(
         "  \"confidence_score\": 0-100,\n"
         "  \"market_assessment\": \"≤300 chars\",\n"
         "  \"lessons\": [{\"lesson_type\": \"...\", \"condition\": \"specific threshold\", "
-        "\"finding\": \"...\", \"action\": \"...\", \"confidence_level\": \"LOW|MEDIUM|HIGH\", "
+        "\"finding\": \"...\", \"action\": \"...\", \"applies_to\": \"<ALL | sector-specific | symbol-specific>\", "
+        "\"consumer\": \"<ALL | claude_only | gemini_only>\", "
+        "\"confidence_level\": \"LOW|MEDIUM|HIGH\", "
         "\"gpt_reasoning\": \"...\"}],\n"
+        "\n"
+        "CONSUMER ROUTING RULES — set consumer field on every lesson:\n"
+        "- \"claude_only\": lessons referencing claude_confidence (Claude's 0-100 output\n"
+        "  score), BUY/WAIT/AVOID decision reasoning, allocation sizing, stop loss\n"
+        "  adjustments, risk/reward thresholds, post-entry behavior, or any condition\n"
+        "  that only makes sense after Claude has already decided to act.\n"
+        "- \"gemini_only\": lessons about pre-screening filters, sector momentum patterns,\n"
+        "  breadth conditions, or signals that help narrow the candidate list before\n"
+        "  deep analysis.\n"
+        "- \"ALL\": lessons about macro conditions (nepal_score, geo_score, bandh, crisis),\n"
+        "  sector-level win rates, signal type performance (MACD/BB/RSI), fundamental\n"
+        "  thresholds (PE, ROE, growth_rate), or any pattern both AIs need to know about.\n"
+        "\n"
+        "CRITICAL: \"confidence < 60\" conditions ALWAYS use consumer=\"claude_only\"\n"
+        "because `confidence` refers to Claude's output score (0-100), not ShareSansar's\n"
+        "CONF field. ShareSansar CONF is named `conf_score` in condition syntax.\n"
+        "\n"
         "  \"trading_checklist\": {\"stop_trigger\": \"...\", \"go_trigger\": \"...\", \"noise_items\": []},\n"
         "  \"position_evaluations\": [{\"symbol\": \"...\", \"holding_supported\": true, \"reasoning\": \"...\"}],\n"
         "  \"system_verdict\": {\"proposals_reviewed\": [], \"new_system_findings\": [], "

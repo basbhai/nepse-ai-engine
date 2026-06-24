@@ -659,6 +659,7 @@ LESSON SCHEMA (each lesson you write):
   "symbol": "<symbol or MARKET>",
   "sector": "<sector or ALL>",
   "applies_to": "<ALL | sector-specific | symbol-specific>",
+  "consumer": "<ALL | claude_only | gemini_only>",
   "condition": "<use CONDITION SYNTAX above>",
   "finding": "<one sentence: the observation only, no reasoning>",
   "action": "<EXACTLY one action from ENTRY ACTIONS above>",
@@ -680,6 +681,22 @@ LESSON SCHEMA (each lesson you write):
   "trade_journal_ids": "<comma-separated ids of trades that support this lesson>",
   "market_log_ids": "<comma-separated ids of market_log rows used>"
 }
+
+CONSUMER ROUTING RULES — set consumer field on every lesson:
+- "claude_only": lessons referencing claude_confidence (Claude's 0-100 output
+  score), BUY/WAIT/AVOID decision reasoning, allocation sizing, stop loss
+  adjustments, risk/reward thresholds, post-entry behavior, or any condition
+  that only makes sense after Claude has already decided to act.
+- "gemini_only": lessons about pre-screening filters, sector momentum patterns,
+  breadth conditions, or signals that help narrow the candidate list before
+  deep analysis.
+- "ALL": lessons about macro conditions (nepal_score, geo_score, bandh, crisis),
+  sector-level win rates, signal type performance (MACD/BB/RSI), fundamental
+  thresholds (PE, ROE, growth_rate), or any pattern both AIs need to know about.
+
+CRITICAL: "confidence < 60" conditions ALWAYS use consumer="claude_only"
+because `confidence` refers to Claude's output score (0-100), not ShareSansar's
+CONF field. ShareSansar CONF is named `conf_score` in condition syntax.
 
 SUPERSEDE LOGIC:
 - Do NOT modify existing lessons. Instead:
@@ -907,6 +924,13 @@ def _validate_lesson(lesson: dict, index: int) -> bool:
                      index, lesson.get("confidence_level"))
         return False
 
+    # Validate consumer — default to ALL silently, never reject
+    valid_consumers = {"ALL", "claude_only", "gemini_only"}
+    if lesson.get("consumer", "ALL") not in valid_consumers:
+        log.warning("Lesson #%d invalid consumer '%s' — defaulting to ALL",
+                    index, lesson.get("consumer"))
+        lesson["consumer"] = "ALL"
+
     # Validate action
     valid_actions = {
             "MONITOR",
@@ -1009,6 +1033,7 @@ def _write_lessons(
             "symbol":               lesson.get("symbol", "MARKET"),
             "sector":               lesson.get("sector", "ALL"),
             "applies_to":           lesson.get("applies_to", "ALL"),
+            "consumer":             lesson.get("consumer", "ALL"),
             "condition":            lesson.get("condition"),
             "finding":              lesson.get("finding"),
             "action":               lesson.get("action"),

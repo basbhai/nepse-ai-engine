@@ -734,6 +734,7 @@ model learning_hub {
   symbol              Text   // specific symbol OR 'MARKET'
   sector              Text   // BANKING | NON_LIFE_INSURANCE | HYDRO | ALL etc
   applies_to          Text   // ALL | sector-specific | symbol-specific
+  consumer            Text  @default("ALL")  // ALL | claude_only | gemini_only
 
   condition           Text   // machine-readable trigger condition
   finding             Text   // human-readable observation

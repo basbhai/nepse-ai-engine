@@ -304,6 +304,7 @@ def _load_relevant_lessons(symbols: list[str], limit: int = 8) -> list[str]:
             SELECT condition, finding, action, confidence_level
             FROM learning_hub
             WHERE active = 'true'
+              AND (consumer = 'ALL' OR consumer = 'gemini_only')
             ORDER BY id DESC
             LIMIT %s
             """,

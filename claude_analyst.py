@@ -284,6 +284,7 @@ def _load_lessons(symbol: str, sector: str, limit: int = 6) -> list[str]:
             FROM learning_hub
             WHERE active = 'true'
               AND (symbol = %s OR sector = %s OR symbol = 'MARKET' OR applies_to = 'ALL')
+              AND (consumer = 'ALL' OR consumer = 'claude_only')
             """,
             (symbol.upper(), sector.lower()),
         )
