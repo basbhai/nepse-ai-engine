@@ -1,0 +1,12 @@
+[Unit]
+Description=NEPSE Dashboard
+After=network.target
+
+[Service]
+WorkingDirectory=/home/shanvi/nepse-engine
+ExecStart=/home/shanvi/nepse-engine/venv/bin/uvicorn web_ui.dashboard_api:app --host 0.0.0.0 --port 8766
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
