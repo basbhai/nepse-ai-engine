@@ -47,6 +47,47 @@ log = logging.getLogger(__name__)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# SECTION 0 — Gemini prefilter (weak macro path)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _gemini_prefilter_wait(
+    symbol: str,
+    wait_condition: str,
+    indicators: dict,
+    market_state: dict,
+) -> bool:
+    """
+    Ask Gemini Flash whether a WAIT signal is worth escalating to Claude
+    despite weak macro. Returns True to approve escalation, False to skip.
+    Fails safe — returns False on any error.
+    """
+    try:
+        from AI.gemini import ask_gemini_json
+        prompt = (
+            f"NEPSE stock {symbol}. Macro is weak (nepal_score={market_state.get('nepal_score')}, "
+            f"market_state={market_state.get('market_state')}).\n"
+            f"Original WAIT condition: {wait_condition}\n"
+            f"Current indicators: RSI={indicators.get('rsi_14')}, "
+            f"MACD={indicators.get('macd_cross')}, BB={indicators.get('bb_signal')}, "
+            f"OBV={indicators.get('obv_trend')}, tech_score={indicators.get('tech_score')}.\n"
+            f"Should this WAIT signal be escalated to Claude for re-evaluation despite weak macro? "
+            f"Only approve if there is a credible technical setup that could overcome macro headwinds "
+            f"(e.g. BB_LOWER_TOUCH + OBV_RISING, strong support hold, capitulation reversal).\n"
+            f"Respond ONLY with JSON: {{\"approve\": true/false, \"reason\": \"one sentence\"}}"
+        )
+        result = ask_gemini_json(prompt, context="gemini_prefilter")
+        if result is None:
+            log.warning("[gemini_prefilter] %s got None from Gemini — defaulting to skip", symbol)
+            return False
+        approve = bool(result.get("approve", False))
+        log.info("[gemini_prefilter] %s → approve=%s reason=%s", symbol, approve, result.get("reason", ""))
+        return approve
+    except Exception as e:
+        log.warning("[gemini_prefilter] %s failed: %s — defaulting to skip", symbol, e)
+        return False
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # SECTION 1 — TRACE WRITER  (unchanged from original)
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -202,6 +243,14 @@ def run_wait_pipeline() -> dict:
     if market_state.get("trading_halted"):
         return _done("TRADING_HALTED")
 
+    # Tiered routing by nepal_score — no hard block at any level
+    nepal_score = int(market_state.get("nepal_score", 0))
+    use_gemini_prefilter = nepal_score <= -2
+    if use_gemini_prefilter:
+        log.info("[pipeline] nepal_score=%d ≤ -2 — Gemini prefilter active", nepal_score)
+    else:
+        log.info("[pipeline] nepal_score=%d — proceeding normally", nepal_score)
+
     # ── Step 4: Open waits (extended — includes parsed + reviewed columns) ────
     open_waits = _get_open_waits_extended()
     if not open_waits.get("has_waits"):
@@ -250,6 +299,27 @@ def run_wait_pipeline() -> dict:
                 elapsed_ms   = int((time.time() - cycle_start) * 1000),
             )
             continue
+
+        # 7b.5 — Gemini prefilter (only when nepal_score ≤ -2)
+        if use_gemini_prefilter:
+            wait_condition_text = wait.get("wait_condition", "")
+            gemini_approved = _gemini_prefilter_wait(
+                symbol, wait_condition_text, indicators, market_state
+            )
+            if not gemini_approved:
+                agent_tools.log_skip(symbol, "gemini_prefilter_rejected", cycle_ts, step)
+                _write_trace(
+                    cycle_ts     = cycle_ts,
+                    step         = step,
+                    tool         = "wait_pipeline",
+                    request_args = {"symbol": symbol, "stage": "gemini_prefilter"},
+                    response     = {"reason": "gemini_prefilter_rejected", "escalated": False,
+                                    "decision": None},
+                    escalated    = False,
+                    decision     = "SKIPPED",
+                    elapsed_ms   = int((time.time() - cycle_start) * 1000),
+                )
+                continue
 
         # 7c — Evaluate (pre-filter → ambiguous → reviewed_today → Claude)
         if shadow_mode or escalation_count < max_escalations:

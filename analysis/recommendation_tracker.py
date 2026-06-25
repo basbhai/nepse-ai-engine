@@ -70,12 +70,12 @@ HOLD_DAYS = {
 }
 
 # WAIT auto-expiry: if still PENDING after N calendar days, force stamp
-WAIT_EXPIRY_DAYS = 5
+WAIT_EXPIRY_DAYS = 21
 
 # Outcome thresholds
 CORRECT_AVOID_THRESHOLD = -2.0
 FALSE_AVOID_THRESHOLD   =  5.0
-MISSED_ENTRY_THRESHOLD  =  8.0
+MISSED_ENTRY_THRESHOLD  =  3.0
 CORRECT_WAIT_THRESHOLD  = -2.0
 
 # BUY signal quality thresholds (alpha vs NEPSE)

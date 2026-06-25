@@ -351,8 +351,33 @@ def evaluate_wait(
     # ── a. Python pre-filter (indicator + market) ─────────────────────────────
     all_passed, fail_detail = _run_prefilter(symbol, requirements, indicators, market_state)
     if not all_passed:
-        result["reason"] = f"prefilter_fail: {fail_detail}"
-        return result
+        # Check if signal is aging — if >10 days old, escalate to Claude
+        # regardless of prefilter, so Claude can revise or abandon the condition
+        signal_date = str(wait_row.get("date", "") or wait_row.get("signal_date", ""))
+        try:
+            from datetime import date as date_cls
+            sig_d   = date_cls.fromisoformat(signal_date)
+            today_d = date_cls.fromisoformat(today)
+            days_old = (today_d - sig_d).days
+        except Exception:
+            days_old = 0
+
+        if days_old >= 10:
+            log.info(
+                "[evaluator] %s prefilter failed (%s) but signal is %d days old — "
+                "escalating to Claude for condition revision",
+                symbol, fail_detail, days_old,
+            )
+            augmented_condition = (
+                f"[AGING SIGNAL — {days_old} days, original condition not yet met: {fail_detail}] "
+                f"{wait_row.get('wait_condition', '')}"
+            )
+            wait_row = dict(wait_row)
+            wait_row["wait_condition"] = augmented_condition
+            # Fall through to escalation below (do not return SKIP here)
+        else:
+            result["reason"] = f"prefilter_fail: {fail_detail}"
+            return result
 
     # ── b. Ambiguous requirements ──────────────────────────────────────────────
     ambiguous = [r for r in requirements if r.get("type") == "ambiguous"]
