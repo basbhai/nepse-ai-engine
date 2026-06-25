@@ -1158,7 +1158,7 @@ def _load_fundamental_data() -> tuple[dict, dict]:
                     growth_rate, cost_of_fund, base_rate,
                     net_interest_income, net_worth, net_profit,
                     prev_quarter_profit, promoter_shares,
-                    loan, deposit
+                    loan, deposit, paidup_capital
                 FROM fundamentals
                 ORDER BY symbol, fiscal_year DESC, quarter DESC
             """)
@@ -1171,7 +1171,7 @@ def _load_fundamental_data() -> tuple[dict, dict]:
                             "cd_ratio","roa","roe","interest_spread","dps","pe_ratio",
                             "peg_value","growth_rate","cost_of_fund","base_rate",
                             "net_interest_income","net_worth","net_profit",
-                            "prev_quarter_profit","promoter_shares","loan","deposit"],
+                            "prev_quarter_profit","promoter_shares","loan","deposit","paidup_capital"],
                         row
                     )
                 }
