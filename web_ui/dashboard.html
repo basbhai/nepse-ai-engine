@@ -2358,7 +2358,9 @@
   <!-- ═══════════════════════ SCRIPTS ══════════════════════════ -->
   <script>
     /* ── Constants ───────────────────────────────────────────────────── */
-    const API = `http://${window.location.hostname}:8766`;
+    const API = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+      ? `http://${window.location.hostname}:8766`
+      : '';
     const chartInstances = {};
 
     /* ── Utils ───────────────────────────────────────────────────────── */
