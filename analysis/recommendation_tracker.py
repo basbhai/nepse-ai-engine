@@ -26,7 +26,7 @@ Run modes:
     python -m analysis.recommendation_tracker --status   # show all signals summary
     python -m analysis.recommendation_tracker --dry-run  # compute outcomes, write nothing
 
-Called by:
+Called by:  
     eod_workflow.py  (3:15 PM NST -- final daily evaluation)
 """
 
@@ -76,6 +76,7 @@ WAIT_EXPIRY_DAYS = 21
 CORRECT_AVOID_THRESHOLD = -2.0
 FALSE_AVOID_THRESHOLD   =  5.0
 MISSED_ENTRY_THRESHOLD  =  3.0
+MISSED_ENTRY_MIN_ALPHA  =  2.0   # alpha must exceed this to count as a real miss
 CORRECT_WAIT_THRESHOLD  = -2.0
 
 # BUY signal quality thresholds (alpha vs NEPSE)
@@ -246,8 +247,7 @@ def get_macro_snapshot(eval_date: str) -> dict:
 # ---------------------------------------------------------------------------
 # OUTCOME CLASSIFIERS
 # ---------------------------------------------------------------------------
-
-def classify_wait_avoid(action: str, price_change_pct: float) -> str:
+def classify_wait_avoid(action: str, price_change_pct: float, eval_alpha: float | None = None) -> str:
     """
     AVOID: CORRECT_AVOID | FALSE_AVOID | EXPIRED_AVOID
     WAIT:  MISSED_ENTRY  | CORRECT_WAIT | EXPIRED_WAIT
@@ -260,8 +260,10 @@ def classify_wait_avoid(action: str, price_change_pct: float) -> str:
         else:
             return "EXPIRED_AVOID"
     elif action == "WAIT":
-        if price_change_pct >= MISSED_ENTRY_THRESHOLD:
-            return "MISSED_ENTRY"
+        if (price_change_pct >= MISSED_ENTRY_THRESHOLD
+                        and eval_alpha is not None
+                        and eval_alpha >= MISSED_ENTRY_MIN_ALPHA):
+                    return "MISSED_ENTRY"
         elif price_change_pct <= CORRECT_WAIT_THRESHOLD:
             return "CORRECT_WAIT"
         else:
@@ -415,11 +417,13 @@ def evaluate_wait_avoid(dry_run: bool = False) -> list[dict]:
             price_at_signal  = _safe_float(row.get("entry_price")) or get_price_on_or_before(symbol, sig_date)
             price_now        = get_price_on_or_before(symbol, today)
             price_change_pct = None
+            nepse_change_pct = None
+            eval_alpha       = None
             outcome          = "EXPIRED_WAIT"
 
             if price_at_signal and price_now:
                 price_change_pct = ((price_now - price_at_signal) / price_at_signal) * 100
-                outcome = classify_wait_avoid("WAIT", price_change_pct)
+                
 
             nepse_at_signal  = get_nepse_index_on_or_before(sig_date)
             nepse_now        = get_nepse_index_on_or_before(today)
@@ -431,6 +435,7 @@ def evaluate_wait_avoid(dry_run: bool = False) -> list[dict]:
                 price_change_pct - nepse_change_pct
                 if price_change_pct is not None and nepse_change_pct is not None else None
             )
+            outcome = classify_wait_avoid("WAIT", price_change_pct,eval_alpha)
 
             macro  = get_macro_snapshot(today)
             update = _build_eval_update(
@@ -495,7 +500,7 @@ def evaluate_wait_avoid(dry_run: bool = False) -> list[dict]:
             price_change_pct - nepse_change_pct
             if nepse_change_pct is not None else None
         )
-        outcome = classify_wait_avoid(action, price_change_pct)
+        outcome = classify_wait_avoid(action, price_change_pct, eval_alpha)
 
         log.info("%s %s -> price_chg=%.2f%% alpha=%s outcome=%s",
                  symbol, action, price_change_pct,

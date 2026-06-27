@@ -686,7 +686,34 @@ def _check_symbol_gates(
     except Exception:
         pass
 
-    if (tech_score + catalyst_boost) < threshold:
+# ── Validated broker accumulation bypass ─────────────────────────────────
+    # If a validated smart-money broker dominates single-day buy flow (>60%),
+    # allow through even if tech_score is below threshold.
+    # Only 4 validated brokers matched by name (not ID — IDs are unstable).
+    # Requires tech_score >= 30 (absolute floor — avoids complete junk).
+        _VALIDATED_BROKER_NAMES = {
+        "dipshikha dhitopatra",
+        "trishakti securities",
+        "online securities",
+        "sri hari securities",
+    }
+    broker_bypass = False
+    if (tech_score + catalyst_boost) < threshold and tech_score >= 30 and flow_cache:
+        row = (flow_cache or {}).get(symbol.upper(), {})
+        top_broker_name = str(row.get("acc_top_broker_1d", "") or "").strip().lower()
+        top_broker_pct  = float(row.get("acc_top_broker_pct_1d", 0) or 0)
+        if any(vn in top_broker_name for vn in _VALIDATED_BROKER_NAMES) and top_broker_pct >= 60.0:
+            broker_bypass = True
+            logger.info(
+                "BROKER_BYPASS: %s tech=%d<%d but broker=%s pct=%.1f%% — allowing through",
+                symbol, tech_score, threshold, top_broker_name, top_broker_pct,
+            )
+            ctx.setdefault("_sym_catalysts", {})[symbol] = (
+                f"BROKER_ACCUMULATION: validated broker {top_broker_name} "
+                f"holds {top_broker_pct:.1f}% of today's buy flow"
+            )
+
+    if not broker_bypass and (tech_score + catalyst_boost) < threshold:
         return False, f"TECH={tech_score}<{threshold}"
     
     # Store catalyst on ctx for downstream use
