@@ -62,10 +62,10 @@ MAX_RETRIES    = 2    # retry attempts if first fetch fails
 # ── DXY Scoring thresholds ────────────────────────────────────────────────────
 # Stronger dollar (higher DXY) = weaker remittance value = negative for Nepal
 # Empirically validated: 7-day lag between DXY change and NEPSE impact
-DXY_VERY_STRONG = 108.0  # above = strong signal: capital outflow risk (-2)
-DXY_STRONG      = 105.0  # above = moderate signal: outflow pressure (-1)
-DXY_WEAK        = 102.0  # below = positive signal: inflow risk (+1)
-DXY_VERY_WEAK   = 100.0  # below = strong positive signal: strong inflows (+2)
+DXY_VERY_STRONG = 104.0   # above = strong signal: capital outflow risk (-2)
+DXY_STRONG      = 102.0   # above = moderate signal: outflow pressure (-1)
+DXY_WEAK        =  99.0   # below = positive signal: inflow support (+1)
+DXY_VERY_WEAK   =  97.0   # below = strong positive signal: strong inflows (+2)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
