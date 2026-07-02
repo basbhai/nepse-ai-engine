@@ -239,7 +239,7 @@ def _classify_category(forward_return_pct: float):
         return "LOSE_10"
     if forward_return_pct <= LOSE5_THRESHOLD:
         return "LOSE_5"
-    return None  # doesn't hit any of the 3 requested categories — discard
+    return "NEUTRAL"  # doesn't hit any of the 3 requested categories — discard
 
 
 def _scan_symbol(sym: str, df: pd.DataFrame) -> list:
@@ -306,7 +306,7 @@ def run() -> dict:
     for sym, df in sym_data.items():
         all_events.extend(_scan_symbol(sym, df))
 
-    log.info("Total events across 3 categories: %d", len(all_events))
+    log.info("Total events across 4 categories: %d", len(all_events))
     if not all_events:
         log.warning("No events produced — check thresholds / history depth")
         return {}
@@ -314,22 +314,28 @@ def run() -> dict:
     winners = [e for e in all_events if e["category"] == "WINNER"]
     lose10  = [e for e in all_events if e["category"] == "LOSE_10"]
     lose5   = [e for e in all_events if e["category"] == "LOSE_5"]
+    neutral = [e for e in all_events if e["category"] == "NEUTRAL"]
 
-    log.info("WINNER=%d  LOSE_10=%d  LOSE_5=%d", len(winners), len(lose10), len(lose5))
+    log.info("WINNER=%d  LOSE_10=%d  LOSE_5=%d  NEUTRAL=%d",
+              len(winners), len(lose10), len(lose5), len(neutral))
     log.info("Winner symbols (%d unique): %s", len(set(e["symbol"] for e in winners)),
               sorted(set(e["symbol"] for e in winners)))
     log.info("Lose_10 symbols (%d unique): %s", len(set(e["symbol"] for e in lose10)),
               sorted(set(e["symbol"] for e in lose10)))
     log.info("Lose_5 symbols (%d unique): %s", len(set(e["symbol"] for e in lose5)),
               sorted(set(e["symbol"] for e in lose5)))
+    log.info("Neutral symbols (%d unique): %s", len(set(e["symbol"] for e in neutral)),
+              sorted(set(e["symbol"] for e in neutral)))
 
     winners_path = os.path.join(OUTPUT_DIR, f"winners_{ts}.csv")
     lose10_path  = os.path.join(OUTPUT_DIR, f"lose10_{ts}.csv")
     lose5_path   = os.path.join(OUTPUT_DIR, f"lose5_{ts}.csv")
+    neutral_path = os.path.join(OUTPUT_DIR, f"neutral_{ts}.csv")
 
     _write_csv(winners, winners_path)
     _write_csv(lose10, lose10_path)
     _write_csv(lose5, lose5_path)
+    _write_csv(neutral, neutral_path)
 
     log.info("Output directory: %s", OUTPUT_DIR)
 
@@ -337,11 +343,12 @@ def run() -> dict:
         "winners_path": winners_path,
         "lose10_path":  lose10_path,
         "lose5_path":   lose5_path,
+        "neutral_path": neutral_path,
         "n_winner":     len(winners),
         "n_lose10":     len(lose10),
         "n_lose5":      len(lose5),
+        "n_neutral":    len(neutral),
     }
-
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
