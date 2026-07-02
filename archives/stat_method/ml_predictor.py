@@ -48,7 +48,7 @@ OUT_DIR = Path(__file__).parent / "output"
 
 # Import feature computation functions from ml_feature_builder
 sys.path.insert(0, str(Path(__file__).parent))
-from ml_feature_builder import (
+from archives.stat_method.ml_feature_builder import (
     load_price_history, load_floorsheet_signals,
     load_raw_floorsheet_for_symbol, load_nepse_regime, load_sectors,
     compute_broker_features, compute_price_features,

@@ -22,6 +22,8 @@ research/
 SQL backup/
 
 *.bak
+*.md
+
 
 *.sql
 *.dump
