@@ -219,6 +219,10 @@ model market_log {
   bounce_failed    Text   // "true" | "false" — dead-cat bounce pattern detected
   reversal_days    Text   // consecutive days RSI has been improving (integer as text)
 
+  // ── Dual-engine (v1/v2) arbitration — added 2026-07
+  engine_source    Text   @default("v1")   // "v1" | "v2" | "BOTH"
+  co_flagged_by    Text                    // other engine's opinion when only one engine's numbers won arbitration
+
   @@index([symbol])
   @@index([date])
   @@index([outcome])
@@ -1211,6 +1215,11 @@ model gate_misses {
   would_have_caught Text   // "true"/"false" — did +5% hit before -8% stop?
   outcome_tier      Text   // CLEAN_WIN|VOLATILE_WIN|BIG_WIN|FAKE_WIN|TIMEOUT_FLAT|LOSER
 
+  // ── Dual-engine (v1/v2) arbitration — added 2026-07
+  // Gates run before v1/v2 diverge, so this is always "shared" today —
+  // field added for schema consistency with market_log / filter_candidates_log only.
+  engine_source     Text   @default("shared")
+
   @@unique([symbol, date])
   @@index([date])
   @@index([outcome])
@@ -1673,6 +1682,7 @@ model filter_candidates_log {
   pass_count      Int    @default(1)
   last_seen       DateTime @db.Timestamptz
   created_at      DateTime @default(now()) @db.Timestamptz
+  engine_source   Text   @default("v1")   // "v1" | "v2" | "BOTH" — added 2026-07, dual-engine arbitration
 
   @@unique([symbol, date])
   @@index([date])

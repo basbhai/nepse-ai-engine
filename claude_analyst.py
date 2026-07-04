@@ -1014,6 +1014,7 @@ TECHNICAL INDICATORS (frozen at 10:30 AM NST):
 Primary Signal:  {flag.primary_signal}
 Composite Score: {flag.composite_score:.1f}
 Suggested Hold:  ~{hold_days} days (research-based)
+Engine:          {getattr(flag, 'engine_source', 'v1')}{f" [{flag.co_flagged_by}]" if getattr(flag, 'co_flagged_by', '') else ""}
 
 PRICE LEVELS (20-day range):
   Support:         NPR {flag.support_level:,.2f}
@@ -1097,6 +1098,9 @@ HOW TO WEIGH THE EVIDENCE (research-based)
 - C* and candle patterns are weak/unvalidated priors -- supporting context only, never a trigger.
 - Do not add a position that would put more than 2 holdings in one sector (infer current exposure
   from Holdings above).
+- Engine v1 = today's frozen snapshot indicators. Engine v2 = 6-day trend/slope-based (experimental,
+  not yet win-rate validated). BOTH = both engines independently flagged this stock -- treat as mild
+  corroboration, not proof.
 
 ==============================================
 TASK

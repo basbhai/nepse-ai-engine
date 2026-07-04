@@ -85,7 +85,7 @@ log = logging.getLogger(__name__)
 # ── STACK SWITCH ─────────────────────────────────────────────────────────────
 # Set True for free-model testing, False for real council with flagship models
 # ═══════════════════════════════════════════════════════════════════════════════
-COUNCIL_USE_FREE_STACK = False  # ← SWITCH: True for free models, False for production models
+COUNCIL_USE_FREE_STACK = True  # ← SWITCH: True for free models, False for production models
 
 # ── Free test models (rotate round-robin) ─────────────────────────────────────
 _FREE_MODELS = [

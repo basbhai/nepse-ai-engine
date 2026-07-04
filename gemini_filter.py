@@ -261,6 +261,11 @@ class GeminiFlag:
     fundamental_adj:  float      = 0.0
     fundamental_reason: str      = ""
 
+    engine_source:      str      = "v1"
+    composite_score_v2: float    = 0.0
+    primary_signal_v2:  str      = ""
+    co_flagged_by:      str      = ""
+
     vwap_dev:         float      = 0.0
     bid_ask_ratio:    float      = 0.0
     dpr_proximity:    float      = 0.0
@@ -767,6 +772,11 @@ def _assemble_flags(
             fundamental_adj  = c.fundamental_adj,
             fundamental_reason = c.fundamental_reason,
 
+            engine_source      = getattr(c, "engine_source",      "v1") or "v1",
+            composite_score_v2 = float(getattr(c, "composite_score_v2", 0.0) or 0.0),
+            primary_signal_v2  = getattr(c, "primary_signal_v2",  "") or "",
+            co_flagged_by      = getattr(c, "co_flagged_by",      "") or "",
+
             vwap_dev        = float(getattr(c, "vwap_dev",        0.0) or 0.0),
             bid_ask_ratio   = float(getattr(c, "bid_ask_ratio",   0.0) or 0.0),
             dpr_proximity   = float(getattr(c, "dpr_proximity",   0.0) or 0.0),
@@ -850,6 +860,8 @@ def _write_log(
                 "gemini_reason":   flag.gemini_reason,
                 "gemini_risk":     flag.gemini_risk,
                 "primary_signal":  flag.primary_signal,
+                "engine_source":  flag.engine_source,
+                "co_flagged_by":  flag.co_flagged_by,
             })
 
             rows = run_raw_sql(
@@ -1097,6 +1109,9 @@ def run_gemini_filter(
 def format_flag_for_claude(flag: GeminiFlag) -> str:
     candle = f"{flag.best_candle}(T{flag.candle_tier})" if flag.best_candle else "none"
     catalyst = f" NEWS_CATALYST:{flag.news_catalyst}" if getattr(flag, "news_catalyst", "") else ""
+    engine_str = f" ENGINE:{flag.engine_source}"
+    if flag.co_flagged_by:
+        engine_str += f" [{flag.co_flagged_by}]"
     return (
         f"SYMBOL:{flag.symbol} SECTOR:{flag.sector} LTP:{flag.ltp:.2f} "
         f"SIGNAL:{flag.primary_signal} URGENCY:{flag.urgency} "
@@ -1106,6 +1121,7 @@ def format_flag_for_claude(flag: GeminiFlag) -> str:
         f" BREADTH_TREND:{flag.intraday_trend}"
         + (f" SECTOR_MOMENTUM:{flag.sector_momentum}" if flag.sector_momentum else "")
         + catalyst
+        + engine_str
     )
 # ══════════════════════════════════════════════════════════════════════════════
 # CLI
