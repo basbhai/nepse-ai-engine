@@ -113,18 +113,54 @@ def _load_trade_journal() -> tuple[list[dict], dict]:
         return [], {}
 
 
+def _load_wait_outcome_stats() -> dict:
+    """
+    All-time WAIT outcome counts from market_log.
+    Used to build accurate summary header in the reviewer prompt.
+    Intentionally separate from the windowed _load_wait_avoid_outcomes()
+    so the header always reflects true DB totals, not the display window.
+    """
+    try:
+        rows = run_raw_sql(
+            """
+            SELECT outcome, COUNT(*) as cnt
+            FROM market_log
+            WHERE action = 'WAIT'
+              AND outcome != 'PENDING'
+            GROUP BY outcome
+            """
+        ) or []
+        counts = {r["outcome"]: int(r["cnt"]) for r in rows}
+        return {
+            "correct_wait":  counts.get("CORRECT_WAIT",  0),
+            "missed_entry":  counts.get("MISSED_ENTRY",  0),
+            "expired_wait":  counts.get("EXPIRED_WAIT",  0),
+            "false_wait":    counts.get("FALSE_WAIT",    0),
+            "total_stamped": sum(counts.values()),
+        }
+    except Exception as e:
+        log.error("_load_wait_outcome_stats failed: %s", e)
+        return {
+            "correct_wait": 0, "missed_entry": 0,
+            "expired_wait": 0, "false_wait": 0, "total_stamped": 0,
+        }
+
+
 def _load_wait_avoid_outcomes() -> list[dict]:
     """
-    All WAIT/AVOID/BUY rows from market_log for GPT review.
+    WAIT/AVOID rows from market_log for GPT review (BUY rows load separately
+    via _load_buy_decisions()).
     Includes PENDING rows -- GPT needs the full picture, not just evaluated ones.
-    AVOID rows are CLOSED immediately on write (no hold period).
-    WAIT rows expire after 5 calendar days.
-    BUY rows are stamped by evaluate_buy_signals() after hold period.
+    AVOID rows are CLOSED immediately on write (no hold period) and are few,
+    so they keep the existing LIMIT with no date filter.
+    WAITs are restricted to the last 45 days to keep the window focused;
+    all-time WAIT outcome totals are loaded separately via _load_wait_outcome_stats().
+    reasoning is truncated to 300 chars to manage token budget.
     """
     try:
         rows = run_raw_sql(
             f"""
-            SELECT id, date, symbol, sector, action, confidence, reasoning,
+            SELECT id, date, symbol, sector, action, confidence, LEFT(reasoning, 300) AS reasoning,
                    geo_score, macro_score, candle_pattern,
                    outcome, exit_date, exit_price,
                    eval_date, eval_geo_score, eval_nepal_score,
@@ -137,13 +173,17 @@ def _load_wait_avoid_outcomes() -> list[dict]:
                    bb_pct_b_slope, bounce_failed, reversal_days,
                    vwap_dev, bid_ask_ratio, dpr_proximity
             FROM market_log
-            WHERE action IN ('WAIT', 'AVOID', 'BUY')
+            WHERE action IN ('WAIT', 'AVOID')
+              AND (
+                action = 'AVOID'
+                OR date::date >= (CURRENT_DATE - INTERVAL '45 days')
+              )
             ORDER BY date DESC
             LIMIT {MAX_WAIT_AVOID}
             """
         ) or []
         rows.reverse()
-        log.info("Loaded %d market_log rows (all actions, all outcomes) for GPT", len(rows))
+        log.info("Loaded %d market_log rows (WAIT/AVOID, all outcomes) for GPT", len(rows))
         return rows
     except Exception as e:
         log.error("market_log load failed: %s", e)
@@ -592,8 +632,11 @@ ANTI-OVERFITTING RULES  -  ENFORCE STRICTLY:
 5. Research paper seeds have HIGH base confidence  -  need 10+ live contradictions to downgrade.
 6. No new lesson may contradict an existing HIGH-confidence lesson without explicitly superseding it.
 7. Maximum 5 new lessons per review. Prefer highest-impact patterns only.
-8. wait_accuracy = correct_waits / (correct_waits + false_waits) among EVALUATED waits only.
-   Do NOT divide by total WAITs including PENDING/EXPIRED.
+8. wait_accuracy = correct_waits / (correct_waits + missed_entries) among RESOLVED waits only.
+   MISSED_ENTRY counts as a wrong outcome — the system waited when it should have entered.
+   FALSE_WAIT does not exist as an outcome in this system.
+   EXPIRED_WAIT is inconclusive — exclude from denominator entirely.
+   Do NOT divide by total WAITs including PENDING or EXPIRED_WAIT.
 9. avoid_accuracy = correct_avoids / (correct_avoids + false_avoids) among EVALUATED AVOIDs only.
    CORRECT_AVOID = price fell ≤ -2% by evaluation. FALSE_AVOID = price rose ≥ +5% (we missed a winner).
    EXPIRED_AVOID = price moved between -2% and +5% — inconclusive, do NOT include in denominator.
@@ -793,6 +836,7 @@ def _build_user_prompt(
     backtest: list[dict],
     claude_audit_history: list[dict],
     pattern_accuracy: list[dict] | None = None,
+    wait_stats: dict | None = None,
 ) -> str:
 
     nrb_str = json.dumps({k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in nrb.items() if v is not None}, ensure_ascii=False, default=str) if nrb else "No NRB data available"
@@ -806,12 +850,29 @@ def _build_user_prompt(
     wins_w   = sum(1 for t in trades if t.get("result") == "WIN")
     losses_w = sum(1 for t in trades if t.get("result") == "LOSS")
 
+    # All-time stats from DB (accurate, not windowed)
+    ws = wait_stats or {}
+    at_correct_waits  = ws.get("correct_wait",  0)
+    at_missed_entries = ws.get("missed_entry",  0)
+    at_expired_waits  = ws.get("expired_wait",  0)
+    at_false_waits    = ws.get("false_wait",    0)
+    at_total_stamped  = ws.get("total_stamped", 0)
+
+    # Denominator: correct + false + missed (all resolved, meaningful outcomes)
+    # EXPIRED_WAIT excluded — inconclusive, no directional verdict
+    at_evaluated_wait_count = at_correct_waits + at_false_waits + at_missed_entries
+    at_wait_accuracy = (
+        round(at_correct_waits / at_evaluated_wait_count, 4)
+        if at_evaluated_wait_count > 0 else 0.0
+    )
+
+    # Windowed counts (for what's shown in the detail rows below)
     correct_avoids = sum(1 for r in wait_avoid if r.get("outcome") == "CORRECT_AVOID")
     false_avoids   = sum(1 for r in wait_avoid if r.get("outcome") == "FALSE_AVOID")
     missed_entries = sum(1 for r in wait_avoid if r.get("outcome") == "MISSED_ENTRY")
-    correct_waits  = sum(1 for r in wait_avoid if r.get("outcome") == "CORRECT_WAIT")
-    false_waits    = sum(1 for r in wait_avoid if r.get("outcome") == "FALSE_WAIT")
-    evaluated_wait_count  = correct_waits + false_waits
+    correct_waits        = sum(1 for r in wait_avoid if r.get("outcome") == "CORRECT_WAIT")
+    # FALSE_WAIT does not exist as an outcome — classify_wait_avoid() never returns it.
+    # evaluated_wait_count computed from all-time DB stats in wait_stats, not the windowed slice.
     evaluated_avoid_count = correct_avoids + false_avoids
 
     # BUY decision stats
@@ -827,11 +888,13 @@ ALL-TIME trades: {total_all} ({wins_all} W, {losses_all} L)
 Recent trades shown below: {len(trades)} ({wins_w} W, {losses_w} L)
 BUY decisions shown: {len(buy_decisions)} ({buys_with_outcome} closed, {buys_open} open, {buys_not_traded} not traded)
 Evaluated WAIT/AVOID shown: {len(wait_avoid)} total rows (PENDING + stamped)
-  Stamped WAITs with outcome: {evaluated_wait_count}
+  All-time stamped WAITs: {at_total_stamped} ({at_correct_waits} CORRECT_WAIT, {at_missed_entries} MISSED_ENTRY, {at_expired_waits} EXPIRED_WAIT, {at_false_waits} FALSE_WAIT)
+  Showing last 45 days of WAITs + all AVOIDs: {len(wait_avoid)} rows (detail below)
   CORRECT_AVOID: {correct_avoids} | FALSE_AVOID: {false_avoids}
   EXPIRED_AVOID: {sum(1 for r in wait_avoid if r.get("outcome") == "EXPIRED_AVOID")} (inconclusive — exclude from avoid_accuracy denominator)
-  MISSED_ENTRY: {missed_entries} | CORRECT_WAIT: {correct_waits}
-  wait_accuracy  = correct_waits  / evaluated_wait_count  = {correct_waits}  / {evaluated_wait_count}  — do NOT divide by {len(wait_avoid)}
+  wait_accuracy  = correct_waits / (correct_waits + missed_entries) = {at_correct_waits} / {at_evaluated_wait_count} = {at_wait_accuracy}
+  NOTE: MISSED_ENTRY counts as a resolved wrong outcome in the denominator. EXPIRED_WAIT excluded (inconclusive).
+  MISSED_ENTRY: {at_missed_entries} | CORRECT_WAIT: {at_correct_waits} | EXPIRED_WAIT: {at_expired_waits} (all-time)
   avoid_accuracy = correct_avoids / evaluated_avoid_count = {correct_avoids} / {evaluated_avoid_count} — do NOT include EXPIRED_AVOID in denominator
   false_avoid_rate = false_avoids / evaluated_avoid_count = {false_avoids} / {evaluated_avoid_count}
 Daily context rows: {len(daily_context)} trading days
@@ -1237,6 +1300,7 @@ def get_review_prompts() -> tuple[str, str]:
 
     trades, trade_agg = _load_trade_journal()
     wait_avoid    = _load_wait_avoid_outcomes()
+    wait_stats    = _load_wait_outcome_stats()
     buy_decisions = _load_buy_decisions()
     daily_context = _load_daily_context()
     active_lessons = _load_active_lessons()
@@ -1253,6 +1317,7 @@ def get_review_prompts() -> tuple[str, str]:
         review_week, trades, trade_agg, wait_avoid, buy_decisions, daily_context,
         active_lessons, nrb, gate_summary, macro_trend, fd_trend, nepse_trend,
         backtest, claude_audit_history,
+        wait_stats=wait_stats,
     )
 
     return system_prompt, user_prompt
@@ -1346,6 +1411,7 @@ def run(dry_run: bool = False):
     # -- Load all data
     trades, trade_agg = _load_trade_journal()
     wait_avoid    = _load_wait_avoid_outcomes()
+    wait_stats    = _load_wait_outcome_stats()
     buy_decisions = _load_buy_decisions()
     daily_context = _load_daily_context()
     active_lessons = _load_active_lessons()
@@ -1366,6 +1432,7 @@ def run(dry_run: bool = False):
         active_lessons, nrb, gate_summary, macro_trend, fd_trend, nepse_trend,
         backtest, claude_audit_history,
         pattern_accuracy=pattern_accuracy,
+        wait_stats=wait_stats,
     )
 
     log.info("Calling GPT-5o for weekly review (prompt ~%d tokens)...",

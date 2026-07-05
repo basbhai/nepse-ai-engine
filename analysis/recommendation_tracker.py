@@ -313,6 +313,128 @@ def stamp_avoid_closed(row_id: int, symbol: str, dry_run: bool = False) -> None:
         log.error("stamp_avoid_closed failed for %s id=%s: %s", symbol, row_id, e)
 
 
+def _backfill_avoid_prices(dry_run: bool = False) -> list[dict]:
+    """
+    For AVOID rows that are CLOSED but have no price evaluation yet,
+    backfill eval_price_change_pct, eval_nepse_change_pct, eval_alpha
+    using resolve_hold_days() per signal type.
+
+    Does NOT change outcome — outcome stays CLOSED.
+    Only populates missing eval fields so learning_hub can compute avoid_accuracy.
+
+    Evaluation point: signal_date + resolve_hold_days() trading days.
+    If that date is in the future, skip — not yet evaluable.
+    """
+    today     = today_str()
+    backfilled = []
+
+    try:
+        rows = run_raw_sql(
+            """
+            SELECT id, date, symbol, sector, geo_score, macro_score,
+                   primary_signal, candle_pattern, reasoning
+            FROM market_log
+            WHERE action = 'AVOID'
+              AND outcome = 'CLOSED'
+              AND (eval_price_change_pct IS NULL OR eval_price_change_pct = '')
+              AND date IS NOT NULL
+            ORDER BY date ASC
+            """
+        ) or []
+    except Exception as e:
+        log.error("_backfill_avoid_prices: DB fetch failed: %s", e)
+        return []
+
+    if not rows:
+        log.info("No AVOID rows need price backfill.")
+        return []
+
+    log.info("Found %d AVOID rows to backfill.", len(rows))
+
+    for row in rows:
+        symbol   = row.get("symbol", "UNKNOWN")
+        sig_date = row.get("date", "")
+        row_id   = row.get("id")
+
+        if not sig_date or not row_id:
+            continue
+
+        hold_period  = resolve_hold_days(row)
+        days_elapsed = trading_days_between(sig_date, today)
+
+        if days_elapsed < hold_period:
+            log.debug("%s AVOID — %d/%d trading days elapsed. Not yet evaluable.",
+                      symbol, days_elapsed, hold_period)
+            continue
+
+        price_at_signal = get_price_on_or_before(symbol, sig_date)
+        price_at_eval   = get_price_on_or_before(symbol, today)
+
+        if not price_at_signal or not price_at_eval:
+            log.warning("%s — cannot find prices for avoid backfill. Skipping.", symbol)
+            continue
+
+        price_change_pct = ((price_at_eval - price_at_signal) / price_at_signal) * 100
+
+        nepse_at_signal  = get_nepse_index_on_or_before(sig_date)
+        nepse_now        = get_nepse_index_on_or_before(today)
+        nepse_change_pct = (
+            (nepse_now - nepse_at_signal) / nepse_at_signal * 100
+            if nepse_at_signal and nepse_now else None
+        )
+        eval_alpha = (
+            price_change_pct - nepse_change_pct
+            if nepse_change_pct is not None else None
+        )
+
+        # Classify — use the same classifier, but outcome field stays CLOSED
+        classified = classify_wait_avoid("AVOID", price_change_pct)
+
+        macro  = get_macro_snapshot(today)
+
+        # Build update — pass outcome='CLOSED' to keep outcome unchanged
+        # but populate all eval_* fields using _build_eval_update
+        update = _build_eval_update(
+            outcome          = "CLOSED",
+            today            = today,
+            price_change_pct = price_change_pct,
+            nepse_change_pct = nepse_change_pct,
+            eval_alpha       = eval_alpha,
+            geo_at_signal    = _safe_float(row.get("geo_score")),
+            nepal_at_signal  = _safe_float(row.get("macro_score")),
+            macro            = macro,
+            price_now        = price_at_eval,
+        )
+
+        log.info("AVOID %s backfill: price_chg=%.2f%% alpha=%s classified=%s",
+                 symbol, price_change_pct,
+                 f"{eval_alpha:+.2f}" if eval_alpha is not None else "N/A",
+                 classified)
+
+        if not dry_run:
+            try:
+                updated = update_row("market_log", updates=update, where={"id": str(row_id)})
+                if updated:
+                    log.info("AVOID %s backfilled (id=%s)", symbol, row_id)
+                else:
+                    log.warning("AVOID backfill: no row updated for %s id=%s", symbol, row_id)
+            except Exception as e:
+                log.error("AVOID backfill failed for %s: %s", symbol, e)
+        else:
+            log.info("[DRY-RUN] Would backfill AVOID %s", symbol)
+
+        backfilled.append({
+            "symbol":           symbol,
+            "signal_date":      sig_date,
+            "price_change_pct": round(price_change_pct, 2),
+            "nepse_change_pct": round(nepse_change_pct, 2) if nepse_change_pct is not None else None,
+            "eval_alpha":       round(eval_alpha, 2) if eval_alpha is not None else None,
+            "classified":       classified,
+        })
+
+    return backfilled
+
+
 # ---------------------------------------------------------------------------
 # SHARED EVAL BUILDER — avoids duplicating alpha/delta logic across branches
 # ---------------------------------------------------------------------------
@@ -543,6 +665,11 @@ def evaluate_wait_avoid(dry_run: bool = False) -> list[dict]:
                 log.error("Failed to stamp %s id=%s: %s", symbol, row_id, e)
         else:
             log.info("[DRY-RUN] Would stamp %s -> %s", symbol, outcome)
+
+    # ── Backfill AVOID price data for already-CLOSED rows ────────────────────
+    backfilled = _backfill_avoid_prices(dry_run=dry_run)
+    if backfilled:
+        log.info("Backfilled price data for %d AVOID rows", len(backfilled))
 
     return evaluated
 
