@@ -319,8 +319,8 @@ def _backfill_avoid_prices(dry_run: bool = False) -> list[dict]:
     backfill eval_price_change_pct, eval_nepse_change_pct, eval_alpha
     using resolve_hold_days() per signal type.
 
-    Does NOT change outcome — outcome stays CLOSED.
-    Only populates missing eval fields so learning_hub can compute avoid_accuracy.
+    Updates outcome from CLOSED to CORRECT_AVOID/FALSE_AVOID/EXPIRED_AVOID
+    once hold period has elapsed and price data is available.
 
     Evaluation point: signal_date + resolve_hold_days() trading days.
     If that date is in the future, skip — not yet evaluable.
@@ -387,15 +387,12 @@ def _backfill_avoid_prices(dry_run: bool = False) -> list[dict]:
             if nepse_change_pct is not None else None
         )
 
-        # Classify — use the same classifier, but outcome field stays CLOSED
         classified = classify_wait_avoid("AVOID", price_change_pct)
 
         macro  = get_macro_snapshot(today)
 
-        # Build update — pass outcome='CLOSED' to keep outcome unchanged
-        # but populate all eval_* fields using _build_eval_update
         update = _build_eval_update(
-            outcome          = "CLOSED",
+            outcome          = classified,
             today            = today,
             price_change_pct = price_change_pct,
             nepse_change_pct = nepse_change_pct,

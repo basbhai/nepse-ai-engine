@@ -763,7 +763,7 @@ Use [] for empty arrays. Use exact key names shown  -  any deviation silently br
     "buy_win_rate": 0.0,
     "buy_avg_return": 0.0,
     "wait_count": 0,
-    "wait_accuracy": 0.0,
+    "wait_accuracy": <copy the pre-computed value from the EVIDENCE SUMMARY header — do NOT recompute from the detail rows below, as they show only a 45-day window and will undercount MISSED_ENTRYs>,
     "wait_evaluated_count": 0,
     "avoid_count": 0,
     "avoid_evaluated_count": 0,
@@ -1311,12 +1311,14 @@ def get_review_prompts() -> tuple[str, str]:
     nepse_trend   = _load_nepse_trend()
     backtest      = _load_backtest_results()
     claude_audit_history = _load_claude_audit_history()
+    pattern_accuracy = _load_pattern_accuracy()
 
     system_prompt = _build_system_prompt()
     user_prompt   = _build_user_prompt(
         review_week, trades, trade_agg, wait_avoid, buy_decisions, daily_context,
         active_lessons, nrb, gate_summary, macro_trend, fd_trend, nepse_trend,
         backtest, claude_audit_history,
+        pattern_accuracy=pattern_accuracy,
         wait_stats=wait_stats,
     )
 
