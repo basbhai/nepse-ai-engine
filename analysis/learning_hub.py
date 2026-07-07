@@ -41,7 +41,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from AI import ask_deepseek_review
 
-from sheets import run_raw_sql, upsert_row, write_row, get_setting
+from sheets import run_raw_sql, upsert_row, update_row, write_row, get_setting
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LOGGING
@@ -1063,10 +1063,10 @@ def _write_lessons(
             deactivated += 1
             continue
         try:
-            upsert_row(
+            update_row(
                 "learning_hub",
-                {"id": str(old_id), "active": "false"},
-                conflict_columns=["id"],
+                {"active": "false"},
+                where={"id": str(old_id)},
             )
             log.info("Deactivated lesson id=%s", old_id)
             deactivated += 1
@@ -1155,10 +1155,10 @@ def _write_lessons(
                 old_id = lesson.get("supersedes_lesson_id")
                 if old_id:
                     try:
-                        upsert_row(
+                        update_row(
                             "learning_hub",
-                            {"id": str(old_id), "superseded_by": str(new_id)},
-                            conflict_columns=["id"],
+                            {"superseded_by": str(new_id)},
+                            where={"id": str(old_id)},
                         )
                         log.info("Linked: old lesson %s → superseded_by %s", old_id, new_id)
                     except Exception as e:

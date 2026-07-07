@@ -106,6 +106,7 @@ def flush_near_misses_to_db() -> None:
                     "dpr_proximity":            str(m.dpr_proximity),
                     "outcome":                  None,
                     "tracking_days":            "0",
+                    "engine_source":            getattr(m, "engine_source", "shared") or "shared",
                 },
                 conflict_columns=["symbol", "date"],
             )
@@ -515,8 +516,21 @@ def _build_prompt(
     lessons_str = "\n".join(f"  - {l}" for l in lessons) if lessons else "  No lessons yet"
 
     prompt = f"""You are a NEPSE stock screener AI. Today is {nst_now.strftime('%Y-%m-%d %H:%M')} NST.
-Your job: review these pre-filtered candidates and decide which {max_flags} (max) 
+Your job: review these pre-filtered candidates and decide which {max_flags} (max)
 deserve deep Claude analysis today. Be selective — Claude analysis is expensive.
+
+═══════════════════════════════════════
+DUAL-ENGINE SCORING (see ENGINE: tag on each candidate line)
+═══════════════════════════════════════
+Candidates are scored by two independent engines and merged into one list:
+  ENGINE:v1   = flagged by snapshot scoring only (T0 indicator state)
+  ENGINE:v2   = flagged by 6-day progression scoring only — v1's gate would
+                have blocked this symbol at T0, but its 6-day trend improved
+  ENGINE:BOTH = flagged independently by both engines — stronger signal,
+                weigh this more favorably than a single-engine flag
+A bracketed [co_flagged_by ...] note, when present, shows the other engine's
+opinion (score/signal) even when it didn't independently make that engine's
+own top list.
 
 ═══════════════════════════════════════
 MARKET CONTEXT
