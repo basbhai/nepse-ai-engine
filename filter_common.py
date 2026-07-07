@@ -235,6 +235,7 @@ class NearMiss:
     bid_ask_ratio:            float = 0.0
     dpr_proximity:            float = 0.0
     engine_source:            str   = "shared"
+    composite_score_v2:       float = 0.0
 
 
 def _categorize_gate_reason(reason: str) -> str:
