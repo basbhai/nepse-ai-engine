@@ -578,21 +578,66 @@ VWAPD=vwap_dev% BAR=bid_ask_ratio DPRP=dpr_proximity VOS=vol_pct_of_outstanding_
 ═══════════════════════════════════════
 SCREENING RULES (apply in order)
 ═══════════════════════════════════════
-1. Don't skip if symbol is already in open positions (evaluate EXIT/RE-ENTRY)
-2. Filter out if the stock's sector belongs to mutual fund or debentures
-3. SKIP if symbol already analyzed today (avoid duplicate flags)
-4. SKIP if market_state is BEAR and signal is not MACD or BB
-   (paper: only MACD/BB profitable in bear markets)
-5. PREFER MACD cross = BULLISH as primary signal (23.64% ann. return)
-6. PREFER BB = LOWER_TOUCH (PF=12.19, highest quality NEPSE signal)
-7. DOWNGRADE if RSI is primary signal (lost money -4.81% standalone)
-8. UPGRADE if Tier 1 candle pattern with volume confirmed
-9. UPGRADE if CSTAR=Y (excess return above C*=0.129)
-   UPGRADE to URGENT if VOS > 1.0% AND primary_signal is VOLUME_BREAKOUT
-10. CHECK learning hub — if pattern has <40% win rate for this symbol, skip
-11. FLAG max {max_flags} stocks — quality over quantity
-12. If no stock is genuinely worth Claude analysis today, return empty flags
+═══════════════════════════════════════
+SCREENING RULES (apply in order)
+═══════════════════════════════════════
 
+1. Don't skip if symbol is already in open positions
+   (evaluate EXIT / RE-ENTRY context if relevant).
+
+2. Filter out if the stock's sector belongs to mutual fund or debentures.
+
+3. SKIP if symbol already analyzed today
+   (avoid duplicate Claude reviews).
+
+4. PREFER MACD cross = BULLISH as a primary signal
+   (23.64% annualized return in historical NEPSE research).
+   This is a reference, not a hard rule.
+
+5. PREFER BB = LOWER_TOUCH
+   (PF = 12.19, historically one of the highest-quality NEPSE signals).
+   This is a reference, not a hard rule.
+
+6. DOWNGRADE if RSI is the primary signal AND no reversal evidence exists
+   (standalone RSI lost money historically at -4.81%).
+   Do not automatically downgrade if there is clear reversal evidence,
+   improving momentum, or multi-signal confirmation.
+
+7. UPGRADE if a Tier-1 candle pattern is present and volume confirms it.
+
+8. UPGRADE if CSTAR = Y
+   (excess return above C* = 0.129).
+   UPGRADE to URGENT if:
+   - VOS > 1.0%
+   - AND primary_signal is VOLUME_BREAKOUT
+
+9. CHECK Learning Hub lessons.
+   If a high-confidence lesson or a pattern with win rate < 40%
+   directly contradicts the setup, skip it.
+
+10. FLAG a maximum of {max_flags} stocks.
+    Quality is more important than quantity.
+
+11. Use both market context and stock-specific context.
+    Consider:
+    - market_state
+    - breadth trend
+    - sector momentum
+    - engine source (v1 = snapshot, v2 = progression/unvalidated, BOTH = strongest confirmation)
+    - momentum status
+    - reversal evidence
+    - learning hub lessons
+    Do NOT reject a candidate solely because the overall market is bearish.
+12. Explain clearly WHY a stock deserves Claude review.
+    Reference:
+    - primary signal
+    - momentum characteristics
+    - reversal evidence
+    - breadth or sector behavior
+    - key risk
+
+    If no candidate genuinely deserves Claude analysis after applying all
+    rules above, return an empty flag list.
 
 ═══════════════════════════════════════
 TASK
