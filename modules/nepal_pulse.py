@@ -128,11 +128,6 @@ def _load_seen_hashes() -> dict[str, str]:
         active = {}
         for h, ts_str in cache.items():
             try:
-                ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M").replace(
-                    tzinfo=NST.utcoffset(datetime.now())
-                    if hasattr(NST, "utcoffset") else None
-                )
-                # Simple string comparison works since format is ISO-like
                 if ts_str >= cutoff.strftime("%Y-%m-%d %H:%M"):
                     active[h] = ts_str
             except Exception:

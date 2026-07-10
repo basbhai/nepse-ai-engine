@@ -188,6 +188,15 @@ def _resolve_ambiguous(
         "tech_score":   indicators.get("tech_score"),
         "volume_ratio": indicators.get("volume_ratio"),
         "obv_trend":    indicators.get("obv_trend"),
+        "ema_20":           indicators.get("ema_20"),
+        "ema_50":           indicators.get("ema_50"),
+        "ema_200":          indicators.get("ema_200"),
+        "bb_upper":         indicators.get("bb_upper"),
+        "bb_lower":         indicators.get("bb_lower"),
+        "bb_pct_b":         indicators.get("bb_pct_b"),
+        "macd_histogram":   indicators.get("macd_histogram"),
+        "volume_above_avg": indicators.get("volume_above_avg"),
+        "atr_14":           indicators.get("atr_14"),
     }
 
     prompt = (
