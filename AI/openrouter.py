@@ -436,8 +436,8 @@ def ask_free(
     from openai import OpenAI
 
     FREE_MODEL_CHAIN = [
-    
-        "openai/gpt-oss-20b:free",
+        "google/gemma-4-26b-a4b-it:free",
+        "openai/gpt-oss-120b:free",
         "minimax/minimax-m2.5:free",
     ]
 
@@ -460,7 +460,7 @@ def ask_free(
             response = client.chat.completions.create(
                 model       = model,
                 messages    = messages,
-                max_tokens  = 300,
+                max_tokens  = 400,
                 temperature = 0.1,
                 timeout     = 30,
                 # NO reasoning — content field is empty when reasoning dominates
