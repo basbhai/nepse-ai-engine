@@ -870,11 +870,56 @@ def _fmt(val) -> str:
 # ENTRY POINTS
 # ---------------------------------------------------------------------------
 
+def _warn_stale_lessons(missed_symbols: list) -> None:
+    """
+    After MISSED_ENTRY stamps, query active HIGH-confidence lessons and log a
+    staleness warning. These lessons may have been written before the misses were
+    evaluated, making their stored win_rate figures out of date.
+    """
+    try:
+        stale_candidates = run_raw_sql(
+            """
+            SELECT id, condition, win_rate, trade_count, last_validated
+            FROM learning_hub
+            WHERE active = 'true'
+              AND confidence_level = 'HIGH'
+            ORDER BY id DESC
+            """
+        ) or []
+    except Exception as e:
+        log.warning("Lesson staleness check query failed: %s", e)
+        return
+
+    if not stale_candidates:
+        return
+
+    symbols_str = ", ".join(missed_symbols)
+    log.warning(
+        "LESSON STALENESS ALERT: MISSED_ENTRY stamped for [%s]. "
+        "The following HIGH-confidence active lessons may have been written before "
+        "these outcomes were evaluated — win_rate figures may be stale. "
+        "Verify at next GPT weekly review:",
+        symbols_str,
+    )
+    for row in stale_candidates:
+        log.warning(
+            "  lesson id=%s  trade_count=%s  win_rate=%s  last_validated=%s  condition: %s",
+            row.get("id"), row.get("trade_count"), row.get("win_rate"),
+            row.get("last_validated"),
+            (row.get("condition") or "")[:80],
+        )
+
+
 def run(dry_run: bool = False) -> None:
     """Entry point called by eod_workflow.py."""
     log.info("Starting recommendation_tracker -- %s", today_str())
     wa_evaluated  = evaluate_wait_avoid(dry_run=dry_run)
     buy_evaluated = evaluate_buy_signals(dry_run=dry_run)
+
+    missed_symbols = [r["symbol"] for r in wa_evaluated if r.get("outcome") == "MISSED_ENTRY"]
+    if missed_symbols:
+        _warn_stale_lessons(missed_symbols)
+
     total = len(wa_evaluated) + len(buy_evaluated)
     if total:
         log.info("Evaluated %d signals total (%d WAIT/AVOID, %d BUY):",
