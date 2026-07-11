@@ -621,11 +621,14 @@ ANTI-OVERFITTING RULES  -  ENFORCE STRICTLY:
 1. Evidence tiers  -  HARD LIMITS by trade count:
    1-4 trades   : ADD_TO_REASONING or MONITOR only. No confidence changes.
    5-14 trades  : REDUCE_CONFIDENCE_BY_15 maximum.
-   15-24 trades : REDUCE_CONFIDENCE_BY_25 maximum.
+   15-24 trades : REDUCE_CONFIDENCE_BY_25 or SOFT_BLOCK maximum.
    25+ trades   : BLOCK_ENTRY permitted.
    Sector-level counts apply per sector. Signal-level counts apply per signal.
 2. LOW confidence = inform only. Never block on LOW.
-3. Single trade cannot flip HIGH confidence lesson. Need 5+ contradictions.
+3. HIGH confidence requires 25+ trades. If trade_count < 25, use MEDIUM at most.
+   HIGH + ADD_TO_REASONING is a strong soft signal — it is NOT a hard block.
+   Only BLOCK_ENTRY vetoes. All other actions are soft inputs Claude can outweigh.
+4. Single trade cannot flip HIGH confidence lesson. Need 5+ contradictions.
 4. EXPIRED outcomes = weak evidence. Count as 0.2 of a resolved outcome.
    Example: 5 EXPIRED + 5 CORRECT = effective n=6, not n=10.
    Win rate must be computed on fully resolved (non-EXPIRED) trades only.
@@ -688,10 +691,19 @@ SIGNAL_FILTER | SECTOR_FILTER | MACRO_FILTER | ENTRY_TIMING | STOP_CALC |
 PORTFOLIO_RULE | DIVIDEND_PATTERN | CALENDAR_EFFECT | FAILURE_MODE | LIQUIDITY_GAP
 
 ENTRY ACTIONS (escalating strength  -  use ONLY these exact strings):
-MONITOR | ADD_TO_REASONING | REDUCE_CONFIDENCE_BY_15 | REDUCE_CONFIDENCE_BY_20 |
+MONITOR | ADD_TO_REASONING | SOFT_BLOCK | REDUCE_CONFIDENCE_BY_15 | REDUCE_CONFIDENCE_BY_20 |
 REDUCE_CONFIDENCE_BY_25 | REDUCE_ALLOCATION_BY_20 | REDUCE_ALLOCATION_BY_30 |
 REDUCE_ALLOCATION_BY_40 | INCREASE_CONFIDENCE_BY_15 | INCREASE_ALLOCATION_BY_25 |
 REQUIRE_VOLUME_CONFIRM | REQUIRE_MACRO_STABLE | WAIT_FOR_CONFIRMATION | BLOCK_ENTRY
+
+Action semantics (read carefully before choosing):
+  ADD_TO_REASONING : soft signal regardless of confidence_level. HIGH confidence increases weight
+                     but NEVER makes it a veto. Claude can override it with strong positive signals.
+  SOFT_BLOCK       : strong negative signal (15-24 trades). Claude weights heavily against entry
+                     but can override if other signals are sufficiently positive. Use when evidence
+                     is strong but below the 25-trade threshold for a hard block.
+  BLOCK_ENTRY      : hard veto. No override. Requires 25+ supporting trades.
+  confidence_level reflects evidence strength, not action strength. HIGH + ADD_TO_REASONING ≠ block.
 
 Note: TIGHTEN_STOP is a post-entry action  -  do NOT use it in lessons_to_write.
 
@@ -998,6 +1010,7 @@ def _validate_lesson(lesson: dict, index: int) -> bool:
     valid_actions = {
             "MONITOR",
             "ADD_TO_REASONING",
+            "SOFT_BLOCK",
             "REDUCE_CONFIDENCE_BY_15",
             "REDUCE_CONFIDENCE_BY_20",
             "REDUCE_CONFIDENCE_BY_25",
@@ -1028,6 +1041,21 @@ def _validate_lesson(lesson: dict, index: int) -> bool:
                 lesson["gpt_reasoning"] = (
                     (lesson.get("gpt_reasoning") or "") +
                     f" [AUTO-DOWNGRADED: BLOCK_ENTRY requires 25+ trades, had {tc}]"
+                )
+        except (ValueError, TypeError):
+            pass
+
+    # Anti-overfitting: HIGH confidence needs 25+ trades
+    if lesson.get("confidence_level") == "HIGH":
+        try:
+            tc = int(lesson.get("trade_count", 0) or 0)
+            if tc < 25:
+                log.warning("Lesson #%d: HIGH confidence with only %d trades  -  "
+                           "downgrading to MEDIUM", index, tc)
+                lesson["confidence_level"] = "MEDIUM"
+                lesson["gpt_reasoning"] = (
+                    (lesson.get("gpt_reasoning") or "") +
+                    f" [AUTO-DOWNGRADED: HIGH confidence requires 25+ trades, had {tc}]"
                 )
         except (ValueError, TypeError):
             pass

@@ -380,7 +380,7 @@ def _load_loss_streak() -> int:
         from sheets import read_tab
         rows    = read_tab("financials")
         kpi_map = {r.get("kpi_name", ""): r.get("current_value", "") for r in rows}
-        return int(float(kpi_map.get("Current_Loss_Streak", 0) or 0))
+        return int(float(kpi_map.get("current_loss_streak", 0) or 0))
     except Exception:
         return 0
 
@@ -858,13 +858,17 @@ def _build_prompt(
 ) -> str:
     nst_now = datetime.now(tz=NST)
     LESSON_ACTION_GLOSSARY = """LESSON ACTION CODES — apply these exactly when a lesson fires:
-    BLOCK_ENTRY              → Hard block. Do not issue BUY regardless of other signals.
-    ADD_TO_REASONING         → Factor this into your reasoning. Weight it alongside indicators.
+    BLOCK_ENTRY              → Hard block. Do not issue BUY regardless of other signals. Only valid with 25+ supporting trades.
+    SOFT_BLOCK               → Strong negative signal. Weight heavily against entry but does NOT unilaterally reject — can be outweighed by sufficiently strong positive signals.
+    ADD_TO_REASONING         → Factor this into your reasoning. Weight it alongside indicators. This is NEVER a hard block — even HIGH-confidence ADD_TO_REASONING can be outweighed by strong positive signals. Do not treat it as a veto.
     INCREASE_CONFIDENCE_BY_N → Add N points to your confidence score for this stock.
     REDUCE_CONFIDENCE_BY_N   → Subtract N points from your confidence score.
     INCREASE_ALLOCATION_BY_N → Note in reasoning: increase suggested allocation by N%.
     REDUCE_ALLOCATION_BY_N   → Note in reasoning: reduce suggested allocation by N%.
-    A lesson fires when its IF condition matches the current stock's attributes."""
+    A lesson fires when its IF condition matches the current stock's attributes.
+    IMPORTANT: confidence_level (HIGH/MEDIUM/LOW) reflects evidence strength, not action strength.
+    HIGH confidence ADD_TO_REASONING is a strong soft signal — it cannot veto a BUY by itself.
+    Only BLOCK_ENTRY is a hard veto. All other action codes are soft inputs to your reasoning."""
 
 
 

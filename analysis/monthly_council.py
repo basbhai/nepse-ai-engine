@@ -1036,6 +1036,50 @@ def _validate_lesson(lesson: dict, index: int) -> bool:
     if lesson.get("confidence_level") not in ("LOW", "MEDIUM", "HIGH"):
         log.warning("Council lesson #%d invalid confidence_level — skipping", index)
         return False
+
+    valid_actions = {
+        "MONITOR", "ADD_TO_REASONING", "SOFT_BLOCK",
+        "REDUCE_CONFIDENCE_BY_15", "REDUCE_CONFIDENCE_BY_20", "REDUCE_CONFIDENCE_BY_25",
+        "REDUCE_ALLOCATION_BY_20", "REDUCE_ALLOCATION_BY_30", "REDUCE_ALLOCATION_BY_40",
+        "INCREASE_CONFIDENCE_BY_15", "INCREASE_ALLOCATION_BY_25",
+        "REQUIRE_VOLUME_CONFIRM", "REQUIRE_MACRO_STABLE", "WAIT_FOR_CONFIRMATION",
+        "BLOCK_ENTRY",
+    }
+    if lesson.get("action") not in valid_actions:
+        log.warning("Council lesson #%d has invalid action: %s — skipping",
+                    index, lesson.get("action"))
+        return False
+
+    # Anti-overfitting: BLOCK_ENTRY needs 25+ trades
+    if lesson.get("action") == "BLOCK_ENTRY":
+        try:
+            tc = int(lesson.get("trade_count", 0) or 0)
+            if tc < 25:
+                log.warning("Council lesson #%d: BLOCK_ENTRY with only %d trades — "
+                            "downgrading to REDUCE_CONFIDENCE_BY_25", index, tc)
+                lesson["action"] = "REDUCE_CONFIDENCE_BY_25"
+                lesson["gpt_reasoning"] = (
+                    (lesson.get("gpt_reasoning") or "") +
+                    f" [AUTO-DOWNGRADED: BLOCK_ENTRY requires 25+ trades, had {tc}]"
+                )
+        except (ValueError, TypeError):
+            pass
+
+    # Anti-overfitting: HIGH confidence needs 25+ trades
+    if lesson.get("confidence_level") == "HIGH":
+        try:
+            tc = int(lesson.get("trade_count", 0) or 0)
+            if tc < 25:
+                log.warning("Council lesson #%d: HIGH confidence with only %d trades — "
+                            "downgrading to MEDIUM", index, tc)
+                lesson["confidence_level"] = "MEDIUM"
+                lesson["gpt_reasoning"] = (
+                    (lesson.get("gpt_reasoning") or "") +
+                    f" [AUTO-DOWNGRADED: HIGH confidence requires 25+ trades, had {tc}]"
+                )
+        except (ValueError, TypeError):
+            pass
+
     return True
 
 
