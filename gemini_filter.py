@@ -628,7 +628,17 @@ SCREENING RULES (apply in order)
     - reversal evidence
     - learning hub lessons
     Do NOT reject a candidate solely because the overall market is bearish.
-12. Explain clearly WHY a stock deserves Claude review.
+12. V2 EXEMPTION: Any active Learning Hub lesson above whose condition is a
+    tech_score threshold (pattern: "tech_score < N") does NOT apply to
+    candidates marked ENGINE:v2 (engine_source="v2", not "BOTH"). Such
+    lessons are derived from v1-scored evidence — v2 candidates are surfaced
+    via momentum/reversal signals independent of tech_score by design, so
+    tech_score lagging is expected for this population, not disqualifying.
+    Evaluate ENGINE:v2 candidates on v2's own signal strength
+    (momentum_status, rsi_slope_3d, bb_pct_b_slope, composite_score_v2)
+    instead. Candidates marked ENGINE:BOTH still require the tech_score
+    threshold as normal, since v1 independently confirmed them.
+13. Explain clearly WHY a stock deserves Claude review.
     Reference:
     - primary signal
     - momentum characteristics

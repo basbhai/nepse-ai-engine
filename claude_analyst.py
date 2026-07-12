@@ -870,7 +870,14 @@ def _build_prompt(
     HIGH confidence ADD_TO_REASONING is a strong soft signal — it cannot veto a BUY by itself.
     Only BLOCK_ENTRY is a hard veto. All other action codes are soft inputs to your reasoning."""
 
-
+    _engine_source = getattr(flag, "engine_source", "v1") or "v1"
+    LESSON_APPLICABILITY_BY_ENGINE = f"""LESSON APPLICABILITY BY ENGINE SOURCE: This candidate's engine_source is {_engine_source}.
+    If engine_source is "v2" (not "BOTH"), do NOT apply any active lesson whose condition is a
+    tech_score threshold ("tech_score < N") when reasoning — such lessons' evidence was drawn from
+    v1-scored candidates and tech_score is not v2's basis for selection. All other active lessons
+    still apply normally regardless of engine_source. If co_flagged_by shows v1 explicitly disagreed
+    with this candidate's direction, factor that into your reasoning as you would any other
+    conflicting signal — but it does not reinstate the tech_score gate."""
 
     lessons_str  = "\n".join(f"  - {l}" for l in lessons) if lessons else "  No lessons yet."
     holdings_str = "\n".join(
@@ -1077,6 +1084,8 @@ Herding Check:   {herding_alert}
 LEARNING HUB LESSONS (most relevant first)
 ==============================================
 {LESSON_ACTION_GLOSSARY}
+
+{LESSON_APPLICABILITY_BY_ENGINE}
 
 {lessons_str}
 
