@@ -5,6 +5,8 @@ nepse_env/
 venv/
 .env/
 .venv/
+results/
+tools/
 wsl_venv/
 __pycache__/
 output/
@@ -18,7 +20,7 @@ nrb_pdfs/
 research/
 
 *.sql/
-
+documents/
 SQL backup/
 
 *.bak
