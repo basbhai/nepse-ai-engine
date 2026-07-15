@@ -441,41 +441,71 @@ def _calc_obv(closes: list[float], volumes: list[float]) -> Optional[dict]:
 def _calc_support_resistance(
     highs:   list[float],
     lows:    list[float],
+    today_close: Optional[float] = None,
     period:  int = 20,
+    recent_period: int = 5,
+    stale_gap_pct: float = 8.0,
+    stale_touch_pct: float = 2.0,
 ) -> Optional[dict]:
     """
     Compute support and resistance levels from recent price history.
- 
-    Method: 20-day high/low range.
+
+    Method: 20-day high/low range, with a stale-resistance guard.
       support_level    = lowest low  over last `period` trading days
-      resistance_level = highest high over last `period` trading days
- 
+      resistance_level = highest high over last `period` trading days,
+                          UNLESS that high is stale (see below), in which
+                          case it falls back to the last `recent_period`
+                          days' high.
+
     Why 20 days:
       - Covers ~1 month of NEPSE trading (Sun-Thu)
       - Meaningful floor/ceiling for MACD (17d hold) and SMA (33d hold) signals
       - BB signals (130d hold) use 52W high/low from price_history for
         longer-term context — this captures recent momentum levels
- 
+
+    Stale-resistance guard:
+      A 20-day highest-high can be a multi-week-old spike that price has
+      since broken away from and consolidated well below — reporting it as
+      "resistance" overstates how far price can realistically run, which
+      feeds directly into Claude's target/wait-condition math (see below).
+      If the 20-day high sits more than `stale_gap_pct` above the last
+      close AND price hasn't come within `stale_touch_pct` of that high in
+      the last `recent_period` days (i.e. it isn't currently being tested),
+      use the `recent_period`-day high instead — the level price would
+      actually meet supply at next, not a level it may not revisit for
+      weeks.
+
     Used by:
       - claude_analyst _build_prompt() — Claude sees actual NPR levels
         for stop loss and target validation
       - market_log.support_level / resistance_level — stored for GPT review
- 
+
     Returns dict or None if insufficient data.
     """
     if len(highs) < period or len(lows) < period:
         return None
- 
+
     recent_highs = highs[-period:]
     recent_lows  = lows[-period:]
- 
-    support    = round(min(recent_lows),   2)
-    resistance = round(max(recent_highs),  2)
- 
+
+    support         = round(min(recent_lows),   2)
+    raw_resistance  = round(max(recent_highs),  2)
+    resistance      = raw_resistance
+
+    current_price = today_close if today_close else recent_highs[-1]
+    window = recent_highs[-recent_period:] if len(recent_highs) >= recent_period else recent_highs
+    recent_high = round(max(window), 2)
+
+    gap_pct    = (raw_resistance - current_price) / current_price * 100 if current_price else 0.0
+    was_tested = any(h >= raw_resistance * (1 - stale_touch_pct / 100) for h in window)
+
+    if gap_pct > stale_gap_pct and not was_tested and recent_high < raw_resistance:
+        resistance = recent_high
+
     # Sanity check — support must be below resistance
     if support >= resistance:
         return None
- 
+
     return {
         "support_level":    support,
         "resistance_level": resistance,
@@ -713,7 +743,7 @@ def compute_indicators(
         result.obv_trend = obv["obv_trend"]
         
     # ── Support / Resistance ──────────────────────────────────────────────
-    sr = _calc_support_resistance(highs, lows, period=20)
+    sr = _calc_support_resistance(highs, lows, today_close=today_close, period=20)
     if sr:
         result.support_level    = str(sr["support_level"])
         result.resistance_level = str(sr["resistance_level"])

@@ -655,6 +655,13 @@ def get_portfolio():
             symbols = [p["symbol"] for p in open_positions if p.get("symbol")]
             ltp_map: dict = {}
             if symbols:
+                # atrad_market_watch is intraday-only — its last tick can be well
+                # before actual market close (scraper's last scheduled run vs
+                # NEPSE's real 15:00 close), understating/overstating P&L for the
+                # remainder of the session. price_history.close is the authoritative
+                # EOD figure once today's scrape has landed, so prefer it whenever
+                # it exists for today; fall back to the latest ATrad tick only when
+                # today's close isn't in yet (mid-session).
                 cur.execute("""
                     SELECT DISTINCT ON (symbol) symbol, ltp
                     FROM atrad_market_watch
@@ -663,6 +670,15 @@ def get_portfolio():
                 """, (symbols,))
                 for row in _rows(cur):
                     ltp_map[row["symbol"]] = row["ltp"]
+
+                cur.execute("""
+                    SELECT symbol, close
+                    FROM price_history
+                    WHERE symbol = ANY(%s) AND date = CURRENT_DATE::text
+                      AND close IS NOT NULL AND close != ''
+                """, (symbols,))
+                for row in _rows(cur):
+                    ltp_map[row["symbol"]] = row["close"]
 
         for p in open_positions:
             sym  = p.get("symbol", "")
