@@ -6,6 +6,7 @@ venv/
 .env/
 .venv/
 results/
+graphify-out/
 tools/
 wsl_venv/
 __pycache__/
