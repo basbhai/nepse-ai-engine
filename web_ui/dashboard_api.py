@@ -655,30 +655,44 @@ def get_portfolio():
             symbols = [p["symbol"] for p in open_positions if p.get("symbol")]
             ltp_map: dict = {}
             if symbols:
-                # atrad_market_watch is intraday-only — its last tick can be well
-                # before actual market close (scraper's last scheduled run vs
-                # NEPSE's real 15:00 close), understating/overstating P&L for the
-                # remainder of the session. price_history.close is the authoritative
-                # EOD figure once today's scrape has landed, so prefer it whenever
-                # it exists for today; fall back to the latest ATrad tick only when
-                # today's close isn't in yet (mid-session).
+                # Fetch latest ATrad tick (intraday) with its date so we can
+                # compare recency against price_history.
                 cur.execute("""
-                    SELECT DISTINCT ON (symbol) symbol, ltp
+                    SELECT DISTINCT ON (symbol) symbol, ltp, date AS atrad_date
                     FROM atrad_market_watch
                     WHERE symbol = ANY(%s)
                     ORDER BY symbol, date DESC, time DESC
                 """, (symbols,))
-                for row in _rows(cur):
-                    ltp_map[row["symbol"]] = row["ltp"]
+                atrad_rows = {r["symbol"]: r for r in _rows(cur)}
 
+                # Fetch most recent EOD close per symbol from price_history
+                # (no date filter — works on weekends / non-trading days too).
                 cur.execute("""
-                    SELECT symbol, close
+                    SELECT DISTINCT ON (symbol) symbol, close, date AS ph_date
                     FROM price_history
-                    WHERE symbol = ANY(%s) AND date = CURRENT_DATE::text
+                    WHERE symbol = ANY(%s)
                       AND close IS NOT NULL AND close != ''
+                    ORDER BY symbol, date DESC
                 """, (symbols,))
-                for row in _rows(cur):
-                    ltp_map[row["symbol"]] = row["close"]
+                ph_rows = {r["symbol"]: r for r in _rows(cur)}
+
+                for sym in symbols:
+                    atrad = atrad_rows.get(sym)
+                    ph    = ph_rows.get(sym)
+                    if not atrad and not ph:
+                        continue
+                    if not ph:
+                        ltp_map[sym] = atrad["ltp"]
+                    elif not atrad:
+                        ltp_map[sym] = ph["close"]
+                    else:
+                        # price_history wins when its date >= ATrad date:
+                        #   same day  → EOD official close beats intraday tick
+                        #   older day → ATrad has live data for a newer session
+                        if ph["ph_date"] >= atrad["atrad_date"]:
+                            ltp_map[sym] = ph["close"]
+                        else:
+                            ltp_map[sym] = atrad["ltp"]
 
         for p in open_positions:
             sym  = p.get("symbol", "")
