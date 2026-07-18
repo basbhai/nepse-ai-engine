@@ -713,7 +713,8 @@ async def cmd_sell(interaction: discord.Interaction, symbol: str, shares: int, p
             return
 
         wacc      = Decimal(str(pos["wacc"]))
-        fees      = calc_sell_fees(d_price, d_shares, wacc)
+        held_days = hold_days(pos.get("first_buy_date") or "")
+        fees      = calc_sell_fees(d_price, d_shares, wacc, held_days)
         remaining = held - d_shares
         em        = "🟢" if fees["net_pnl"] > 0 else "🔴"
 

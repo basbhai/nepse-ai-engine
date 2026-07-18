@@ -1249,7 +1249,8 @@ async def cmd_sell(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         return ConversationHandler.END
 
     wacc      = Decimal(str(pos["wacc"]))
-    fees      = calc_sell_fees(price, shares, wacc)
+    held_days = hold_days(pos.get("first_buy_date") or nst_today())
+    fees      = calc_sell_fees(price, shares, wacc, held_days)
     remaining = held - shares
     em        = "🟢" if fees["net_pnl"] > 0 else "🔴"
     partial   = f"\n_{remaining:.0f} shares remain at WACC {fmt_npr(wacc)}_" if remaining > 0 else ""
@@ -1271,7 +1272,7 @@ async def cmd_sell(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
     fill_price = sim["fill_price"]
     fill_qty   = sim["filled_qty"]
-    sim_fees   = calc_sell_fees(fill_price, fill_qty, wacc) if fill_qty > 0 else fees
+    sim_fees   = calc_sell_fees(fill_price, fill_qty, wacc, held_days) if fill_qty > 0 else fees
 
     if sim["status"] == "FULL_FILL" and sim["book_used"]:
         sim_note = f"\n📊 *Live Order Book Fill*\n  {sim['note']}\n  Slippage: {sim['slippage_pct']}%"

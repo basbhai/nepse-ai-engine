@@ -26,7 +26,8 @@ log = logging.getLogger(__name__)
 NST              = ZoneInfo("Asia/Kathmandu")
 STARTING_CAPITAL = Decimal("100000.00")
 MAX_POSITIONS    = 15
-CGT_RATE         = Decimal("0.075")    # 7.5% on profit only
+CGT_RATE_LONG    = Decimal("0.075")    # 7.5% on profit, held > 365 days
+CGT_RATE_SHORT   = Decimal("0.10")     # 10% on profit, held <= 365 days
 SEBON_PCT        = Decimal("0.00015")  # 0.015%
 DP_FEE           = Decimal("25")       # flat per trade
 
@@ -88,14 +89,20 @@ def calc_buy_fees(price: Decimal, shares: Decimal) -> dict:
         "total_cost":  gross + total_fees,
     }
 
-def calc_sell_fees(price: Decimal, shares: Decimal, wacc: Decimal) -> dict:
+def cgt_rate_for_hold(hold_days_count: int) -> Decimal:
+    """7.5% if held > 365 days (long-term), else 10% (short-term)."""
+    return CGT_RATE_LONG if hold_days_count > 365 else CGT_RATE_SHORT
+
+def calc_sell_fees(price: Decimal, shares: Decimal, wacc: Decimal,
+                    hold_days_count: int = 0) -> dict:
     gross        = (price * shares).quantize(Decimal("0.01"), ROUND_HALF_UP)
     brokerage    = _brokerage(gross)
     sebon        = (gross * SEBON_PCT).quantize(Decimal("0.01"), ROUND_HALF_UP)
     total_fees   = brokerage + sebon + DP_FEE
     cost_basis   = (wacc * shares).quantize(Decimal("0.01"), ROUND_HALF_UP)
     gross_profit = gross - cost_basis
-    cgt = (gross_profit * CGT_RATE).quantize(Decimal("0.01"), ROUND_HALF_UP) \
+    cgt_rate     = cgt_rate_for_hold(hold_days_count)
+    cgt = (gross_profit * cgt_rate).quantize(Decimal("0.01"), ROUND_HALF_UP) \
           if gross_profit > 0 else Decimal("0")
     net_proceeds = gross - total_fees - cgt
     net_pnl      = net_proceeds - cost_basis
@@ -106,6 +113,7 @@ def calc_sell_fees(price: Decimal, shares: Decimal, wacc: Decimal) -> dict:
         "dp_fee":       DP_FEE,
         "total_fees":   total_fees,
         "gross_profit": gross_profit,
+        "cgt_rate":     cgt_rate,
         "cgt":          cgt,
         "net_proceeds": net_proceeds,
         "net_pnl":      net_pnl,
@@ -409,7 +417,8 @@ def execute_sell(telegram_id: int, symbol: str, shares: Decimal, price: Decimal)
         )
 
     wacc       = Decimal(str(pos["wacc"]))
-    fees       = calc_sell_fees(price, shares, wacc)
+    held_days  = hold_days(pos["first_buy_date"])
+    fees       = calc_sell_fees(price, shares, wacc, held_days)
     cap        = get_paper_capital(telegram_id)
     available  = Decimal(str(cap.get("current_capital", "0")))
     now        = nst_now()

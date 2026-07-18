@@ -1764,7 +1764,106 @@
       font-weight: 500;
     }
 
-
+    /* ═══════════════════════════════════════════════════════════
+   SETTINGS PANEL
+═══════════════════════════════════════════════════════════ */
+    .set-panel {
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      margin-bottom: 16px;
+      overflow: hidden;
+    }
+    .set-panel-hdr {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--green);
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg4);
+    }
+    .set-stats-row {
+      display: flex;
+      border-bottom: 1px solid var(--border);
+    }
+    .set-stat {
+      flex: 1;
+      padding: 12px 16px;
+      border-right: 1px solid var(--border);
+    }
+    .set-stat:last-child { border-right: none; }
+    .set-stat-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+    .set-stat-val { font-size: 22px; font-weight: 700; color: var(--blue); margin-top: 4px; }
+    .set-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .set-row:last-child { border-bottom: none; }
+    .set-label { min-width: 180px; font-size: 12px; color: var(--text); }
+    .set-toggle {
+      position: relative;
+      display: inline-block;
+      width: 40px;
+      height: 22px;
+      flex-shrink: 0;
+    }
+    .set-toggle input { opacity: 0; width: 0; height: 0; }
+    .set-slider {
+      position: absolute;
+      cursor: pointer;
+      inset: 0;
+      background: var(--bg4);
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      transition: .2s;
+    }
+    .set-slider:before {
+      position: absolute;
+      content: "";
+      height: 16px; width: 16px;
+      left: 2px; bottom: 2px;
+      background: var(--muted);
+      border-radius: 50%;
+      transition: .2s;
+    }
+    .set-toggle input:checked + .set-slider { background: rgba(0,217,126,.15); border-color: var(--green); }
+    .set-toggle input:checked + .set-slider:before { transform: translateX(18px); background: var(--green); }
+    .set-select, .set-input, .set-input-sm {
+      background: var(--bg4);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 5px 8px;
+      font-family: inherit;
+      font-size: 12px;
+      outline: none;
+    }
+    .set-select:focus, .set-input:focus, .set-input-sm:focus { border-color: var(--green); }
+    .set-input { width: 220px; }
+    .set-input-sm { width: 70px; }
+    .set-status { font-size: 11px; }
+    .set-status.ok  { color: var(--green); }
+    .set-status.err { color: var(--red); }
+    .set-btn {
+      background: var(--bg4);
+      border: 1px solid var(--border);
+      color: var(--green);
+      padding: 5px 12px;
+      border-radius: 4px;
+      font-family: inherit;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .set-btn:hover { border-color: var(--green); }
+    .set-btn-danger { color: var(--red); }
+    .set-btn-danger:hover { border-color: var(--red); }
+    .set-hint { font-size: 10px; color: var(--muted); }
+    .set-hint-block { padding: 8px 16px; font-size: 10px; color: var(--muted); border-bottom: 1px solid var(--border); }
 
     @media (max-width: 767px) {
       .rpt-layout {
@@ -1803,6 +1902,7 @@
       <a href="#s-reporter">&#9632; Query</a>
       <a href="#s-stealth">&#9632; Stealth</a>
       <a href="#s-gate-tracker">&#9632; Gate Tracker</a>
+      <a href="#s-settings">&#9632; Settings</a>
     </nav>
     <div class="refresh-info">
       Auto-refresh: <span>5 min</span><br />
@@ -2335,6 +2435,171 @@
 
     </div><!-- /s-gate-tracker -->
 
+    <!-- 13. Settings -->
+    <div class="section" id="s-settings">
+      <div class="section-header">
+        <h2>Settings</h2><span class="tag">CONTROL</span>
+      </div>
+
+      <!-- V2 Engine -->
+      <div class="set-panel">
+        <div class="set-panel-hdr">V2 Engine</div>
+        <div class="set-stats-row">
+          <div class="set-stat">
+            <div class="set-stat-label">Total Flagged</div>
+            <div class="set-stat-val" id="v2-total">—</div>
+          </div>
+          <div class="set-stat">
+            <div class="set-stat-label">Today</div>
+            <div class="set-stat-val" id="v2-today">—</div>
+          </div>
+          <div class="set-stat">
+            <div class="set-stat-label">Rescue</div>
+            <div class="set-stat-val" id="v2-rescue">—</div>
+          </div>
+          <div class="set-stat">
+            <div class="set-stat-label">V2 Signals</div>
+            <div class="set-stat-val" id="v2-signal-type">—</div>
+          </div>
+        </div>
+        <div class="set-row">
+          <div class="set-label">V2 Enabled</div>
+          <label class="set-toggle">
+            <input type="checkbox" id="set-FILTER_V2_ENABLED"
+              onchange="applySetting('FILTER_V2_ENABLED', this.checked ? 'true' : 'false')">
+            <span class="set-slider"></span>
+          </label>
+          <span class="set-status" id="status-FILTER_V2_ENABLED"></span>
+        </div>
+        <div class="set-row">
+          <div class="set-label">Top N Candidates</div>
+          <input type="number" class="set-input-sm" id="set-FILTER_V2_TOP_N" min="1" max="5"
+            onblur="applySetting('FILTER_V2_TOP_N', this.value)"
+            onkeydown="if(event.key==='Enter') applySetting('FILTER_V2_TOP_N', this.value)">
+          <span class="set-hint">How many v2 candidates pass to Gemini (1–5)</span>
+          <span class="set-status" id="status-FILTER_V2_TOP_N"></span>
+        </div>
+        <div class="set-row">
+          <div class="set-label">Gate Rescue</div>
+          <label class="set-toggle">
+            <input type="checkbox" id="set-FILTER_V2_GATE_RESCUE"
+              onchange="applySetting('FILTER_V2_GATE_RESCUE', this.checked ? 'true' : 'false')">
+            <span class="set-slider"></span>
+          </label>
+          <span class="set-hint">Allow v2 to rescue gate-failed candidates</span>
+          <span class="set-status" id="status-FILTER_V2_GATE_RESCUE"></span>
+        </div>
+      </div>
+
+      <!-- Notifications -->
+      <div class="set-panel">
+        <div class="set-panel-hdr">Notifications</div>
+        <div class="set-row">
+          <div class="set-label">Telegram Enabled</div>
+          <label class="set-toggle">
+            <input type="checkbox" id="set-TELEGRAM_ENABLED"
+              onchange="applySetting('TELEGRAM_ENABLED', this.checked ? 'true' : 'false')">
+            <span class="set-slider"></span>
+          </label>
+          <span class="set-status" id="status-TELEGRAM_ENABLED"></span>
+        </div>
+        <div class="set-row">
+          <div class="set-label">Notify Channel</div>
+          <select class="set-select" id="set-NOTIFY_CHANNEL"
+            onchange="applySetting('NOTIFY_CHANNEL', this.value)">
+            <option value="TELEGRAM">TELEGRAM</option>
+            <option value="DISCORD">DISCORD</option>
+            <option value="BOTH">BOTH</option>
+          </select>
+          <span class="set-status" id="status-NOTIFY_CHANNEL"></span>
+        </div>
+        <div class="set-row">
+          <div class="set-label">Test Connection</div>
+          <button class="set-btn" onclick="settingsTestTelegram()">Send Test</button>
+          <span class="set-status" id="status-test-tg"></span>
+        </div>
+      </div>
+
+      <!-- Nepal Pulse Overrides -->
+      <div class="set-panel">
+        <div class="set-panel-hdr">Nepal Pulse Overrides</div>
+        <div class="set-hint-block">These override auto-detected values written by the engine each run. Changes take effect on the next engine cycle.</div>
+        <div class="set-row">
+          <div class="set-label">India-Nepal Relations</div>
+          <select class="set-select" id="set-INDIA_NEPAL_RELATIONS"
+            onchange="applySetting('INDIA_NEPAL_RELATIONS', this.value)">
+            <option value="STABLE">STABLE</option>
+            <option value="TENSE">TENSE</option>
+            <option value="CRISIS">CRISIS</option>
+          </select>
+          <span class="set-status" id="status-INDIA_NEPAL_RELATIONS"></span>
+        </div>
+        <div class="set-row">
+          <div class="set-label">Gulf Stability</div>
+          <select class="set-select" id="set-GULF_STABILITY"
+            onchange="applySetting('GULF_STABILITY', this.value)">
+            <option value="STABLE">STABLE</option>
+            <option value="TENSE">TENSE</option>
+            <option value="CRISIS">CRISIS</option>
+          </select>
+          <span class="set-status" id="status-GULF_STABILITY"></span>
+        </div>
+        <div class="set-row">
+          <div class="set-label">NRB Stance</div>
+          <select class="set-select" id="set-NRB_STANCE"
+            onchange="applySetting('NRB_STANCE', this.value)">
+            <option value="UNCHANGED">UNCHANGED</option>
+            <option value="TIGHTENING">TIGHTENING</option>
+            <option value="EASING">EASING</option>
+          </select>
+          <span class="set-status" id="status-NRB_STANCE"></span>
+        </div>
+        <div class="set-row">
+          <div class="set-label">Govt Stability</div>
+          <select class="set-select" id="set-GOVT_STABILITY"
+            onchange="applySetting('GOVT_STABILITY', this.value)">
+            <option value="STABLE">STABLE</option>
+            <option value="UNSTABLE">UNSTABLE</option>
+          </select>
+          <span class="set-status" id="status-GOVT_STABILITY"></span>
+        </div>
+        <div class="set-row">
+          <div class="set-label">Load Shedding (hrs)</div>
+          <input type="number" class="set-input-sm" id="set-LOAD_SHEDDING_HRS" min="0" max="24"
+            onblur="applySetting('LOAD_SHEDDING_HRS', this.value)"
+            onkeydown="if(event.key==='Enter') applySetting('LOAD_SHEDDING_HRS', this.value)">
+          <span class="set-status" id="status-LOAD_SHEDDING_HRS"></span>
+        </div>
+        <div class="set-row">
+          <div class="set-label">SEBON Event</div>
+          <input type="text" class="set-input" id="set-SEBON_EVENT" placeholder="e.g. IPO suspension…"
+            onblur="applySetting('SEBON_EVENT', this.value)"
+            onkeydown="if(event.key==='Enter') applySetting('SEBON_EVENT', this.value)">
+          <span class="set-status" id="status-SEBON_EVENT"></span>
+        </div>
+        <div class="set-row">
+          <div class="set-label">Budget Event</div>
+          <input type="text" class="set-input" id="set-BUDGET_EVENT" placeholder="e.g. Budget announced…"
+            onblur="applySetting('BUDGET_EVENT', this.value)"
+            onkeydown="if(event.key==='Enter') applySetting('BUDGET_EVENT', this.value)">
+          <span class="set-status" id="status-BUDGET_EVENT"></span>
+        </div>
+      </div>
+
+      <!-- Circuit Breaker -->
+      <div class="set-panel">
+        <div class="set-panel-hdr">Circuit Breaker</div>
+        <div class="set-row">
+          <div class="set-label">Status</div>
+          <span id="cb-status-badge">—</span>
+          <button class="set-btn set-btn-danger" id="cb-reset-btn" style="display:none"
+            onclick="settingsResetCB()">Reset</button>
+          <span class="set-status" id="status-cb-reset"></span>
+        </div>
+      </div>
+
+    </div><!-- /s-settings -->
+
   </div><!-- /main -->
 
   <!-- ═══════════════════════ BOTTOM NAV (mobile) ═══════════════ -->
@@ -2352,15 +2617,14 @@
       <a href="#s-reporter"><span class="bico">⊟</span>Query</a>
       <a href="#s-stealth"><span class="bico">◈</span>Stealth</a>
       <a href="#s-gate-tracker"><span class="bico">&#128300;</span>Gates</a>
+      <a href="#s-settings"><span class="bico">&#9881;</span>Settings</a>
     </div>
   </nav>
 
   <!-- ═══════════════════════ SCRIPTS ══════════════════════════ -->
   <script>
     /* ── Constants ───────────────────────────────────────────────────── */
-    const API = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
-      ? `http://${window.location.hostname}:8766`
-      : '';
+    const API = window.location.origin;
     const chartInstances = {};
 
     /* ── Utils ───────────────────────────────────────────────────────── */
@@ -3065,10 +3329,12 @@
       loadReporter();
       loadStealth();
       loadGateTracker();
+      loadSettings();
       setInterval(refreshAll, 5 * 60 * 1000);
       setInterval(nrbCheckAPI, 15000);
       setInterval(loadStealth, 30000);
       setInterval(loadGateTracker, 5 * 60 * 1000);
+      setInterval(loadSettings, 5 * 60 * 1000);
     });
 
 
@@ -3415,7 +3681,7 @@
     /* ═══════════════════════════════════════════════════════════
        NRB ENTRY  (prefixed nrb*)
     ═══════════════════════════════════════════════════════════ */
-    const NRB_API = `http://${window.location.hostname}:8766`;
+    const NRB_API = window.location.origin;
 
     const NRB_FIELD_GROUPS = [
       {
@@ -3964,18 +4230,105 @@
       }
     }
 
-    /* ── Wire stealth into refreshAll ────────────────────────────────── */
-    /* IMPORTANT: find the existing refreshAll() function and add loadStealth() to it:
+    /* ── Settings ──────────────────────────────────────────────────────── */
 
-    async function refreshAll() {
-      document.getElementById('last-refresh').textContent = ...
-      await Promise.allSettled([
-        loadSummary(), loadMarketLog(), loadLearningHub(),
-        loadAudit(), loadCouncil(), loadTrades(), loadPortfolio(),
-        loadStealth(),   // ← ADD THIS LINE
-      ]);
+    async function loadSettings() {
+      try {
+        const d = await fetchJSON('/settings');
+        const s = d.v2_stats || {};
+        document.getElementById('v2-total').textContent       = s.total         ?? '—';
+        document.getElementById('v2-today').textContent       = s.today         ?? '—';
+        document.getElementById('v2-rescue').textContent      = s.rescue        ?? '—';
+        document.getElementById('v2-signal-type').textContent = s.v2_signal_type ?? '—';
+
+        _setToggle('FILTER_V2_ENABLED',     d.FILTER_V2_ENABLED);
+        _setToggle('FILTER_V2_GATE_RESCUE', d.FILTER_V2_GATE_RESCUE);
+        _setToggle('TELEGRAM_ENABLED',      d.TELEGRAM_ENABLED);
+
+        _setInput('FILTER_V2_TOP_N',    d.FILTER_V2_TOP_N);
+        _setInput('LOAD_SHEDDING_HRS',  d.LOAD_SHEDDING_HRS);
+        _setInput('SEBON_EVENT',        d.SEBON_EVENT  || '');
+        _setInput('BUDGET_EVENT',       d.BUDGET_EVENT || '');
+
+        _setSelect('NOTIFY_CHANNEL',         d.NOTIFY_CHANNEL);
+        _setSelect('INDIA_NEPAL_RELATIONS',  d.INDIA_NEPAL_RELATIONS);
+        _setSelect('GULF_STABILITY',         d.GULF_STABILITY);
+        _setSelect('NRB_STANCE',             d.NRB_STANCE);
+        _setSelect('GOVT_STABILITY',         d.GOVT_STABILITY);
+
+        const cb    = d.CIRCUIT_BREAKER || '';
+        const badge = document.getElementById('cb-status-badge');
+        const btn   = document.getElementById('cb-reset-btn');
+        if (cb) {
+          badge.innerHTML = `<span class="badge badge-red">ACTIVE</span>&nbsp;<span style="color:var(--muted);font-size:11px">${esc(cb.substring(0,80))}</span>`;
+          btn.style.display = '';
+        } else {
+          badge.innerHTML = '<span class="badge badge-green">INACTIVE</span>';
+          btn.style.display = 'none';
+        }
+      } catch(e) { console.warn('loadSettings', e); }
     }
-    */
+
+    function _setToggle(key, val) {
+      const el = document.getElementById('set-' + key);
+      if (el) el.checked = String(val || '').toLowerCase() === 'true';
+    }
+    function _setSelect(key, val) {
+      const el = document.getElementById('set-' + key);
+      if (el && val) el.value = val;
+    }
+    function _setInput(key, val) {
+      const el = document.getElementById('set-' + key);
+      if (el && val != null) el.value = val;
+    }
+
+    async function applySetting(key, value) {
+      const st = document.getElementById('status-' + key);
+      if (st) { st.textContent = '…'; st.className = 'set-status'; }
+      try {
+        const r = await fetch(API + '/settings/' + key, {
+          method:  'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ value: String(value) }),
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        if (st) {
+          st.textContent = '✓ Saved';
+          st.className   = 'set-status ok';
+          setTimeout(() => { if(st){ st.textContent=''; st.className='set-status'; }}, 2000);
+        }
+      } catch(e) {
+        if (st) { st.textContent = '✗ Error'; st.className = 'set-status err'; }
+      }
+    }
+
+    async function settingsTestTelegram() {
+      const st = document.getElementById('status-test-tg');
+      if (st) { st.textContent = 'Sending…'; st.className = 'set-status'; }
+      try {
+        const r = await fetch(API + '/settings/test-telegram', { method: 'POST' });
+        const d = await r.json();
+        if (st) {
+          st.textContent = d.sent ? '✓ Sent' : '✗ Failed — check TELEGRAM_ENABLED & token';
+          st.className   = 'set-status ' + (d.sent ? 'ok' : 'err');
+        }
+      } catch(e) {
+        if (st) { st.textContent = '✗ Error'; st.className = 'set-status err'; }
+      }
+    }
+
+    async function settingsResetCB() {
+      const st = document.getElementById('status-cb-reset');
+      if (st) { st.textContent = '…'; st.className = 'set-status'; }
+      try {
+        await fetch(API + '/settings/reset-circuit-breaker', { method: 'POST' });
+        if (st) { st.textContent = '✓ Reset'; st.className = 'set-status ok'; }
+        setTimeout(loadSettings, 600);
+      } catch(e) {
+        if (st) { st.textContent = '✗ Error'; st.className = 'set-status err'; }
+      }
+    }
+
   </script>
 </body>
 

@@ -1095,7 +1095,8 @@ NEPAL FEE MATH (use for all price calculations)
   Buy cost:    trade_value x 1.00415 + NPR 25
   Sell cost:   trade_value x 1.00415 + NPR 25
   Breakeven:   entry x (1 + 0.0083) + NPR 50/shares
-  CGT:         5% on net profit only (individuals)
+  CGT:         10% on net profit if held <=1 year, 7.5% if held >1 year (this
+               engine's suggested holds run ~10-15 days, so 10% is the realistic case)
   Max position: 10% of total capital = NPR {portfolio.get('total_capital_npr', 0) * 0.10:,.0f}
   Max positions: {portfolio.get('max_positions', 3)} simultaneous
 
