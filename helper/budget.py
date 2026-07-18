@@ -21,8 +21,9 @@ Evidence base:
     Brokerage:   0.40% on trade value (both buy and sell)
     SEBON levy:  0.015% on trade value (both buy and sell)
     DP charge:   NPR 25 flat per transaction
-    CGT:         5% on individuals, 7.5% on institutions
-                 (applied to net profit only)
+    CGT:         7.5% if held > 365 days, 10% if held <= 365 days
+                 (applied to net profit only; this engine swing-trades on
+                 ~10-15 day holds, so pre-trade projections default to 10%)
   Kelly Criterion:
     f = Win_Rate - ((1 - Win_Rate) / Avg_Win_Loss_Ratio)
     Position = f × total_capital × confidence_modifier
@@ -53,9 +54,12 @@ logger = logging.getLogger(__name__)
 BROKERAGE_PCT   = 0.40    # % both buy and sell
 SEBON_PCT       = 0.015   # % both buy and sell
 DP_CHARGE_NPR   = 25.0    # NPR flat per transaction (buy = 25, sell = 25)
-CGT_INDIVIDUAL  = 5.0     # % capital gains tax — individuals
-CGT_INSTITUTION = 7.5     # % — institutions (use individual for personal account)
-CGT_PCT         = CGT_INDIVIDUAL
+CGT_LONG_TERM   = 7.5     # % capital gains tax — held > 365 days
+CGT_SHORT_TERM  = 10.0    # % capital gains tax — held <= 365 days
+# Position-sizing/BEP projections run before entry (no real holding period yet).
+# This system swing-trades on ~10-15 day suggested holds, so the short-term
+# rate is the realistic default for forward-looking calculations.
+CGT_PCT         = CGT_SHORT_TERM
 
 # ── Risk limits (from handoff hard rules) ─────────────────────────────────────
 MAX_POSITION_PCT  = 10    # max % of total capital per trade

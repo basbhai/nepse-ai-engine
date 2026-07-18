@@ -69,10 +69,15 @@ ALPHA_FAILURE_THRESHOLD     = -3.0
 STOP_RECOVERY_DAYS          =  3
 ALPHA_NEAR_ZERO_BAND        =  1.5
 
-# ── Fee constants — must match telegram_bot.py exactly ───────────────────────
-SEBON_PCT   = 0.00015   # 0.015%
-DP_CHARGE   = 25.0      # flat per trade side
-CGT_RATE    = 0.075     # 7.5% on gross profit only (FIX 3: was 0.05)
+# ── Fee constants — must match trading_core.py exactly ───────────────────────
+SEBON_PCT      = 0.00015   # 0.015%
+DP_CHARGE      = 25.0      # flat per trade side
+CGT_RATE_LONG  = 0.075     # 7.5% on gross profit, held > 365 days
+CGT_RATE_SHORT = 0.10      # 10% on gross profit, held <= 365 days (FIX 4: was flat 0.075)
+
+
+def _cgt_rate_for_hold(hold_days_count: int) -> float:
+    return CGT_RATE_LONG if hold_days_count > 365 else CGT_RATE_SHORT
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -188,10 +193,12 @@ def _classify_result(return_pct: float, pnl_npr: float = 0) -> str:
     return "BREAKEVEN"
 
 
-def _compute_pnl_npr(entry_price: float, exit_price: float, shares: float) -> float:
+def _compute_pnl_npr(entry_price: float, exit_price: float, shares: float,
+                      hold_days_count: int = 0) -> float:
     """
     Compute net P&L after all Nepal fees and CGT.
-    FIX 3: tiered brokerage + 7.5% CGT — now matches telegram_bot.py calc_sell_fees() exactly.
+    FIX 4: tiered brokerage + tiered CGT (7.5% >365d, 10% <=365d) —
+    matches trading_core.py calc_sell_fees() exactly.
     """
     buy_value  = entry_price * shares
     sell_value = exit_price  * shares
@@ -200,8 +207,8 @@ def _compute_pnl_npr(entry_price: float, exit_price: float, shares: float) -> fl
     buy_cost   = _brokerage(buy_value)  + (buy_value  * SEBON_PCT) + DP_CHARGE
     sell_cost  = _brokerage(sell_value) + (sell_value * SEBON_PCT) + DP_CHARGE
 
-    # CGT: 7.5% on gross profit only (never on a loss)
-    cgt = max(0.0, gross * CGT_RATE)
+    # CGT: tiered rate on gross profit only (never on a loss)
+    cgt = max(0.0, gross * _cgt_rate_for_hold(hold_days_count))
 
     return round(gross - buy_cost - sell_cost - cgt, 2)
 
@@ -266,7 +273,8 @@ def _write_trade_journal(position: dict, deltas: dict,
         shares      = float(position.get("shares") or 0)
 
         return_pct  = deltas.get("return_pct", 0.0)
-        pnl_npr     = _compute_pnl_npr(entry_price, exit_price, shares)
+        hold_days_n = int(position.get("hold_days_actual") or 0)
+        pnl_npr     = _compute_pnl_npr(entry_price, exit_price, shares, hold_days_n)
         result      = _classify_result(return_pct, pnl_npr)
 
         loss_cause = "NULL"
@@ -909,6 +917,7 @@ def run_eod_audit(dry_run: bool = False) -> dict:
                         float(position.get("entry_price") or 0),
                         current_price,
                         float(position.get("shares") or 0),
+                        int(position.get("hold_days_actual") or 0),
                     )
                     update_row("portfolio", {
                         "status":      "CLOSED",
@@ -939,6 +948,7 @@ def run_eod_audit(dry_run: bool = False) -> dict:
                         float(position.get("entry_price") or 0),
                         current_price,
                         float(position.get("shares") or 0),
+                        int(position.get("hold_days_actual") or 0),
                     ),
                     "loss_cause": (
                         _attribute_loss(
@@ -957,8 +967,12 @@ def run_eod_audit(dry_run: bool = False) -> dict:
                     entry_price = float(position.get("entry_price") or 0)
                     if entry_price:
                         unreal_pct = round((current_price - entry_price) / entry_price * 100, 2)
+                        unreal_days = _compute_hold_days(
+                            position.get("entry_date", today), today
+                        )
                         unreal_npr = _compute_pnl_npr(entry_price, current_price,
-                                                       float(position.get("shares") or 0))
+                                                       float(position.get("shares") or 0),
+                                                       unreal_days)
                         update_row("portfolio", {
                             "current_price": str(current_price),
                             "pnl_pct":       str(unreal_pct),
@@ -1112,7 +1126,7 @@ def run_paper_audit(dry_run: bool = False) -> dict:
             deltas = _compute_deltas(position, exit_price, geo_score, nepal_score)
 
             return_pct = deltas["return_pct"]
-            pnl_npr    = _compute_pnl_npr(entry_price, exit_price, shares)
+            pnl_npr    = _compute_pnl_npr(entry_price, exit_price, shares, hold_days)
             result     = _classify_result(return_pct, pnl_npr)
 
             log.info(

@@ -108,7 +108,7 @@ log = logging.getLogger(__name__)
 BROKERAGE_PCT  = 0.40   # % on buy and sell
 SEBON_PCT      = 0.015  # % Securities Board fee
 DP_CHARGE_NPR  = 25.0   # flat per transaction
-CGT_PCT        = 5.0    # % capital gains tax on profit
+CGT_PCT        = 10.0   # % capital gains tax on profit (short-term, held <=1yr; 7.5% if >1yr)
 
 # Allocation targets by market state (from handoff Section 3.2)
 ALLOCATION_TARGETS = {

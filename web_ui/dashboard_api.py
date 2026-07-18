@@ -1282,4 +1282,112 @@ def get_logs_file(path: str):
         raise
     except Exception as e:
         log.exception("logs/file failed: %s", e)
+
+
+# ── Settings ──────────────────────────────────────────────────────────────────
+
+_SETTINGS_WHITELIST = {
+    "FILTER_V2_ENABLED", "FILTER_V2_TOP_N", "FILTER_V2_GATE_RESCUE",
+    "TELEGRAM_ENABLED", "NOTIFY_CHANNEL",
+    "INDIA_NEPAL_RELATIONS", "GULF_STABILITY", "NRB_STANCE",
+    "GOVT_STABILITY", "LOAD_SHEDDING_HRS", "SEBON_EVENT", "BUDGET_EVENT",
+}
+
+_SETTINGS_DEFAULTS: dict[str, str] = {
+    "FILTER_V2_ENABLED":     "false",
+    "FILTER_V2_TOP_N":       "3",
+    "FILTER_V2_GATE_RESCUE": "true",
+    "TELEGRAM_ENABLED":      "false",
+    "NOTIFY_CHANNEL":        "BOTH",
+    "INDIA_NEPAL_RELATIONS": "STABLE",
+    "GULF_STABILITY":        "STABLE",
+    "NRB_STANCE":            "UNCHANGED",
+    "GOVT_STABILITY":        "STABLE",
+    "LOAD_SHEDDING_HRS":     "0",
+    "SEBON_EVENT":           "",
+    "BUDGET_EVENT":          "",
+}
+
+
+class SettingPayload(BaseModel):
+    value: str
+
+
+@app.get("/settings")
+def get_settings():
+    from sheets import get_setting as _gs
+    try:
+        result: dict = {k: _gs(k, v) for k, v in _SETTINGS_DEFAULTS.items()}
+
+        with _db() as cur:
+            cur.execute("""
+                SELECT
+                  COUNT(*) FILTER (WHERE engine_source IN ('v2','v2_rescue','BOTH')) AS total_v2,
+                  COUNT(*) FILTER (WHERE engine_source = 'v2_rescue')                 AS rescue,
+                  COUNT(*) FILTER (
+                    WHERE engine_source IN ('v2','v2_rescue','BOTH')
+                    AND   date = TO_CHAR(CURRENT_DATE,'YYYY-MM-DD')
+                  )                                                                   AS today_v2,
+                  COUNT(*) FILTER (WHERE primary_signal LIKE '%%_V2%%')               AS v2_signal_type
+                FROM market_log
+            """)
+            row = dict(cur.fetchone() or {})
+
+        result["v2_stats"] = {
+            "total":          int(row.get("total_v2")        or 0),
+            "rescue":         int(row.get("rescue")          or 0),
+            "today":          int(row.get("today_v2")        or 0),
+            "v2_signal_type": int(row.get("v2_signal_type")  or 0),
+        }
+        result["CIRCUIT_BREAKER"] = _gs("CIRCUIT_BREAKER", "")
+        return result
+    except Exception as e:
+        log.exception("get_settings failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/settings/{key}")
+def patch_setting(key: str, body: SettingPayload):
+    from sheets import update_setting as _us
+    if key not in _SETTINGS_WHITELIST:
+        raise HTTPException(status_code=403, detail=f"'{key}' is not dashboard-controllable")
+    try:
+        ok = _us(key, body.value.strip(), set_by="dashboard")
+        if not ok:
+            raise HTTPException(status_code=500, detail="update_setting returned False")
+        return {"key": key, "value": body.value.strip(), "updated": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("patch_setting(%s) failed: %s", key, e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/settings/test-telegram")
+def settings_test_telegram():
+    try:
+        from helper.notifier import send_telegram as _st
+        from config import NST as _NST
+        import datetime as _dt
+        msg = (
+            f"✅ *NEPSE Dashboard — Connection Test*\n"
+            f"\U0001f551 {_dt.datetime.now(tz=_NST).strftime('%Y-%m-%d %H:%M NST')}\n"
+            f"\U0001f4e1 Telegram connected"
+        )
+        sent = _st(msg, parse_mode="Markdown")
+        return {"sent": sent}
+    except Exception as e:
+        log.exception("test_telegram failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/settings/reset-circuit-breaker")
+def settings_reset_circuit_breaker():
+    from sheets import update_setting as _us
+    try:
+        _us("CIRCUIT_BREAKER", "", set_by="dashboard")
+        return {"reset": True}
+    except Exception as e:
+        log.exception("reset_circuit_breaker failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
         raise HTTPException(status_code=500, detail=str(e))

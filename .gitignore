@@ -1,5 +1,6 @@
 
 logs/
+.playwright-mcp/
 service_account.json
 nepse_env/
 venv/
