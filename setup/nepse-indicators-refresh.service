@@ -1,0 +1,16 @@
+[Unit]
+Description=NEPSE AI — Intraday Indicator Refresh (1:00 PM NST, archives 10:15 snapshot into indicators_intraday first)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/shanvi/nepse-engine
+ExecStart=/home/shanvi/nepse-engine/venv/bin/python -m workflows.intraday_indicator_refresh
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nepse-indicators-refresh
+EnvironmentFile=/home/shanvi/nepse-engine/.env
+
+[Install]
+WantedBy=multi-user.target

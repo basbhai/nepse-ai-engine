@@ -272,6 +272,49 @@ model indicators {
   @@index([tech_signal])
 }
 
+// Archive of superseded intraday indicator snapshots. When the 13:00 NST
+// re-run refreshes `indicators`, that morning's row is copied here first
+// (tagged with snapshot_time) so it isn't lost. filter_engine/gemini/claude
+// still read only `indicators` (the latest snapshot) -- this table is
+// history-only, not wired into any live decision path.
+model indicators_intraday {
+  id               Serial
+  snapshot_time    Text!  // e.g. "10:15" -- which run this row came from
+  symbol           Text
+  date             Text
+  volume           Text
+  history_days     Text
+  rsi_14           Text
+  rsi_signal       Text
+  ema_20           Text
+  ema_50           Text
+  ema_200          Text
+  ema_trend        Text
+  ema_20_50_cross  Text
+  ema_50_200_cross Text
+  macd_line        Text
+  macd_signal      Text
+  macd_histogram   Text
+  macd_cross       Text
+  bb_upper         Text
+  bb_middle        Text
+  bb_lower         Text
+  bb_width         Text
+  bb_pct_b         Text
+  bb_signal        Text
+  atr_14           Text
+  atr_pct          Text
+  obv              Text
+  obv_trend        Text
+  tech_score       Text
+  tech_signal      Text
+  timestamp        Text
+  support_level    Text
+  resistance_level Text
+
+  @@index([symbol, date, snapshot_time])
+}
+
 model candle_patterns {
   id                 Serial
   pattern_name       Text!  @unique
