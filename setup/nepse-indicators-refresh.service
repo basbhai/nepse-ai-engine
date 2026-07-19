@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 WorkingDirectory=/home/shanvi/nepse-engine
-ExecStart=/home/shanvi/nepse-engine/venv/bin/python -m workflows.intraday_indicator_refresh
+ExecStart=/home/shanvi/nepse-engine/venv/bin/python -m modules.intraday_indicator_refresh
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=nepse-indicators-refresh

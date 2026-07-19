@@ -1,6 +1,6 @@
 """
-workflows/intraday_indicator_refresh.py
-────────────────────────────────────────
+modules/intraday_indicator_refresh.py
+──────────────────────────────────────
 Standalone 1:00 PM NST re-run of the indicators pipeline, separate from the
 10:15 AM morning job (nepse-morning.service).
 
@@ -16,7 +16,7 @@ snapshot) exactly as they already do. `indicators_intraday` is history-only,
 not wired into any live decision path.
 
 CLI:
-  python -m workflows.intraday_indicator_refresh
+  python -m modules.intraday_indicator_refresh
 """
 import logging
 from datetime import datetime
