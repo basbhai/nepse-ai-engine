@@ -1,0 +1,10 @@
+[Unit]
+Description=NEPSE AI — Intraday Indicator Refresh Timer (1:00 PM NST = 07:15 UTC, Mon-Fri)
+
+[Timer]
+OnCalendar=Mon,Tue,Wed,Thu,Fri 07:15:00 UTC
+Persistent=true
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

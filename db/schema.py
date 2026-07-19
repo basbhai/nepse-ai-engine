@@ -10,6 +10,7 @@ TABS: dict[str, str] = {
     "portfolio": "portfolio",
     "market_log": "market_log",
     "indicators": "indicators",
+    "indicators_intraday": "indicators_intraday",
     "candle_patterns": "candle_patterns",
     "candle_signals": "candle_signals",
     "geo_data": "geopolitical_data",
@@ -296,6 +297,47 @@ TABLE_DDL: dict[str, str] = {
         ON "indicators" (date);
     CREATE INDEX IF NOT EXISTS ix_indicators_tech_signal
         ON "indicators" (tech_signal);
+    """,
+
+    "indicators_intraday": """
+    CREATE TABLE IF NOT EXISTS "indicators_intraday" (
+        id SERIAL PRIMARY KEY,
+        snapshot_time TEXT NOT NULL,
+        symbol TEXT,
+        date TEXT,
+        volume TEXT,
+        history_days TEXT,
+        rsi_14 TEXT,
+        rsi_signal TEXT,
+        ema_20 TEXT,
+        ema_50 TEXT,
+        ema_200 TEXT,
+        ema_trend TEXT,
+        ema_20_50_cross TEXT,
+        ema_50_200_cross TEXT,
+        macd_line TEXT,
+        macd_signal TEXT,
+        macd_histogram TEXT,
+        macd_cross TEXT,
+        bb_upper TEXT,
+        bb_middle TEXT,
+        bb_lower TEXT,
+        bb_width TEXT,
+        bb_pct_b TEXT,
+        bb_signal TEXT,
+        atr_14 TEXT,
+        atr_pct TEXT,
+        obv TEXT,
+        obv_trend TEXT,
+        tech_score TEXT,
+        tech_signal TEXT,
+        timestamp TEXT,
+        support_level TEXT,
+        resistance_level TEXT,
+        inserted_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS ix_indicators_intraday_symbol_date_snapshot_time
+        ON "indicators_intraday" (symbol, date, snapshot_time);
     """,
 
     "candle_patterns": """
@@ -1713,6 +1755,7 @@ TABLE_COLUMNS: dict[str, list[str]] = {
     "portfolio": ["symbol", "entry_date", "entry_price", "shares", "total_cost", "current_price", "current_value", "pnl_npr", "pnl_pct", "peak_price", "stop_type", "stop_level", "trail_active", "trail_stop", "status", "exit_date", "exit_price", "exit_reason"],
     "market_log": ["date", "time", "symbol", "sector", "action", "confidence", "entry_price", "stop_loss", "target", "allocation_npr", "shares", "breakeven", "risk_reward", "rsi_14", "ema_20", "ema_50", "ema_200", "primary_signal", "macd_line", "macd_signal", "macd_histogram", "bb_pct_b", "bb_upper", "bb_lower", "bollinger_upper", "bollinger_lower", "ema_20_50_cross", "ema_50_200_cross", "volume", "volume_ratio", "obv_trend", "vwap", "vwap_dev", "bid_ask_ratio", "dpr_proximity", "volume_os_ratio", "atr_14", "support_level", "resistance_level", "candle_pattern", "conf_score", "pe_ratio", "eps", "roe", "npl_pct", "fundamental_score", "geo_score", "macro_score", "sector_mult", "cstar_signal", "market_state", "gemini_reason", "gemini_risk", "reasoning", "wait_condition", "wait_condition_parsed", "last_reviewed_date", "herding_note", "lesson_applied", "outcome", "actual_pnl", "exit_price", "exit_date", "exit_reason", "timestamp", "eval_date", "eval_geo_score", "eval_nepal_score", "eval_nepse_index", "eval_market_state", "eval_policy_rate", "eval_fd_rate_pct", "eval_geo_delta", "eval_nepal_delta", "eval_key_news", "eval_price_change_pct", "eval_nepse_change_pct", "eval_alpha", "headlines_politics", "headlines_economy", "headlines_stock", "momentum_status", "rsi_slope_3d", "macd_hist_slope", "bb_pct_b_slope", "bounce_failed", "reversal_days", "engine_source", "co_flagged_by"],
     "indicators": ["symbol", "date", "volume", "history_days", "rsi_14", "rsi_signal", "ema_20", "ema_50", "ema_200", "ema_trend", "ema_20_50_cross", "ema_50_200_cross", "macd_line", "macd_signal", "macd_histogram", "macd_cross", "bb_upper", "bb_middle", "bb_lower", "bb_width", "bb_pct_b", "bb_signal", "atr_14", "atr_pct", "obv", "obv_trend", "support_level", "resistance_level", "tech_score", "tech_signal", "timestamp"],
+    "indicators_intraday": ["snapshot_time", "symbol", "date", "volume", "history_days", "rsi_14", "rsi_signal", "ema_20", "ema_50", "ema_200", "ema_trend", "ema_20_50_cross", "ema_50_200_cross", "macd_line", "macd_signal", "macd_histogram", "macd_cross", "bb_upper", "bb_middle", "bb_lower", "bb_width", "bb_pct_b", "bb_signal", "atr_14", "atr_pct", "obv", "obv_trend", "tech_score", "tech_signal", "timestamp", "support_level", "resistance_level"],
     "candle_patterns": ["pattern_name", "type", "tier", "nepal_win_rate_pct", "sample_size", "avg_gain_pct", "best_sector", "best_rsi_range", "volume_condition", "reliability", "notes"],
     "candle_signals": ["symbol", "date", "pattern_name", "signal", "tier", "confidence", "volume_confirmed", "candles_used", "description", "timestamp"],
     "geopolitical_data": ["date", "time", "crude_price", "crude_change_pct", "vix", "vix_level", "nifty", "nifty_change_pct", "dxy", "gold_price", "geo_score", "status", "key_event", "timestamp"],
