@@ -75,6 +75,12 @@ class AnalystResult:
     market_log_id:      int   = None
     support_level:      float = 0.0
     resistance_level:   float = 0.0
+    pivot_r1:           float = 0.0
+    pivot_r2:           float = 0.0
+    pivot_r3:           float = 0.0
+    pivot_s1:           float = 0.0
+    pivot_s2:           float = 0.0
+    pivot_s3:           float = 0.0
     headlines_politics: str   = ""
     headlines_economy:  str   = ""
     headlines_stock:    str   = ""
@@ -1011,6 +1017,7 @@ TECHNICAL INDICATORS (frozen at 10:30 AM NST):
   RSI 14:          {flag.rsi_14:.1f}  [{getattr(flag, 'rsi_signal', '')}]
   MACD Cross:      {flag.macd_cross}
   BB Signal:       {flag.bb_signal}
+  ATR 14:          {getattr(flag, 'atr_pct', 0.0):.1f}%  (average true range, as % of price)
   OBV Trend:       {getattr(flag, 'obv_trend', '?')}
   EMA Trend:       {getattr(flag, 'ema_trend', '?')}
   Tech Score:      {flag.tech_score}/100
@@ -1032,6 +1039,10 @@ PRICE LEVELS (20-day range):
   Resistance:      NPR {flag.resistance_level:,.2f}
   LTP vs Support:  {((flag.ltp - flag.support_level) / flag.support_level * 100) if flag.support_level else 0:+.1f}%
   LTP vs Resist:   {((flag.resistance_level - flag.ltp) / flag.ltp * 100) if flag.resistance_level else 0:+.1f}%
+
+PIVOT LEVELS (classical, from prior day's OHLC -- use when LTP has broken the 20-day resistance above):
+  R3: NPR {flag.pivot_r3:,.2f}   R2: NPR {flag.pivot_r2:,.2f}   R1: NPR {flag.pivot_r1:,.2f}
+  S1: NPR {flag.pivot_s1:,.2f}   S2: NPR {flag.pivot_s2:,.2f}   S3: NPR {flag.pivot_s3:,.2f}
 {fund_section_str}
 {broker_flow_section_str}
 ==============================================
@@ -1130,7 +1141,9 @@ Produce a precise BUY / WAIT / AVOID recommendation.
   generally land in the 8-15% band that research supports -- if support sits tighter than ~8%, widen
   toward 8% so NEPSE intraday noise doesn't shake you out; if it sits wider than ~15%, the setup is too
   risky, lean WAIT/AVOID. Do NOT use a fixed 3% stop -- it is empirically invalidated.
-- Target: reference the resistance level; it must exceed breakeven by >1%.
+- Target: reference the resistance level; it must exceed breakeven by >1%. If LTP has already broken
+  above that resistance level, it is stale -- use the pivot ladder instead: pick the lowest of R1/R2/R3
+  that sits above LTP. Target must always be > entry_price; never set a target below the current price.
 - Risk/reward: compute risk_reward honestly as (target - entry) / (entry - stop_loss). Prefer setups with
   risk_reward >= 1.2. If risk_reward < 1.0, default to WAIT or AVOID unless a high-conviction validated
   edge (BB_LOWER_TOUCH + OBV rising, or confirmed broker accumulation) justifies the entry.
@@ -1175,17 +1188,30 @@ def _assemble_result(claude_json: dict, flag, geo: dict) -> AnalystResult:
         )
         primary_signal = "MACD"
 
+    # Don't trust Claude's self-reported risk_reward/breakeven arithmetic --
+    # recompute in Python from its own entry/stop/target so an LLM math error
+    # (seen live: UMRH reported -0.16, correct value from its own numbers was
+    # -0.0667) can never reach market_log.
+    _entry  = float(claude_json.get("entry_price") or 0)
+    _stop   = float(claude_json.get("stop_loss")  or 0)
+    _target = float(claude_json.get("target")     or 0)
+    _shares = int(claude_json.get("shares", 0))
+
+    _risk = _entry - _stop
+    risk_reward_calc = round((_target - _entry) / _risk, 4) if _risk else 0.0
+    breakeven_calc   = _calc_breakeven(_entry, _shares) if _shares > 0 else float(claude_json.get("breakeven") or 0)
+
     return AnalystResult(
         symbol             = flag.symbol,
         action             = claude_json.get("action",           "WAIT"),
         confidence         = int(claude_json.get("confidence",   0)),
-        entry_price        = float(claude_json.get("entry_price") or 0),
-        stop_loss          = float(claude_json.get("stop_loss")  or 0),
-        target             = float(claude_json.get("target")     or 0),
+        entry_price        = _entry,
+        stop_loss          = _stop,
+        target             = _target,
         allocation_npr     = float(claude_json.get("allocation_npr", 0)),
-        shares             = int(claude_json.get("shares",       0)),
-        breakeven          = float(claude_json.get("breakeven")  or 0),
-        risk_reward        = float(claude_json.get("risk_reward") or 0),
+        shares             = _shares,
+        breakeven          = breakeven_calc,
+        risk_reward        = risk_reward_calc,
         suggested_hold     = int(claude_json.get("suggested_hold_days", 17)),
         reasoning          = claude_json.get("reasoning",        ""),
         lesson_applied     = claude_json.get("lesson_applied",   "NONE"),
@@ -1200,6 +1226,12 @@ def _assemble_result(claude_json: dict, flag, geo: dict) -> AnalystResult:
         gemini_reason      = flag.gemini_reason,
         support_level      = float(flag.support_level    or 0),
         resistance_level   = float(flag.resistance_level or 0),
+        pivot_r1           = float(flag.pivot_r1 or 0),
+        pivot_r2           = float(flag.pivot_r2 or 0),
+        pivot_r3           = float(flag.pivot_r3 or 0),
+        pivot_s1           = float(flag.pivot_s1 or 0),
+        pivot_s2           = float(flag.pivot_s2 or 0),
+        pivot_s3           = float(flag.pivot_s3 or 0),
         # FIX 1: headlines now carried from geo context (loaded from nepal_pulse)
         headlines_politics = geo.get("headlines_politics", ""),
         headlines_economy  = geo.get("headlines_economy",  ""),

@@ -214,6 +214,12 @@ def _try_v2_rescue(
 
             support_level    = float(ind.get("support_level",    0)   or 0),
             resistance_level = float(ind.get("resistance_level", 0)   or 0),
+            pivot_r1         = float(ind.get("pivot_r1",         0)   or 0),
+            pivot_r2         = float(ind.get("pivot_r2",         0)   or 0),
+            pivot_r3         = float(ind.get("pivot_r3",         0)   or 0),
+            pivot_s1         = float(ind.get("pivot_s1",         0)   or 0),
+            pivot_s2         = float(ind.get("pivot_s2",         0)   or 0),
+            pivot_s3         = float(ind.get("pivot_s3",         0)   or 0),
 
             conf_score       = float(getattr(price_row, "conf_score",  0) or 0),
             conf_signal      = str(getattr(price_row,  "conf_signal", "") or ""),
@@ -605,6 +611,12 @@ def run_filter(
 
             support_level    = float(ind.get("support_level",    0)   or 0),
             resistance_level = float(ind.get("resistance_level", 0)   or 0),
+            pivot_r1         = float(ind.get("pivot_r1",         0)   or 0),
+            pivot_r2         = float(ind.get("pivot_r2",         0)   or 0),
+            pivot_r3         = float(ind.get("pivot_r3",         0)   or 0),
+            pivot_s1         = float(ind.get("pivot_s1",         0)   or 0),
+            pivot_s2         = float(ind.get("pivot_s2",         0)   or 0),
+            pivot_s3         = float(ind.get("pivot_s3",         0)   or 0),
 
             conf_score       = float(getattr(price_row, "conf_score",  0) or 0),
             conf_signal      = str(getattr(price_row,  "conf_signal", "") or ""),

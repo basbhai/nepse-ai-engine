@@ -263,6 +263,13 @@ model indicators {
   obv_trend        Text   // RISING | FALLING | FLAT
   support_level    Text   // lowest low over last 20 trading days
   resistance_level Text   // highest high over last 20 trading days
+  pivot_p          Text   // classical pivot point, from prior day's OHLC
+  pivot_r1         Text
+  pivot_r2         Text
+  pivot_r3         Text
+  pivot_s1         Text
+  pivot_s2         Text
+  pivot_s3         Text
   tech_score       Text   // 0–100
   tech_signal      Text   // STRONG_BULL | BULL | NEUTRAL | BEAR | STRONG_BEAR
   timestamp        Text
@@ -311,6 +318,13 @@ model indicators_intraday {
   timestamp        Text
   support_level    Text
   resistance_level Text
+  pivot_p          Text
+  pivot_r1         Text
+  pivot_r2         Text
+  pivot_r3         Text
+  pivot_s1         Text
+  pivot_s2         Text
+  pivot_s3         Text
 
   @@index([symbol, date, snapshot_time])
 }

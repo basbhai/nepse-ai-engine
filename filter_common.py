@@ -140,6 +140,14 @@ class FilterCandidate:
     support_level:    float = 0.0   # lowest low over last 20 trading days
     resistance_level: float = 0.0   # highest high over last 20 trading days
 
+    # Classical pivot points (prior day's OHLC, from indicators.py)
+    pivot_r1:         float = 0.0
+    pivot_r2:         float = 0.0
+    pivot_r3:         float = 0.0
+    pivot_s1:         float = 0.0
+    pivot_s2:         float = 0.0
+    pivot_s3:         float = 0.0
+
 #
 #     # Bollinger Band price levels (from indicators table)
     bb_upper:         float = 0.0   # upper band price level
