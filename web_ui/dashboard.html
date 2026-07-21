@@ -2491,6 +2491,19 @@
         </div>
       </div>
 
+      <!-- Claude Analyst -->
+      <div class="set-panel">
+        <div class="set-panel-hdr">Claude Analyst</div>
+        <div class="set-row">
+          <div class="set-label">Max Calls / Day</div>
+          <input type="number" class="set-input-sm" id="set-CLAUDE_MAX_CALLS_PER_DAY" min="1" max="20"
+            onblur="applySetting('CLAUDE_MAX_CALLS_PER_DAY', this.value)"
+            onkeydown="if(event.key==='Enter') applySetting('CLAUDE_MAX_CALLS_PER_DAY', this.value)">
+          <span class="set-hint">Hard cap on distinct Claude analyst calls per day, across all cycles</span>
+          <span class="set-status" id="status-CLAUDE_MAX_CALLS_PER_DAY"></span>
+        </div>
+      </div>
+
       <!-- Notifications -->
       <div class="set-panel">
         <div class="set-panel-hdr">Notifications</div>
@@ -4249,6 +4262,7 @@
         _setInput('LOAD_SHEDDING_HRS',  d.LOAD_SHEDDING_HRS);
         _setInput('SEBON_EVENT',        d.SEBON_EVENT  || '');
         _setInput('BUDGET_EVENT',       d.BUDGET_EVENT || '');
+        _setInput('CLAUDE_MAX_CALLS_PER_DAY', d.CLAUDE_MAX_CALLS_PER_DAY);
 
         _setSelect('NOTIFY_CHANNEL',         d.NOTIFY_CHANNEL);
         _setSelect('INDIA_NEPAL_RELATIONS',  d.INDIA_NEPAL_RELATIONS);
