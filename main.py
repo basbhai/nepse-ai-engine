@@ -463,6 +463,29 @@ def run_trading_loop(paper_mode: bool, dry_run: bool, skip_guard: bool) -> int:
         _run_agent(label)
         return 0
 
+    # ── Step 8.5: Daily Claude call cap (configurable via settings/dashboard) ──
+    try:
+        from sheets import get_setting, run_raw_sql
+        daily_cap = int(get_setting("CLAUDE_MAX_CALLS_PER_DAY", "3"))
+        today_calls = run_raw_sql(
+            "SELECT COUNT(*) AS cnt FROM market_log "
+            "WHERE date = %s AND action IN ('BUY', 'WAIT', 'AVOID')",
+            (date_str,),
+        )
+        calls_so_far = int((today_calls or [{"cnt": 0}])[0]["cnt"])
+        remaining = max(0, daily_cap - calls_so_far)
+        if remaining <= 0:
+            log.info("%s Claude daily cap reached (%d/%d) — skipping Claude this cycle",
+                      label, calls_so_far, daily_cap)
+            _run_agent(label)
+            return 0
+        if len(flags) > remaining:
+            log.info("%s Daily cap %d, %d used, %d remaining — truncating %d flag(s) to %d",
+                      label, daily_cap, calls_so_far, remaining, len(flags), remaining)
+            flags = flags[:remaining]
+    except Exception as e:
+        log.error("%s Claude daily cap check failed — proceeding uncapped: %s", label, e)
+
     # ── Step 9: Claude analyst ────────────────────────────────────────────────
     log.info("%s Claude analyst — deep analysis on %d flag(s)...", label, len(flags))
     results = []
