@@ -27,7 +27,7 @@ Decision flow
 -------------
   a. Python pre-filter — evaluate "indicator" and "market" requirements.
      Any failing check → SKIP immediately.
-  b. Ambiguous requirements — call local Ollama DeepSeek per ambiguous item.
+  b. Ambiguous requirements — call rotating free OpenRouter models per ambiguous item.
      Any "met=false" → SKIP.  LLM failure → SKIP (safe default).
   c. Telegram flag — send admin alert once per ambiguous requirement per
      wait row (guarded by a flag in the parsed JSON).
@@ -164,41 +164,64 @@ Respond ONLY in valid JSON: {"met": true, "reason": "one sentence"}
 """
 
 
-OLLAMA_URL           = "http://localhost:11434/v1/chat/completions"
-OLLAMA_DEEPSEEK_MODEL = "deepseek-r1:1.5b"
+# Tried local Ollama (deepseek-r1:1.5b, gemma3:1b) first — deepseek-r1's <think>
+# reasoning phase took 50-80s+ per call even warm, blowing the WAIT pipeline's
+# per-cycle timeout. Reverted to OpenRouter free-tier models: fast (~2-10s),
+# no local compute contention. Rotate through on any error, no wait between
+# attempts — first non-empty response wins.
+_AMBIGUOUS_MODEL_CHAIN = [
+    "openai/gpt-oss-20b:free",
+    "google/gemma-4-26b-a4b-it:free",
+    "nvidia/nemotron-3-nano-30b-a3b:free",
+]
 
 
-def _ask_ollama_deepseek(prompt: str, system: str, context: str) -> Optional[str]:
+def _ask_ambiguous_llm(prompt: str, system: str, context: str) -> Optional[str]:
     """
-    Local DeepSeek R1 (1.5b) via Ollama's OpenAI-compatible API on production.
-    Free, no browser automation, no external API key — same host convention
-    as agent/agent.py's orchestrator call.
-    Returns raw content string, or None on failure.
+    Call OpenRouter free-tier models in order, rotating to the next on any
+    error/empty response with no retry delay. Returns raw content string,
+    or None if every model in the chain fails.
     """
-    import requests
+    import os
+    from openai import OpenAI
 
-    payload = {
-        "model":       OLLAMA_DEEPSEEK_MODEL,
-        # deepseek-r1 spends several hundred tokens on its <think> reasoning
-        # (returned separately in message.reasoning) before content is populated —
-        # too low a cap here truncates the response before any answer is emitted.
-        "max_tokens":  1200,
-        "temperature": 0.1,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user",   "content": prompt},
-        ],
-    }
-    try:
-        resp = requests.post(OLLAMA_URL, json=payload, timeout=60)
-        if resp.status_code != 200:
-            log.warning("[%s] Ollama DeepSeek HTTP %d: %s", context, resp.status_code, resp.text[:200])
-            return None
-        content = (resp.json()["choices"][0]["message"].get("content") or "").strip()
-        return content or None
-    except Exception as exc:
-        log.warning("[%s] Ollama DeepSeek call failed: %s", context, exc)
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    if not api_key:
+        log.error("[%s] OPENROUTER_API_KEY not set", context)
         return None
+
+    client = OpenAI(
+        base_url="https://openrouter.ai/api/v1",
+        api_key=api_key,
+        default_headers={
+            "HTTP-Referer": "https://github.com/basbhai/nepse-ai-engine",
+            "X-Title":      "NEPSE AI Engine",
+        },
+    )
+
+    for model in _AMBIGUOUS_MODEL_CHAIN:
+        try:
+            resp = client.chat.completions.create(
+                model       = model,
+                messages    = [
+                    {"role": "system", "content": system},
+                    {"role": "user",   "content": prompt},
+                ],
+                max_tokens  = 400,
+                temperature = 0.1,
+                timeout     = 30,
+            )
+            content = (resp.choices[0].message.content or "").strip()
+            if not content:
+                log.warning("[%s] %s returned empty content — rotating", context, model)
+                continue
+            return content
+        except Exception as exc:
+            log.warning("[%s] %s failed: %s — rotating", context, model, exc)
+            continue
+
+    log.error("[%s] All models in chain failed", context)
+    return None
 
 
 def _resolve_ambiguous(
@@ -208,7 +231,8 @@ def _resolve_ambiguous(
     symbol:       str,
 ) -> tuple[bool, str]:
     """
-    Ask local Ollama DeepSeek (deepseek-r1:1.5b) whether an ambiguous condition is met.
+    Ask a free OpenRouter model (rotating chain, see _AMBIGUOUS_MODEL_CHAIN)
+    whether an ambiguous condition is met.
     Returns (met: bool, reason: str).
     On LLM failure returns (False, "llm_failed") — safe default.
     """
@@ -243,17 +267,13 @@ def _resolve_ambiguous(
         f"Is the condition met? Respond only in JSON."
     )
 
-    raw = _ask_ollama_deepseek(prompt, system=_AMBIGUOUS_SYSTEM, context="ambiguous_eval")
+    raw = _ask_ambiguous_llm(prompt, system=_AMBIGUOUS_SYSTEM, context="ambiguous_eval")
     if not raw:
         log.warning("[evaluator] ambiguous LLM returned None for %s — SKIP", symbol)
         return False, "llm_failed"
 
     try:
         cleaned = _strip_fences(raw)
-        # Ollama sometimes still leaves a stray <think>...</think> block inline
-        # even though reasoning is normally returned in a separate field.
-        if "</think>" in cleaned:
-            cleaned = cleaned.split("</think>", 1)[1].strip()
         result = json.loads(cleaned)
         met    = bool(result.get("met", False))
         reason = str(result.get("reason", ""))

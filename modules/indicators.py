@@ -170,6 +170,15 @@ class IndicatorResult:
     support_level:   str = ""        # lowest low over last 20 trading days
     resistance_level:str = ""        # highest high over last 20 trading days
 
+    # Pivot points (classical floor-trader formula, from prior day's OHLC)
+    pivot_p:         str = ""
+    pivot_r1:        str = ""
+    pivot_r2:        str = ""
+    pivot_r3:        str = ""
+    pivot_s1:        str = ""
+    pivot_s2:        str = ""
+    pivot_s3:        str = ""
+
     # Composite
     tech_score:      str = ""        # 0–100
     tech_signal:     str = ""        # STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR
@@ -510,9 +519,45 @@ def _calc_support_resistance(
         "support_level":    support,
         "resistance_level": resistance,
     }
- 
- 
 
+
+def _calc_pivot_points(
+    prev_high:  float,
+    prev_low:   float,
+    prev_close: float,
+) -> Optional[dict]:
+    """
+    Classical (floor trader) pivot points from the prior trading day's OHLC.
+
+    P  = (H + L + C) / 3
+    R1 = 2P - L        S1 = 2P - H
+    R2 = P + (H - L)   S2 = P - (H - L)
+    R3 = H + 2(P - L)  S3 = L - 2(H - P)
+
+    Gives claude_analyst.py a real resistance ladder (R1/R2/R3) to pick from
+    when LTP has already broken the 20-day resistance from
+    _calc_support_resistance() -- previously there was no second level to
+    reference and the target math would go negative (target < entry).
+
+    Returns None if inputs are missing/non-positive.
+    """
+    if not prev_high or not prev_low or not prev_close:
+        return None
+    if prev_high <= 0 or prev_low <= 0 or prev_close <= 0:
+        return None
+
+    pivot = (prev_high + prev_low + prev_close) / 3
+    hl_range = prev_high - prev_low
+
+    return {
+        "pivot": round(pivot, 2),
+        "r1":    round(2 * pivot - prev_low, 2),
+        "r2":    round(pivot + hl_range, 2),
+        "r3":    round(prev_high + 2 * (pivot - prev_low), 2),
+        "s1":    round(2 * pivot - prev_high, 2),
+        "s2":    round(pivot - hl_range, 2),
+        "s3":    round(prev_low - 2 * (prev_high - pivot), 2),
+    }
 
 
 def _ema_trend_signal(
@@ -747,6 +792,18 @@ def compute_indicators(
     if sr:
         result.support_level    = str(sr["support_level"])
         result.resistance_level = str(sr["resistance_level"])
+
+    # ── Pivot Points (prior day's OHLC) ─────────────────────────────────────
+    if len(highs) >= 1 and len(lows) >= 1 and len(closes) >= 1:
+        pv = _calc_pivot_points(highs[-1], lows[-1], closes[-1])
+        if pv:
+            result.pivot_p  = str(pv["pivot"])
+            result.pivot_r1 = str(pv["r1"])
+            result.pivot_r2 = str(pv["r2"])
+            result.pivot_r3 = str(pv["r3"])
+            result.pivot_s1 = str(pv["s1"])
+            result.pivot_s2 = str(pv["s2"])
+            result.pivot_s3 = str(pv["s3"])
 
     # ── Tech Score ────────────────────────────────────────────────────────
     tech_score = _calc_tech_score(

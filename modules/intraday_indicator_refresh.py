@@ -45,6 +45,7 @@ def _archive_current_snapshot(date: str, snapshot_label: str) -> int:
         "bb_upper", "bb_middle", "bb_lower", "bb_width", "bb_pct_b", "bb_signal",
         "atr_14", "atr_pct", "obv", "obv_trend", "tech_score", "tech_signal",
         "timestamp", "support_level", "resistance_level",
+        "pivot_p", "pivot_r1", "pivot_r2", "pivot_r3", "pivot_s1", "pivot_s2", "pivot_s3",
     ]
 
     archived = 0
