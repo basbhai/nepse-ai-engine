@@ -27,7 +27,7 @@ Decision flow
 -------------
   a. Python pre-filter — evaluate "indicator" and "market" requirements.
      Any failing check → SKIP immediately.
-  b. Ambiguous requirements — call ask_free() per ambiguous item.
+  b. Ambiguous requirements — call local Ollama DeepSeek per ambiguous item.
      Any "met=false" → SKIP.  LLM failure → SKIP (safe default).
   c. Telegram flag — send admin alert once per ambiguous requirement per
      wait row (guarded by a flag in the parsed JSON).
@@ -52,6 +52,7 @@ Rules
 import json
 import logging
 from datetime import datetime
+from typing import Optional
 
 from config import NST
 
@@ -163,6 +164,43 @@ Respond ONLY in valid JSON: {"met": true, "reason": "one sentence"}
 """
 
 
+OLLAMA_URL           = "http://localhost:11434/v1/chat/completions"
+OLLAMA_DEEPSEEK_MODEL = "deepseek-r1:1.5b"
+
+
+def _ask_ollama_deepseek(prompt: str, system: str, context: str) -> Optional[str]:
+    """
+    Local DeepSeek R1 (1.5b) via Ollama's OpenAI-compatible API on production.
+    Free, no browser automation, no external API key — same host convention
+    as agent/agent.py's orchestrator call.
+    Returns raw content string, or None on failure.
+    """
+    import requests
+
+    payload = {
+        "model":       OLLAMA_DEEPSEEK_MODEL,
+        # deepseek-r1 spends several hundred tokens on its <think> reasoning
+        # (returned separately in message.reasoning) before content is populated —
+        # too low a cap here truncates the response before any answer is emitted.
+        "max_tokens":  1200,
+        "temperature": 0.1,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user",   "content": prompt},
+        ],
+    }
+    try:
+        resp = requests.post(OLLAMA_URL, json=payload, timeout=60)
+        if resp.status_code != 200:
+            log.warning("[%s] Ollama DeepSeek HTTP %d: %s", context, resp.status_code, resp.text[:200])
+            return None
+        content = (resp.json()["choices"][0]["message"].get("content") or "").strip()
+        return content or None
+    except Exception as exc:
+        log.warning("[%s] Ollama DeepSeek call failed: %s", context, exc)
+        return None
+
+
 def _resolve_ambiguous(
     description:  str,
     indicators:   dict,
@@ -170,11 +208,11 @@ def _resolve_ambiguous(
     symbol:       str,
 ) -> tuple[bool, str]:
     """
-    Ask ask_free() whether an ambiguous condition is met.
+    Ask local Ollama DeepSeek (deepseek-r1:1.5b) whether an ambiguous condition is met.
     Returns (met: bool, reason: str).
     On LLM failure returns (False, "llm_failed") — safe default.
     """
-    from AI.openrouter import ask_free, _strip_fences
+    from AI.openrouter import _strip_fences
 
     snapshot = {
         "symbol":       symbol,
@@ -205,13 +243,18 @@ def _resolve_ambiguous(
         f"Is the condition met? Respond only in JSON."
     )
 
-    raw = ask_free(prompt=prompt, system=_AMBIGUOUS_SYSTEM, context="ambiguous_eval")
+    raw = _ask_ollama_deepseek(prompt, system=_AMBIGUOUS_SYSTEM, context="ambiguous_eval")
     if not raw:
         log.warning("[evaluator] ambiguous LLM returned None for %s — SKIP", symbol)
         return False, "llm_failed"
 
     try:
-        result = json.loads(_strip_fences(raw))
+        cleaned = _strip_fences(raw)
+        # Ollama sometimes still leaves a stray <think>...</think> block inline
+        # even though reasoning is normally returned in a separate field.
+        if "</think>" in cleaned:
+            cleaned = cleaned.split("</think>", 1)[1].strip()
+        result = json.loads(cleaned)
         met    = bool(result.get("met", False))
         reason = str(result.get("reason", ""))
         log.info("[evaluator] ambiguous '%s' → met=%s reason=%s", description[:60], met, reason[:60])
@@ -242,14 +285,14 @@ def _maybe_alert_ambiguous(
         return parsed
 
     try:
-        from helper.notifier import send_telegram
+        from helper.notifier import _send_admin_only
         text = (
             f"[WAIT EVALUATOR] Ambiguous condition detected\n"
             f"Symbol: {symbol} | Wait ID: {wait_log_id}\n"
             f"Condition: {description[:200]}\n"
             f"This cannot be evaluated automatically. Manual review may be needed."
         )
-        send_telegram(text)
+        _send_admin_only(text, parse_mode="")
     except Exception as exc:
         log.warning("[evaluator] Ambiguous alert failed: %s", exc)
 
@@ -275,10 +318,10 @@ def _handle_still_wait(
     - Reset date clock: set market_log.date = today (5-day timeout restarts).
     Fails silently.
     """
-    from sheets import run_raw_sql
+    from sheets import execute_dml
     today = datetime.now(tz=NST).strftime("%Y-%m-%d")
     try:
-        run_raw_sql(
+        execute_dml(
             """
             UPDATE market_log
                SET wait_condition        = %s,
@@ -301,9 +344,9 @@ def _handle_now_avoid(
     reasoning:   str,
 ) -> None:
     """Claude said NOW_AVOID — mark outcome=AVOIDED."""
-    from sheets import run_raw_sql
+    from sheets import execute_dml
     try:
-        run_raw_sql(
+        execute_dml(
             "UPDATE market_log SET outcome = 'AVOIDED', reasoning = %s WHERE id = %s",
             (reasoning[:2000], wait_log_id),
         )

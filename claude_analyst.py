@@ -1112,17 +1112,9 @@ HOW TO WEIGH THE EVIDENCE (research-based)
 - C* and candle patterns are weak/unvalidated priors -- supporting context only, never a trigger.
 - Do not add a position that would put more than 2 holdings in one sector (infer current exposure
   from Holdings above).
-- Engine v1 = today's frozen snapshot indicators. Engine v2 = 6-day trend/slope-based. 2-year backtest
-  (674 trading days, 2024-07 to 2026-06, top-3 picks/day, 20-day forward return) measured win rate
-  (>=8%) / loss rate (<=-5%) / mean return by engine_source: v1 n=1577 win=9.8% loss=27.5% mean=-1.45%;
-  v2 n=260 win=10.4% loss=37.7% mean=-2.72%; BOTH (both engines agreed) n=161 win=5.6% loss=37.3%
-  mean=-3.74%; v2_rescue (gate-blocked but v2-promoted) n=16 win=0.0% loss=25.0% mean=-4.23%. All four
-  are net-negative over this window and BOTH/v2_rescue underperform solo v1 or v2 -- engine agreement is
-  NOT a positive signal here. Do not treat v2_rescue-sourced candidates as lower quality by assumption;
-  judge each on its own technical/fundamental merits per the criteria above. Production per-engine
-  outcome tracking (gate_misses.engine_source) went live 2026-07-08; resolved live win-rates will not be
-  available until ~17 trading days after that (~2026-08-01) -- until then this backtest is the best
-  available evidence, not a live-updated stat.
+- Engine v1 = today's frozen snapshot indicators. Engine v2 = 6-day trend/slope-based. v2_rescue means
+  the candidate was gate-blocked by v1 but promoted by v2. Do not treat v2_rescue-sourced candidates as
+  lower quality by assumption; judge each on its own technical/fundamental merits per the criteria above.
 
 ==============================================
 TASK
