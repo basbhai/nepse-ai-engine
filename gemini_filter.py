@@ -231,6 +231,12 @@ class GeminiFlag:
     market_state:    str        = ""
     support_level:   float      = 0.0
     resistance_level:float      = 0.0
+    pivot_r1:        float      = 0.0
+    pivot_r2:        float      = 0.0
+    pivot_r3:        float      = 0.0
+    pivot_s1:        float      = 0.0
+    pivot_s2:        float      = 0.0
+    pivot_s3:        float      = 0.0
     market_log_id:   int        = None
     intraday_trend:  str        = ""  # Gemini breadth-based trend: ACCUMULATING|DISTRIBUTING|RECOVERING|FADING|CHOPPY|EARLY_SESSION
     sector_momentum: str        = ""  # compact sector context line for this flag's sector
@@ -816,6 +822,12 @@ def _assemble_flags(
             market_state     = c.market_state,
             support_level    = c.support_level,
             resistance_level = c.resistance_level,
+            pivot_r1         = float(getattr(c, "pivot_r1", 0.0) or 0.0),
+            pivot_r2         = float(getattr(c, "pivot_r2", 0.0) or 0.0),
+            pivot_r3         = float(getattr(c, "pivot_r3", 0.0) or 0.0),
+            pivot_s1         = float(getattr(c, "pivot_s1", 0.0) or 0.0),
+            pivot_s2         = float(getattr(c, "pivot_s2", 0.0) or 0.0),
+            pivot_s3         = float(getattr(c, "pivot_s3", 0.0) or 0.0),
             change_pct       = c.change_pct,
             volume           = c.volume,
             rsi_signal       = c.rsi_signal,

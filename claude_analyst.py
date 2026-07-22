@@ -443,6 +443,33 @@ def _has_open_buy(symbol: str) -> bool:
         return False  # fail open
 
 
+def _supersede_stale_waits(symbol: str, keep_id) -> None:
+    """
+    Mark any other still-open WAIT rows for this symbol as SUPERSEDED, so only
+    the row Claude just wrote (keep_id) stays outcome=PENDING. Without this,
+    every WAIT re-analysis on a new day adds another market_log row that never
+    closes out -- the WAIT-monitor pipeline (agent/wait_pipeline.py) then keeps
+    re-checking every historical row for the same symbol forever (seen live:
+    RIDI/USHL accumulating 2-3 stale PENDING WAIT rows, inflating the wait
+    cycle's runtime toward its timeout).
+    """
+    try:
+        from sheets import execute_dml
+        execute_dml(
+            """
+            UPDATE market_log
+               SET outcome = 'SUPERSEDED'
+             WHERE symbol = %s
+               AND action = 'WAIT'
+               AND outcome = 'PENDING'
+               AND id != %s
+            """,
+            (symbol.upper(), keep_id),
+        )
+    except Exception as exc:
+        logger.warning("_supersede_stale_waits(%s) failed: %s", symbol, exc)
+
+
 # =============================================================================
 # SECTION 2 - FUNDAMENTAL CONTEXT
 # =============================================================================
@@ -1418,6 +1445,8 @@ def _write_to_db(result: AnalystResult, flag=None) -> None:
                 "Updated market_log id=%s: %s %s",
                 market_log_id, result.action, result.symbol,
             )
+            if result.action == "WAIT":
+                _supersede_stale_waits(result.symbol, market_log_id)
         else:
             # Fallback insert -- no Gemini row to update
             write_row("market_log", columns)
@@ -1425,6 +1454,18 @@ def _write_to_db(result: AnalystResult, flag=None) -> None:
                 "Inserted new market_log row: %s %s (no market_log_id)",
                 result.action, result.symbol,
             )
+            if result.action == "WAIT":
+                try:
+                    from sheets import run_raw_sql
+                    new_row = run_raw_sql(
+                        "SELECT id FROM market_log WHERE symbol = %s AND action = 'WAIT' "
+                        "ORDER BY id DESC LIMIT 1",
+                        (result.symbol.upper(),),
+                    )
+                    if new_row:
+                        _supersede_stale_waits(result.symbol, new_row[0]["id"])
+                except Exception as exc:
+                    logger.warning("post-insert supersede lookup failed for %s: %s", result.symbol, exc)
 
     except Exception as exc:
         logger.error("_write_to_db failed for %s: %s", result.symbol, exc)
