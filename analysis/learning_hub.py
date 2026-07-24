@@ -597,6 +597,106 @@ def _load_pattern_accuracy() -> list[dict]:
         return []
 
 
+def _load_v2_engine_performance() -> dict:
+    """
+    For every WAIT signal sourced from engine_source IN ('v2','BOTH','v2_rescue')
+    that has a real target/stop_loss, check whether price_history after the
+    flag date touched the target or the stop first (whichever came first wins).
+    This is directional/setup validation, not realized P&L -- none of these
+    were necessarily ever bought.
+
+    Returns dict: {rows: [...], target_hit, stop_hit, still_open, total}.
+    Never raises.
+    """
+    try:
+        flags = run_raw_sql(
+            """
+            SELECT symbol, date, entry_price, target, stop_loss, engine_source
+            FROM market_log
+            WHERE engine_source IN ('v2', 'BOTH', 'v2_rescue')
+              AND action = 'WAIT'
+              AND target IS NOT NULL AND target != ''
+              AND stop_loss IS NOT NULL AND stop_loss != ''
+            ORDER BY symbol, date ASC
+            """
+        ) or []
+        if not flags:
+            return {"rows": [], "target_hit": 0, "stop_hit": 0, "still_open": 0, "total": 0}
+
+        symbols = sorted({f["symbol"] for f in flags})
+        earliest_date = min(f["date"] for f in flags)
+        placeholders = ", ".join(["%s"] * len(symbols))
+        ohlc_rows = run_raw_sql(
+            f"""
+            SELECT symbol, date, high, low
+            FROM price_history
+            WHERE symbol IN ({placeholders})
+              AND date >= %s
+            ORDER BY symbol, date ASC
+            """,
+            (*symbols, earliest_date),
+        ) or []
+
+        ohlc: dict[str, list] = {}
+        for r in ohlc_rows:
+            try:
+                ohlc.setdefault(r["symbol"], []).append(
+                    (r["date"], float(r["high"]), float(r["low"]))
+                )
+            except (TypeError, ValueError):
+                continue
+
+        results = []
+        target_hit = stop_hit = still_open = 0
+        for f in flags:
+            sym, fdate = f["symbol"], f["date"]
+            try:
+                entry  = float(f["entry_price"])
+                target = float(f["target"])
+                stop   = float(f["stop_loss"])
+            except (TypeError, ValueError):
+                continue
+
+            bars_after = [b for b in ohlc.get(sym, []) if b[0] > fdate]
+            outcome, resolved_date = "STILL_OPEN", None
+            for bdate, high, low in bars_after:
+                t_hit = high >= target
+                s_hit = low <= stop
+                if t_hit and s_hit:
+                    outcome, resolved_date = "AMBIGUOUS_SAME_DAY", bdate
+                    break
+                elif t_hit:
+                    outcome, resolved_date = "TARGET_HIT", bdate
+                    break
+                elif s_hit:
+                    outcome, resolved_date = "STOP_HIT", bdate
+                    break
+
+            if outcome == "TARGET_HIT":
+                target_hit += 1
+            elif outcome == "STOP_HIT":
+                stop_hit += 1
+            elif outcome == "STILL_OPEN":
+                still_open += 1
+
+            results.append({
+                "symbol": sym, "flag_date": fdate, "engine_source": f["engine_source"],
+                "entry": entry, "target": target, "stop_loss": stop,
+                "outcome": outcome, "resolved_date": resolved_date,
+            })
+
+        return {
+            "rows": results,
+            "target_hit": target_hit,
+            "stop_hit": stop_hit,
+            "still_open": still_open,
+            "total": len(results),
+        }
+    except Exception as e:
+        log.warning("_load_v2_engine_performance failed: %s", e)
+        return {"rows": [], "target_hit": 0, "stop_hit": 0, "still_open": 0, "total": 0}
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # PROMPT BUILDERS (unchanged from here onwards)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -849,6 +949,7 @@ def _build_user_prompt(
     claude_audit_history: list[dict],
     pattern_accuracy: list[dict] | None = None,
     wait_stats: dict | None = None,
+    v2_performance: dict | None = None,
 ) -> str:
 
     nrb_str = json.dumps({k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in nrb.items() if v is not None}, ensure_ascii=False, default=str) if nrb else "No NRB data available"
@@ -965,6 +1066,17 @@ Are macro calls consistently off? Trend direction matters more than any single w
 
 === POLITICAL EVENT PATTERN ACCURACY (since system inception) ===
 {_serialize_compact(pattern_accuracy or [], ("event_type","pattern_status","evidence_quality","total","pending","correct","wrong_direction","wrong_timing","weighted_accuracy")) if pattern_accuracy else "No pattern predictions logged yet."}
+
+=== V2 ENGINE PERFORMANCE (setup validation, since v2 launch -- NOT realized P&L) ===
+Every WAIT signal sourced from engine_source IN (v2, BOTH, v2_rescue) with a real
+target/stop_loss, checked against actual price_history after the flag date: did
+price touch the target or the stop first? None of these were necessarily ever
+bought -- this measures whether v2's directional calls were right, not trading
+returns. Targets set before 2026-07-21 sometimes sit very close to entry (a
+now-fixed pivot-point bug) -- treat those TARGET_HIT rows as weaker evidence
+than ones with a meaningful entry-to-target gap.
+Target hit: {v2_performance.get('target_hit', 0) if v2_performance else 0} | Stop hit: {v2_performance.get('stop_hit', 0) if v2_performance else 0} | Still open: {v2_performance.get('still_open', 0) if v2_performance else 0} | Total: {v2_performance.get('total', 0) if v2_performance else 0}
+{_serialize_compact((v2_performance or {}).get('rows', []), ("symbol","flag_date","engine_source","entry","target","stop_loss","outcome","resolved_date")) if v2_performance and v2_performance.get('rows') else "No v2-engine WAIT signals with target/stop_loss recorded yet."}
 
 === MOMENTUM & INTRADAY FIELDS (added May 2026 — may be empty for older rows) ===
 momentum_status: FALLING_KNIFE|OVERSOLD_WATCH|EARLY_REVERSAL|CONFIRMED_REVERSAL|NEUTRAL at BUY time.
@@ -1340,6 +1452,7 @@ def get_review_prompts() -> tuple[str, str]:
     backtest      = _load_backtest_results()
     claude_audit_history = _load_claude_audit_history()
     pattern_accuracy = _load_pattern_accuracy()
+    v2_performance = _load_v2_engine_performance()
 
     system_prompt = _build_system_prompt()
     user_prompt   = _build_user_prompt(
@@ -1348,6 +1461,7 @@ def get_review_prompts() -> tuple[str, str]:
         backtest, claude_audit_history,
         pattern_accuracy=pattern_accuracy,
         wait_stats=wait_stats,
+        v2_performance=v2_performance,
     )
 
     return system_prompt, user_prompt
@@ -1454,6 +1568,10 @@ def run(dry_run: bool = False):
     claude_audit_history = _load_claude_audit_history()
     pattern_accuracy = _load_pattern_accuracy()
     log.info("Pattern accuracy rows loaded: %d", len(pattern_accuracy))
+    v2_performance = _load_v2_engine_performance()
+    log.info("V2 engine performance: %d target_hit / %d stop_hit / %d still_open (total %d)",
+              v2_performance.get("target_hit", 0), v2_performance.get("stop_hit", 0),
+              v2_performance.get("still_open", 0), v2_performance.get("total", 0))
 
     # -- Build prompts
     system_prompt = _build_system_prompt()
@@ -1463,6 +1581,7 @@ def run(dry_run: bool = False):
         backtest, claude_audit_history,
         pattern_accuracy=pattern_accuracy,
         wait_stats=wait_stats,
+        v2_performance=v2_performance,
     )
 
     log.info("Calling GPT-5o for weekly review (prompt ~%d tokens)...",
