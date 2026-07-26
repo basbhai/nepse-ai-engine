@@ -1228,9 +1228,23 @@ def _assemble_result(claude_json: dict, flag, geo: dict) -> AnalystResult:
     risk_reward_calc = round((_target - _entry) / _risk, 4) if _risk else 0.0
     breakeven_calc   = _calc_breakeven(_entry, _shares) if _shares > 0 else float(claude_json.get("breakeven") or 0)
 
+    # ─────────────────────────────────────────────────────────────────────────────
+    # VALIDATION: Target must be > entry for long-only market (NEPSE has no shorting)
+    # If Claude set target < entry, this is structurally invalid and should be AVOID
+    # ─────────────────────────────────────────────────────────────────────────────
+    action_final = claude_json.get("action", "WAIT")
+    if _entry > 0 and _target > 0 and _target < _entry:
+        # Target is below entry — structurally impossible for a long trade
+        action_final = "AVOID"
+        log.warning(
+            "claude_analyst: %s action downgraded WAIT→AVOID: target(%.2f) < entry(%.2f). "
+            "Reason: %s",
+            flag.symbol, _target, _entry, claude_json.get("reasoning", "")[:100]
+        )
+
     return AnalystResult(
         symbol             = flag.symbol,
-        action             = claude_json.get("action",           "WAIT"),
+        action             = action_final,
         confidence         = int(claude_json.get("confidence",   0)),
         entry_price        = _entry,
         stop_loss          = _stop,
