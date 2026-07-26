@@ -680,8 +680,9 @@ if __name__ == "__main__":
             rows = run_raw_sql(
                 """
                 SELECT DISTINCT symbol FROM gate_misses
-                WHERE date = (SELECT MAX(date) FROM gate_misses)
+                WHERE date = (SELECT MAX(date) FROM gate_misses WHERE date <= CURRENT_DATE::text)
                   AND gate_category = 'TECH_SCORE'
+                  AND (outcome IS NULL OR outcome = 'FALSE_BLOCK')
                 LIMIT 15
                 """
             )
@@ -707,7 +708,8 @@ if __name__ == "__main__":
                    high, low, volume as vol
             FROM price_history
             WHERE symbol IN ('{sym_csv}')
-              AND date >= (CURRENT_DATE - INTERVAL '25 days')::text
+              AND date >= (CURRENT_DATE - INTERVAL '30 days')::text
+              AND date <= (SELECT MAX(date) FROM price_history)
             ORDER BY symbol, date ASC
             """
         )
@@ -735,7 +737,8 @@ if __name__ == "__main__":
     from sheets import run_raw_sql
     ind_rows = run_raw_sql(
         """SELECT DISTINCT ON (symbol) symbol, tech_score
-           FROM indicators WHERE date = %s""",
+           FROM indicators
+           WHERE date = (SELECT MAX(date) FROM indicators WHERE date <= %s)""",
         (date,)
     ) or []
     tech_map = {r["symbol"]: int(float(r.get("tech_score") or 0)) for r in ind_rows}

@@ -1302,6 +1302,7 @@ def get_logs_file(path: str):
 
 _SETTINGS_WHITELIST = {
     "FILTER_V2_ENABLED", "FILTER_V2_TOP_N", "FILTER_V2_GATE_RESCUE",
+    "ENGINE_V1_ENABLED", "ENGINE_V2_ENABLED", "ENGINE_V3_ENABLED",
     "TELEGRAM_ENABLED", "NOTIFY_CHANNEL",
     "INDIA_NEPAL_RELATIONS", "GULF_STABILITY", "NRB_STANCE",
     "GOVT_STABILITY", "LOAD_SHEDDING_HRS", "SEBON_EVENT", "BUDGET_EVENT",
@@ -1312,6 +1313,9 @@ _SETTINGS_DEFAULTS: dict[str, str] = {
     "FILTER_V2_ENABLED":     "false",
     "FILTER_V2_TOP_N":       "3",
     "FILTER_V2_GATE_RESCUE": "true",
+    "ENGINE_V1_ENABLED":     "true",
+    "ENGINE_V2_ENABLED":     "true",
+    "ENGINE_V3_ENABLED":     "false",
     "TELEGRAM_ENABLED":      "false",
     "NOTIFY_CHANNEL":        "BOTH",
     "INDIA_NEPAL_RELATIONS": "STABLE",
@@ -1406,4 +1410,59 @@ def settings_reset_circuit_breaker():
     except Exception as e:
         log.exception("reset_circuit_breaker failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Engine Version Toggle ─────────────────────────────────────────────────
+
+@app.get("/engine-versions")
+def get_engine_versions():
+    """Get current engine version activation status."""
+    from sheets import get_setting
+    try:
+        v1_enabled = get_setting("ENGINE_V1_ENABLED", "true").lower() == "true"
+        v2_enabled = get_setting("ENGINE_V2_ENABLED", "true").lower() == "true"
+        v3_enabled = get_setting("ENGINE_V3_ENABLED", "false").lower() == "true"
+
+        return {
+            "v1": {"enabled": v1_enabled, "name": "Filter v1 (Snapshot)", "description": "Baseline indicator scoring at T0"},
+            "v2": {"enabled": v2_enabled, "name": "Filter v2 (Progression)", "description": "6-day trend-based slope analysis"},
+            "v3": {"enabled": v3_enabled, "name": "Filter v3 (Oversold Recovery)", "description": "Detects false tech_score blocks via recovery patterns"},
+        }
+    except Exception as e:
+        log.exception("get_engine_versions failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/engine-versions")
+def set_engine_versions(payload: dict):
+    """
+    Set engine version activation.
+    Payload: {"v1": bool, "v2": bool, "v3": bool}
+    At least one engine must remain enabled.
+    """
+    from sheets import update_setting as _us
+    try:
+        v1 = payload.get("v1", True)
+        v2 = payload.get("v2", True)
+        v3 = payload.get("v3", False)
+
+        # Validation: at least one must be enabled
+        if not any([v1, v2, v3]):
+            raise HTTPException(status_code=400, detail="At least one engine version must be enabled")
+
+        _us("ENGINE_V1_ENABLED", "true" if v1 else "false", set_by="dashboard")
+        _us("ENGINE_V2_ENABLED", "true" if v2 else "false", set_by="dashboard")
+        _us("ENGINE_V3_ENABLED", "true" if v3 else "false", set_by="dashboard")
+
+        log.info("Engine versions toggled: v1=%s, v2=%s, v3=%s", v1, v2, v3)
+        return {
+            "success": True,
+            "v1": v1,
+            "v2": v2,
+            "v3": v3,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("set_engine_versions failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))

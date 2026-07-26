@@ -282,7 +282,7 @@ def _write_near_misses_to_db(near_misses: list, date_str: str, dry_run: bool) ->
                 "composite_score_would_be": str(nm.composite_score_would_be),
                 "volume_os_ratio":          str(nm.volume_os_ratio) if hasattr(nm, "volume_os_ratio") else "0",
                 "tracking_days":            "0",
-
+                "engine_source":            nm.engine_source,
             }, conflict_columns=["symbol", "date"])
     except Exception as e:
         log.warning("_write_near_misses_to_db failed (non-fatal): %s", e)
