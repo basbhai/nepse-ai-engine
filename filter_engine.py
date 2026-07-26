@@ -502,6 +502,19 @@ def run_filter(
                         )
 
                         if v3_score >= filter_v3.V3_COMPOSITE_THRESHOLD:
+                            # Log only — NOT sent to Gemini yet.
+                            # gate_miss_tracker.py will auto-track outcome over 17 days.
+                            # Flip FILTER_V3_ENABLED=true + remove this guard to wire into Gemini.
+                            near_miss_v2_score = v3_score
+                            near_miss_engine   = "v3"
+                            logger.info(
+                                "V3_CANDIDATE (logged, not sent to Gemini): "
+                                "%s tech=%d gate=%s v3=%.1f %s",
+                                sym, tech_score_int, gate_category,
+                                v3_score, v3_primary,
+                            )
+
+                        if False:  # disabled until validated — remove to activate
                             # Build a minimal FilterCandidate for Gemini
                             from filter_common import (
                                 _get_sector_multiplier, _check_cstar_signal,
@@ -613,7 +626,7 @@ def run_filter(
                 market_state             = ctx["market_state"],
                 tech_score               = int(ind.get("tech_score", 0) or 0),
                 conf_score               = float(getattr(price_row, "conf_score", 0) or 0),
-                composite_score_would_be = 0.0,
+                composite_score_would_be = near_miss_v2_score,
                 volume_os_ratio          = volume_os_ratio,
                 vwap_dev                 = float(getattr(price_row, "vwap_dev",       0) or 0),
                 bid_ask_ratio            = float(getattr(price_row, "bid_ask_ratio",  0) or 0),
