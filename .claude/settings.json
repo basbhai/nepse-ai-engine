@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -X POST http://192.168.1.200:8766/reporter/run -H 'Content-Type: application/json' -d '{\"sql\":\"SELECT CAST\\(date AS text\\) as date, symbol, action, reasoning FROM market_log WHERE action = '\\\\''BUY'\\\\'' AND CAST\\(date AS text\\) >= '\\\\''2026-05-15'\\\\'' ORDER BY date DESC LIMIT 50\",\"params\":{}}')",
+      "Bash(curl -s -X POST http://192.168.1.200:8766/reporter/run -H 'Content-Type: application/json' -d '{\"sql\":\"SELECT CAST\\(date AS text\\) as date, symbol, action, reasoning FROM market_log WHERE action = '\\\\''BUY'\\\\'' ORDER BY date DESC LIMIT 5\",\"params\":{}}')"
+    ]
+  }
+}

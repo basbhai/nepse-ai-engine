@@ -87,6 +87,7 @@ from config import NST
 
 import filter_common
 import filter_v2
+import filter_v3
 from filter_common import (
     FilterCandidate,
     NearMiss,
@@ -312,6 +313,7 @@ def run_filter(
     v2_enabled      = str(get_setting("FILTER_V2_ENABLED", "false")).strip().lower() == "true"
     v2_top_n        = int(get_setting("FILTER_V2_TOP_N", "3"))
     v2_gate_rescue  = str(get_setting("FILTER_V2_GATE_RESCUE", "true")).strip().lower() == "true"
+    v3_enabled      = str(get_setting("FILTER_V3_ENABLED", "false")).strip().lower() == "true"
 
     # ── System hard gates ─────────────────────────────────────────────────────
     gates_ok, gate_reason = _check_hard_gates(ctx)
@@ -438,6 +440,168 @@ def run_filter(
                     v2_rescue_candidates.append(rescue_candidate)
                     near_miss_v2_score = rescue_candidate.composite_score_v2
                     near_miss_engine   = "v2_rescue"
+
+            # ── v3 gate-rescue: oversold recovery detector ───────────────────────
+            # Runs independently of v2 — targets TECH_SCORE blocks where price
+            # was deeply oversold and is beginning to reverse. Evidence base:
+            # 953 FALSE_BLOCK vs 5,092 CORRECT_BLOCK (nepse_test.v3_feature_analysis).
+            # Adds to v2_rescue_candidates pool only if v3 composite >= threshold.
+            if (
+                v3_enabled
+                and gate_category in ("TECH_SCORE", "RSI_NO_CONFIRM", "CONF_SCORE")
+                and rescue_candidate is None  # v2 didn't already rescue this symbol
+            ):
+                try:
+                    tech_score_int = int(ind.get("tech_score", 0) or 0)
+                    recent_rows_v3 = recent_map.get(sym, [])
+
+                    v3_eligible, v3_elig_reason = filter_v3.check_v3_eligible(
+                        tech_score=tech_score_int,
+                        recent_rows=recent_rows_v3,
+                        momentum=momentum,
+                        gate_category=gate_category,
+                    )
+
+                    if v3_eligible:
+                        # Build price rows for price_structure + volume scoring
+                        _price_rows_v3 = []
+                        try:
+                            from sheets import run_raw_sql as _rrs
+                            _ph = _rrs(
+                                """SELECT date,
+                                          COALESCE(NULLIF(ltp,''), NULLIF(close,'')) as price,
+                                          high, low, volume as vol
+                                   FROM price_history
+                                   WHERE symbol = %s
+                                     AND date < %s
+                                   ORDER BY date DESC LIMIT 20""",
+                                (sym, date)
+                            )
+                            for _r in reversed(_ph or []):
+                                try:
+                                    _pv = float(_r.get("price") or 0)
+                                    if _pv > 0:
+                                        _price_rows_v3.append({
+                                            "date":  _r["date"],
+                                            "price": _pv,
+                                            "high":  float(_r.get("high") or _pv),
+                                            "low":   float(_r.get("low")  or _pv),
+                                            "vol":   float(_r.get("vol")  or 0),
+                                        })
+                                except (TypeError, ValueError):
+                                    pass
+                        except Exception:
+                            pass
+
+                        sector_v3 = sector_map.get(sym, "others")
+                        v3_score, v3_primary, _ = filter_v3.compute_v3_score(
+                            momentum=momentum,
+                            recent_rows=recent_rows_v3,
+                            recent_price_rows=_price_rows_v3,
+                            sector=sector_v3,
+                        )
+
+                        if v3_score >= filter_v3.V3_COMPOSITE_THRESHOLD:
+                            # Build a minimal FilterCandidate for Gemini
+                            from filter_common import (
+                                _get_sector_multiplier, _check_cstar_signal,
+                                _compute_composite_score, _candle_bonus,
+                                _get_fundamental_adj, _compute_broker_flow_adj,
+                                _compute_live_adj, _compute_vos_adj,
+                            )
+                            sect_mult = _get_sector_multiplier(sector_v3, ctx)
+                            cstar     = _check_cstar_signal(
+                                float(getattr(price_row, "change_pct", 0) or 0),
+                                sector_v3, ctx.get("rf_rate_annual", 5.5)
+                            )
+                            c_bonus, c_name, c_tier, c_conf = _candle_bonus(
+                                candle_map.get(sym, [])
+                            )
+                            fund_adj, fund_reason = _get_fundamental_adj(
+                                sym, sector_v3, fund_map, beta_map
+                            )
+                            bf_adj   = _compute_broker_flow_adj(sym, flow_cache, holdings_cache)
+                            live_adj = _compute_live_adj(price_row)
+                            vos_adj  = _compute_vos_adj(volume_os_ratio)
+
+                            composite_v3 = _compute_composite_score(
+                                indicator_score=v3_score,
+                                sector_mult=sect_mult,
+                                candle_bonus=c_bonus,
+                                cstar_signal=cstar,
+                                conf_score=float(getattr(price_row, "conf_score", 0) or 0),
+                                geo_combined=ctx["combined_geo"],
+                                ipo_drain=ctx["ipo_drain"],
+                                fundamental_adj=fund_adj,
+                                vos_adj=vos_adj,
+                                broker_flow_adj=bf_adj,
+                                live_adj=live_adj,
+                                min_conf_score=ctx.get("min_conf_score", 35),
+                            )
+
+                            v3_candidate = FilterCandidate(
+                                symbol           = sym,
+                                sector           = sector_v3,
+                                ltp              = ltp,
+                                change_pct       = float(getattr(price_row, "change_pct", 0) or 0),
+                                volume           = int(getattr(price_row, "volume", 0) or 0),
+                                rsi_14           = float(ind.get("rsi_14", 0) or 0),
+                                ema_trend        = str(ind.get("ema_trend", "") or ""),
+                                macd_cross       = str(ind.get("macd_cross", "NONE") or "NONE"),
+                                macd_histogram   = float(ind.get("macd_histogram", 0) or 0),
+                                bb_signal        = str(ind.get("bb_signal", "NEUTRAL") or "NEUTRAL"),
+                                bb_pct_b         = float(ind.get("bb_pct_b", 0.5) or 0.5),
+                                obv_trend        = str(ind.get("obv_trend", "FLAT") or "FLAT"),
+                                tech_score       = tech_score_int,
+                                history_days     = int(ind.get("history_days", 0) or 0),
+                                conf_score       = float(getattr(price_row, "conf_score", 0) or 0),
+                                candle_patterns  = candle_map.get(sym, []),
+                                best_candle      = c_name,
+                                candle_tier      = c_tier,
+                                candle_conf      = c_conf,
+                                geo_score        = ctx["geo_score"],
+                                nepal_score      = ctx["nepal_score"],
+                                combined_geo     = ctx["combined_geo"],
+                                bandh_today      = ctx["bandh_today"],
+                                crisis_detected  = ctx["crisis_detected"],
+                                ipo_drain        = ctx["ipo_drain"],
+                                market_state     = ctx["market_state"],
+                                sector_mult      = sect_mult,
+                                cstar_signal     = cstar,
+                                indicator_score  = 0.0,       # v1 never scored
+                                composite_score  = composite_v3,
+                                primary_signal   = v3_primary,
+                                engine_source    = "v3",
+                                indicator_score_v2 = 0.0,
+                                composite_score_v2 = v3_score,
+                                primary_signal_v2  = v3_primary,
+                                fundamental_adj    = fund_adj,
+                                fundamental_reason = fund_reason,
+                                broker_flow_adj    = bf_adj,
+                                vwap_dev        = float(getattr(price_row, "vwap_dev", 0) or 0),
+                                bid_ask_ratio   = float(getattr(price_row, "bid_ask_ratio", 0) or 0),
+                                dpr_proximity   = float(getattr(price_row, "dpr_proximity", 0) or 0),
+                                volume_os_ratio = volume_os_ratio,
+                                momentum_status  = momentum.get("momentum_status", "NEUTRAL"),
+                                rsi_slope_3d     = momentum.get("rsi_slope_3d", 0.0),
+                                macd_hist_slope  = momentum.get("macd_hist_slope", 0.0),
+                                bb_pct_b_slope   = momentum.get("bb_pct_b_slope", 0.0),
+                                bounce_failed    = momentum.get("bounce_failed", False),
+                                reversal_days    = momentum.get("reversal_days", 0),
+                                co_flagged_by    = f"v1 gate blocked ({gate_category}); "
+                                                   f"v3 oversold-recovery rescued: score={v3_score:.1f}",
+                            )
+                            v2_rescue_candidates.append(v3_candidate)
+                            near_miss_v2_score = composite_v3
+                            near_miss_engine   = "v3_rescue"
+                            logger.info(
+                                "V3_RESCUE: %s tech=%d gate=%s v3=%.1f composite=%.1f %s",
+                                sym, tech_score_int, gate_category,
+                                v3_score, composite_v3, v3_primary,
+                            )
+
+                except Exception as exc:
+                    logger.warning("v3 rescue failed for %s (%s) — skipped", sym, exc)
 
             filter_common._last_near_misses.append(NearMiss(
                 symbol                   = sym,
