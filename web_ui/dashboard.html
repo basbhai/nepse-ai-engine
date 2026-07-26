@@ -1865,67 +1865,6 @@
     .set-hint { font-size: 10px; color: var(--muted); }
     .set-hint-block { padding: 8px 16px; font-size: 10px; color: var(--muted); border-bottom: 1px solid var(--border); }
 
-    /* Engine Sliders */
-    .engine-slider-container {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      flex: 1;
-      min-width: 200px;
-    }
-    .engine-slider {
-      -webkit-appearance: none;
-      appearance: none;
-      width: 100%;
-      height: 24px;
-      background: linear-gradient(to right, var(--red) 0%, var(--red) 50%, var(--green) 50%, var(--green) 100%);
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      outline: none;
-      cursor: pointer;
-      background-size: 100% 100%;
-      background-repeat: no-repeat;
-    }
-    .engine-slider::-webkit-slider-thumb {
-      -webkit-appearance: none;
-      appearance: none;
-      width: 20px;
-      height: 20px;
-      border-radius: 50%;
-      background: var(--text);
-      cursor: pointer;
-      box-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
-    }
-    .engine-slider::-moz-range-thumb {
-      width: 20px;
-      height: 20px;
-      border-radius: 50%;
-      background: var(--text);
-      cursor: pointer;
-      border: none;
-      box-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
-    }
-    .engine-slider-labels {
-      display: flex;
-      justify-content: space-between;
-      font-size: 10px;
-      font-weight: 600;
-      letter-spacing: .05em;
-      text-transform: uppercase;
-      width: 50px;
-      color: var(--muted);
-    }
-    .engine-slider-labels .engine-off,
-    .engine-slider-labels .engine-on {
-      flex: 1;
-      text-align: center;
-    }
-    .engine-status {
-      font-size: 16px;
-      min-width: 20px;
-      text-align: center;
-    }
-
     @media (max-width: 767px) {
       .rpt-layout {
         grid-template-columns: 1fr;
@@ -2502,112 +2441,83 @@
         <h2>Settings</h2><span class="tag">CONTROL</span>
       </div>
 
-      <!-- Engine Versions -->
+      <!-- Filter Engines -->
       <div class="set-panel">
-        <div class="set-panel-hdr">Engine Versions</div>
-        <div class="set-hint-block">Toggle which filter engines run in the pipeline. At least one must be enabled.</div>
+        <div class="set-panel-hdr">Filter Engines</div>
 
-        <!-- v1 Slider -->
+        <!-- Engine Versions Toggles -->
         <div class="set-row">
-          <div class="set-label">
-            <div style="font-weight: 600;">v1 — Snapshot</div>
-            <div style="font-size: 11px; color: var(--muted); margin-top: 2px;">Baseline indicator scoring at T0</div>
-          </div>
-          <div class="engine-slider-container">
-            <input type="range" id="engine-v1-slider" class="engine-slider" min="0" max="1" value="1"
-              onchange="updateEngineSlider('v1', this.value)">
-            <div class="engine-slider-labels">
-              <span class="engine-off">OFF</span>
-              <span class="engine-on" id="engine-v1-label">ON</span>
-            </div>
-          </div>
-          <div class="engine-status" id="engine-v1-status" style="color: var(--green);">●</div>
-        </div>
-
-        <!-- v2 Slider -->
-        <div class="set-row">
-          <div class="set-label">
-            <div style="font-weight: 600;">v2 — Progression</div>
-            <div style="font-size: 11px; color: var(--muted); margin-top: 2px;">6-day trend-based slope analysis</div>
-          </div>
-          <div class="engine-slider-container">
-            <input type="range" id="engine-v2-slider" class="engine-slider" min="0" max="1" value="1"
-              onchange="updateEngineSlider('v2', this.value)">
-            <div class="engine-slider-labels">
-              <span class="engine-off">OFF</span>
-              <span class="engine-on" id="engine-v2-label">ON</span>
-            </div>
-          </div>
-          <div class="engine-status" id="engine-v2-status" style="color: var(--green);">●</div>
-        </div>
-
-        <!-- v3 Slider -->
-        <div class="set-row">
-          <div class="set-label">
-            <div style="font-weight: 600;">v3 — Oversold Recovery</div>
-            <div style="font-size: 11px; color: var(--muted); margin-top: 2px;">Detects false tech_score blocks via recovery patterns</div>
-          </div>
-          <div class="engine-slider-container">
-            <input type="range" id="engine-v3-slider" class="engine-slider" min="0" max="1" value="0"
-              onchange="updateEngineSlider('v3', this.value)">
-            <div class="engine-slider-labels">
-              <span class="engine-off">OFF</span>
-              <span class="engine-on" id="engine-v3-label">OFF</span>
-            </div>
-          </div>
-          <div class="engine-status" id="engine-v3-status" style="color: var(--red);">●</div>
-        </div>
-
-        <div class="set-status" id="status-engine-versions"></div>
-      </div>
-
-      <!-- V2 Engine -->
-      <div class="set-panel">
-        <div class="set-panel-hdr">V2 Engine</div>
-        <div class="set-stats-row">
-          <div class="set-stat">
-            <div class="set-stat-label">Total Flagged</div>
-            <div class="set-stat-val" id="v2-total">—</div>
-          </div>
-          <div class="set-stat">
-            <div class="set-stat-label">Today</div>
-            <div class="set-stat-val" id="v2-today">—</div>
-          </div>
-          <div class="set-stat">
-            <div class="set-stat-label">Rescue</div>
-            <div class="set-stat-val" id="v2-rescue">—</div>
-          </div>
-          <div class="set-stat">
-            <div class="set-stat-label">V2 Signals</div>
-            <div class="set-stat-val" id="v2-signal-type">—</div>
-          </div>
-        </div>
-        <div class="set-row">
-          <div class="set-label">V2 Enabled</div>
+          <div class="set-label">v1 — Snapshot</div>
           <label class="set-toggle">
-            <input type="checkbox" id="set-FILTER_V2_ENABLED"
-              onchange="applySetting('FILTER_V2_ENABLED', this.checked ? 'true' : 'false')">
+            <input type="checkbox" id="set-ENGINE_V1_ENABLED"
+              onchange="updateEngineToggle('v1', this.checked)">
             <span class="set-slider"></span>
           </label>
-          <span class="set-status" id="status-FILTER_V2_ENABLED"></span>
+          <span class="set-hint">Baseline indicator scoring at T0</span>
+          <span class="set-status" id="status-ENGINE_V1_ENABLED"></span>
         </div>
         <div class="set-row">
-          <div class="set-label">Top N Candidates</div>
-          <input type="number" class="set-input-sm" id="set-FILTER_V2_TOP_N" min="1" max="5"
-            onblur="applySetting('FILTER_V2_TOP_N', this.value)"
-            onkeydown="if(event.key==='Enter') applySetting('FILTER_V2_TOP_N', this.value)">
-          <span class="set-hint">How many v2 candidates pass to Gemini (1–5)</span>
-          <span class="set-status" id="status-FILTER_V2_TOP_N"></span>
-        </div>
-        <div class="set-row">
-          <div class="set-label">Gate Rescue</div>
+          <div class="set-label">v2 — Progression</div>
           <label class="set-toggle">
-            <input type="checkbox" id="set-FILTER_V2_GATE_RESCUE"
-              onchange="applySetting('FILTER_V2_GATE_RESCUE', this.checked ? 'true' : 'false')">
+            <input type="checkbox" id="set-ENGINE_V2_ENABLED"
+              onchange="updateEngineToggle('v2', this.checked)">
             <span class="set-slider"></span>
           </label>
-          <span class="set-hint">Allow v2 to rescue gate-failed candidates</span>
-          <span class="set-status" id="status-FILTER_V2_GATE_RESCUE"></span>
+          <span class="set-hint">6-day trend-based slope analysis</span>
+          <span class="set-status" id="status-ENGINE_V2_ENABLED"></span>
+        </div>
+        <div class="set-row">
+          <div class="set-label">v3 — Oversold Recovery</div>
+          <label class="set-toggle">
+            <input type="checkbox" id="set-ENGINE_V3_ENABLED"
+              onchange="updateEngineToggle('v3', this.checked)">
+            <span class="set-slider"></span>
+          </label>
+          <span class="set-hint">Detects false tech_score blocks via recovery patterns</span>
+          <span class="set-status" id="status-ENGINE_V3_ENABLED"></span>
+        </div>
+
+        <!-- V2 Engine Stats & Controls -->
+        <div style="border-top: 1px solid var(--border); margin-top: 12px; padding-top: 12px;">
+          <div class="set-stats-row">
+            <div class="set-stat">
+              <div class="set-stat-label">Total Flagged</div>
+              <div class="set-stat-val" id="v2-total">—</div>
+            </div>
+            <div class="set-stat">
+              <div class="set-stat-label">Today</div>
+              <div class="set-stat-val" id="v2-today">—</div>
+            </div>
+            <div class="set-stat">
+              <div class="set-stat-label">Rescue</div>
+              <div class="set-stat-val" id="v2-rescue">—</div>
+            </div>
+            <div class="set-stat">
+              <div class="set-stat-label">V2 Signals</div>
+              <div class="set-stat-val" id="v2-signal-type">—</div>
+            </div>
+          </div>
+          <div class="set-row">
+            <div class="set-label">V2 Filter Settings</div>
+          </div>
+          <div class="set-row">
+            <div class="set-label">Top N Candidates</div>
+            <input type="number" class="set-input-sm" id="set-FILTER_V2_TOP_N" min="1" max="5"
+              onblur="applySetting('FILTER_V2_TOP_N', this.value)"
+              onkeydown="if(event.key==='Enter') applySetting('FILTER_V2_TOP_N', this.value)">
+            <span class="set-hint">How many v2 candidates pass to Gemini (1–5)</span>
+            <span class="set-status" id="status-FILTER_V2_TOP_N"></span>
+          </div>
+          <div class="set-row">
+            <div class="set-label">Gate Rescue</div>
+            <label class="set-toggle">
+              <input type="checkbox" id="set-FILTER_V2_GATE_RESCUE"
+                onchange="applySetting('FILTER_V2_GATE_RESCUE', this.checked ? 'true' : 'false')">
+              <span class="set-slider"></span>
+            </label>
+            <span class="set-hint">Allow v2 to rescue gate-failed candidates</span>
+            <span class="set-status" id="status-FILTER_V2_GATE_RESCUE"></span>
+          </div>
         </div>
       </div>
 
@@ -4469,68 +4379,42 @@
     async function loadEngineVersions() {
       try {
         const d = await fetchJSON('/engine-versions');
-        const v1 = d.v1?.enabled ? 1 : 0;
-        const v2 = d.v2?.enabled ? 1 : 0;
-        const v3 = d.v3?.enabled ? 1 : 0;
-
-        document.getElementById('engine-v1-slider').value = v1;
-        document.getElementById('engine-v2-slider').value = v2;
-        document.getElementById('engine-v3-slider').value = v3;
-
-        updateEngineDisplay('v1', v1);
-        updateEngineDisplay('v2', v2);
-        updateEngineDisplay('v3', v3);
+        _setToggle('ENGINE_V1_ENABLED', d.v1?.enabled);
+        _setToggle('ENGINE_V2_ENABLED', d.v2?.enabled);
+        _setToggle('ENGINE_V3_ENABLED', d.v3?.enabled);
       } catch(e) {
         console.warn('loadEngineVersions', e);
       }
     }
 
-    async function updateEngineSlider(version, value) {
+    async function updateEngineToggle(version, checked) {
       // Prevent disabling all engines
-      const v1 = parseInt(document.getElementById('engine-v1-slider').value);
-      const v2 = parseInt(document.getElementById('engine-v2-slider').value);
-      const v3 = parseInt(document.getElementById('engine-v3-slider').value);
+      const v1 = document.getElementById('set-ENGINE_V1_ENABLED').checked;
+      const v2 = document.getElementById('set-ENGINE_V2_ENABLED').checked;
+      const v3 = document.getElementById('set-ENGINE_V3_ENABLED').checked;
 
+      // Check if this change would disable all
       let new_v1 = v1, new_v2 = v2, new_v3 = v3;
-      if (version === 'v1') new_v1 = parseInt(value);
-      if (version === 'v2') new_v2 = parseInt(value);
-      if (version === 'v3') new_v3 = parseInt(value);
+      if (version === 'v1') new_v1 = checked;
+      if (version === 'v2') new_v2 = checked;
+      if (version === 'v3') new_v3 = checked;
 
-      if (new_v1 + new_v2 + new_v3 === 0) {
-        const st = document.getElementById('status-engine-versions');
+      if (!new_v1 && !new_v2 && !new_v3) {
+        // Revert the change
+        document.getElementById('set-ENGINE_' + version.toUpperCase() + '_ENABLED').checked = !checked;
+        const st = document.getElementById('status-ENGINE_' + version.toUpperCase() + '_ENABLED');
         if (st) {
-          st.textContent = '✗ At least one engine must be enabled';
+          st.textContent = '✗ At least one must be on';
           st.className = 'set-status err';
           setTimeout(() => { st.textContent = ''; st.className = 'set-status'; }, 3000);
         }
         return;
       }
 
-      updateEngineDisplay(version, parseInt(value));
-      await saveEngineVersions(new_v1 === 1, new_v2 === 1, new_v3 === 1);
-    }
-
-    function updateEngineDisplay(version, enabled) {
-      const slider = document.getElementById('engine-' + version + '-slider');
-      const label = document.getElementById('engine-' + version + '-label');
-      const status = document.getElementById('engine-' + version + '-status');
-
-      if (enabled) {
-        slider.value = 1;
-        label.textContent = 'ON';
-        status.textContent = '●';
-        status.style.color = 'var(--green)';
-      } else {
-        slider.value = 0;
-        label.textContent = 'OFF';
-        status.textContent = '●';
-        status.style.color = 'var(--red)';
-      }
+      await saveEngineVersions(new_v1, new_v2, new_v3);
     }
 
     async function saveEngineVersions(v1, v2, v3) {
-      const st = document.getElementById('status-engine-versions');
-      if (st) { st.textContent = '…'; st.className = 'set-status'; }
       try {
         const r = await fetch(API + '/engine-versions', {
           method:  'POST',
@@ -4539,13 +4423,21 @@
         });
         const data = await r.json();
         if (!r.ok) throw new Error(data.detail || 'HTTP ' + r.status);
-        if (st) {
-          st.textContent = '✓ Saved';
-          st.className   = 'set-status ok';
-          setTimeout(() => { if(st){ st.textContent=''; st.className='set-status'; }}, 2000);
-        }
+
+        // Show success on all three toggles
+        ['v1', 'v2', 'v3'].forEach(v => {
+          const st = document.getElementById('status-ENGINE_' + v.toUpperCase() + '_ENABLED');
+          if (st) {
+            st.textContent = '✓ Saved';
+            st.className = 'set-status ok';
+            setTimeout(() => { if(st){ st.textContent=''; st.className='set-status'; }}, 2000);
+          }
+        });
       } catch(e) {
-        if (st) { st.textContent = '✗ ' + e.message; st.className = 'set-status err'; }
+        ['v1', 'v2', 'v3'].forEach(v => {
+          const st = document.getElementById('status-ENGINE_' + v.toUpperCase() + '_ENABLED');
+          if (st) { st.textContent = '✗ ' + e.message; st.className = 'set-status err'; }
+        });
       }
     }
 
