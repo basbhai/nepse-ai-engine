@@ -19,7 +19,7 @@ import csv as _csv
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
@@ -838,6 +838,51 @@ def reporter_run(body: _RunQueryBody):
         raise
     except Exception as e:
         log.exception("reporter_run failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/reporter/query")
+def reporter_query_get(request: Request, sql: str):
+    """
+    GET version of /reporter/run — accepts query parameters.
+
+    Usage examples:
+      http://localhost:8766/reporter/query?sql=SELECT * FROM market_log LIMIT 10
+      http://localhost:8766/reporter/query?sql=SELECT * FROM market_log WHERE symbol = :symbol&symbol=USHL
+      http://localhost:8766/reporter/query?sql=SELECT * FROM market_log WHERE engine_source = :engine&engine=v2
+
+    Parameters in SQL use :param_name syntax; pass matching query params (e.g., &symbol=RIDI).
+    """
+    _check_sql(sql)
+    try:
+        # Extract all query params except 'sql' itself
+        params = dict(request.query_params)
+        params.pop("sql", None)  # Remove the sql param from params dict
+
+        # Convert to proper types (attempt int/float if possible)
+        for k, v in params.items():
+            if v and isinstance(v, str):
+                try:
+                    params[k] = int(v)
+                except ValueError:
+                    try:
+                        params[k] = float(v)
+                    except ValueError:
+                        params[k] = v  # Keep as string
+
+        # Build psycopg2 SQL (:name -> %(name)s)
+        psql = _build_psycopg2_sql(sql)
+
+        # Execute query
+        with _db() as cur:
+            cur.execute(psql, params or None)
+            rows = _rows(cur)
+
+        return {"sql": sql, "params": params, "rows": rows, "count": len(rows)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("reporter_query_get failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
