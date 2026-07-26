@@ -2525,6 +2525,14 @@
       <div class="set-panel">
         <div class="set-panel-hdr">Claude Analyst</div>
         <div class="set-row">
+          <div class="set-label">Max Flags / Cycle</div>
+          <input type="number" class="set-input-sm" id="set-GEMINI_MAX_FLAGS" min="1" max="10"
+            onblur="applySetting('GEMINI_MAX_FLAGS', this.value)"
+            onkeydown="if(event.key==='Enter') applySetting('GEMINI_MAX_FLAGS', this.value)">
+          <span class="set-hint">Max gemini-screened candidates Claude analyzes per cycle</span>
+          <span class="set-status" id="status-GEMINI_MAX_FLAGS"></span>
+        </div>
+        <div class="set-row">
           <div class="set-label">Max Calls / Day</div>
           <input type="number" class="set-input-sm" id="set-CLAUDE_MAX_CALLS_PER_DAY" min="1" max="20"
             onblur="applySetting('CLAUDE_MAX_CALLS_PER_DAY', this.value)"
