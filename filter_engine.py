@@ -516,12 +516,6 @@ def run_filter(
 
                         if False:  # disabled until validated — remove to activate
                             # Build a minimal FilterCandidate for Gemini
-                            from filter_common import (
-                                _get_sector_multiplier, _check_cstar_signal,
-                                _compute_composite_score, _candle_bonus,
-                                _get_fundamental_adj, _compute_broker_flow_adj,
-                                _compute_live_adj, _compute_vos_adj,
-                            )
                             sect_mult = _get_sector_multiplier(sector_v3, ctx)
                             cstar     = _check_cstar_signal(
                                 float(getattr(price_row, "change_pct", 0) or 0),
