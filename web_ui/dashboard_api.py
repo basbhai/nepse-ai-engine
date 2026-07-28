@@ -1347,7 +1347,7 @@ def get_logs_file(path: str):
 
 _SETTINGS_WHITELIST = {
     "FILTER_V2_ENABLED", "FILTER_V2_TOP_N", "FILTER_V2_GATE_RESCUE",
-    "ENGINE_V1_ENABLED", "ENGINE_V2_ENABLED", "ENGINE_V3_ENABLED",
+    "ENGINE_V1_ENABLED", "ENGINE_V2_ENABLED", "ENGINE_V3_ENABLED", "V3_GEMINI_ENABLED",
     "TELEGRAM_ENABLED", "NOTIFY_CHANNEL",
     "INDIA_NEPAL_RELATIONS", "GULF_STABILITY", "NRB_STANCE",
     "GOVT_STABILITY", "LOAD_SHEDDING_HRS", "SEBON_EVENT", "BUDGET_EVENT",
@@ -1361,6 +1361,7 @@ _SETTINGS_DEFAULTS: dict[str, str] = {
     "ENGINE_V1_ENABLED":     "true",
     "ENGINE_V2_ENABLED":     "true",
     "ENGINE_V3_ENABLED":     "false",
+    "V3_GEMINI_ENABLED":     "false",
     "TELEGRAM_ENABLED":      "false",
     "NOTIFY_CHANNEL":        "BOTH",
     "INDIA_NEPAL_RELATIONS": "STABLE",
@@ -1465,14 +1466,20 @@ def get_engine_versions():
     """Get current engine version activation status."""
     from sheets import get_setting
     try:
-        v1_enabled = get_setting("ENGINE_V1_ENABLED", "true").lower() == "true"
-        v2_enabled = get_setting("ENGINE_V2_ENABLED", "true").lower() == "true"
-        v3_enabled = get_setting("ENGINE_V3_ENABLED", "false").lower() == "true"
+        v1_enabled        = get_setting("ENGINE_V1_ENABLED",  "true").lower()  == "true"
+        v2_enabled        = get_setting("ENGINE_V2_ENABLED",  "true").lower()  == "true"
+        v3_enabled        = get_setting("ENGINE_V3_ENABLED",  "false").lower() == "true"
+        v3_gemini_enabled = get_setting("V3_GEMINI_ENABLED",  "false").lower() == "true"
 
         return {
             "v1": {"enabled": v1_enabled, "name": "Filter v1 (Snapshot)", "description": "Baseline indicator scoring at T0"},
             "v2": {"enabled": v2_enabled, "name": "Filter v2 (Progression)", "description": "6-day trend-based slope analysis"},
-            "v3": {"enabled": v3_enabled, "name": "Filter v3 (Oversold Recovery)", "description": "Detects false tech_score blocks via recovery patterns"},
+            "v3": {
+                "enabled":        v3_enabled,
+                "gemini_enabled": v3_gemini_enabled,
+                "name":           "Filter v3 (Oversold Recovery)",
+                "description":    "Detects false tech_score blocks via recovery patterns",
+            },
         }
     except Exception as e:
         log.exception("get_engine_versions failed: %s", e)
@@ -1488,24 +1495,31 @@ def set_engine_versions(payload: dict):
     """
     from sheets import update_setting as _us
     try:
-        v1 = payload.get("v1", True)
-        v2 = payload.get("v2", True)
-        v3 = payload.get("v3", False)
+        v1               = payload.get("v1", True)
+        v2               = payload.get("v2", True)
+        v3               = payload.get("v3", False)
+        v3_gemini        = payload.get("v3_gemini", False)
 
         # Validation: at least one must be enabled
         if not any([v1, v2, v3]):
             raise HTTPException(status_code=400, detail="At least one engine version must be enabled")
 
-        _us("ENGINE_V1_ENABLED", "true" if v1 else "false", set_by="dashboard")
-        _us("ENGINE_V2_ENABLED", "true" if v2 else "false", set_by="dashboard")
-        _us("ENGINE_V3_ENABLED", "true" if v3 else "false", set_by="dashboard")
+        # v3_gemini can only be on if v3 scoring is on
+        if v3_gemini and not v3:
+            raise HTTPException(status_code=400, detail="V3_GEMINI_ENABLED requires ENGINE_V3_ENABLED to be true")
 
-        log.info("Engine versions toggled: v1=%s, v2=%s, v3=%s", v1, v2, v3)
+        _us("ENGINE_V1_ENABLED", "true" if v1        else "false", set_by="dashboard")
+        _us("ENGINE_V2_ENABLED", "true" if v2        else "false", set_by="dashboard")
+        _us("ENGINE_V3_ENABLED", "true" if v3        else "false", set_by="dashboard")
+        _us("V3_GEMINI_ENABLED", "true" if v3_gemini else "false", set_by="dashboard")
+
+        log.info("Engine versions toggled: v1=%s, v2=%s, v3=%s, v3_gemini=%s", v1, v2, v3, v3_gemini)
         return {
-            "success": True,
-            "v1": v1,
-            "v2": v2,
-            "v3": v3,
+            "success":   True,
+            "v1":        v1,
+            "v2":        v2,
+            "v3":        v3,
+            "v3_gemini": v3_gemini,
         }
     except HTTPException:
         raise

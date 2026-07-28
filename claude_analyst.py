@@ -910,7 +910,13 @@ def _build_prompt(
     v1-scored candidates and tech_score is not v2's basis for selection. All other active lessons
     still apply normally regardless of engine_source. If co_flagged_by shows v1 explicitly disagreed
     with this candidate's direction, factor that into your reasoning as you would any other
-    conflicting signal — but it does not reinstate the tech_score gate."""
+    conflicting signal — but it does not reinstate the tech_score gate.
+    If engine_source is "v3", this symbol was explicitly rescued from a tech_score or RSI block
+    because v3 detected an oversold-recovery pattern. Do NOT apply lessons conditioned on
+    tech_score thresholds or RSI floors — the low score is the reason v3 selected it, not a
+    disqualifier. Focus your analysis on the reversal signal quality (primary_signal will be
+    OVERSOLD_REVERSAL_V3, BB_BOUNCE_V3, MACD_RECOVERY_V3, SUPPORT_BOUNCE_V3, or EXHAUSTION_V3)
+    and whether the recovery has confirmation (volume, candle pattern, sector momentum)."""
 
     lessons_str  = "\n".join(f"  - {l}" for l in lessons) if lessons else "  No lessons yet."
     holdings_str = "\n".join(

@@ -532,6 +532,10 @@ Candidates are scored by two independent engines and merged into one list:
   ENGINE:v1   = flagged by snapshot scoring only (T0 indicator state)
   ENGINE:v2   = flagged by 6-day progression scoring only — v1's gate would
                 have blocked this symbol at T0, but its 6-day trend improved
+  ENGINE:v3   = flagged by oversold-recovery detector — v1 blocked this symbol
+                (TECH_SCORE/RSI/CONF gate) but v3 detected a reversal pattern
+                from deeply oversold conditions; tech_score is low by design,
+                weight the oversold-recovery signal itself, not the tech_score
   ENGINE:BOTH = flagged independently by both engines — stronger signal,
                 weigh this more favorably than a single-engine flag
 A bracketed [co_flagged_by ...] note, when present, shows the other engine's
