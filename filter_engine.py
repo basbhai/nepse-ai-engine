@@ -313,7 +313,8 @@ def run_filter(
     v2_enabled      = str(get_setting("FILTER_V2_ENABLED", "false")).strip().lower() == "true"
     v2_top_n        = int(get_setting("FILTER_V2_TOP_N", "3"))
     v2_gate_rescue  = str(get_setting("FILTER_V2_GATE_RESCUE", "true")).strip().lower() == "true"
-    v3_enabled      = str(get_setting("FILTER_V3_ENABLED", "false")).strip().lower() == "true"
+    v3_enabled        = str(get_setting("ENGINE_V3_ENABLED",        "false")).strip().lower() == "true"
+    v3_gemini_enabled = str(get_setting("V3_GEMINI_ENABLED",        "false")).strip().lower() == "true"
 
     # ── System hard gates ─────────────────────────────────────────────────────
     gates_ok, gate_reason = _check_hard_gates(ctx)
@@ -504,7 +505,7 @@ def run_filter(
                         if v3_score >= filter_v3.V3_COMPOSITE_THRESHOLD:
                             # Log only — NOT sent to Gemini yet.
                             # gate_miss_tracker.py will auto-track outcome over 17 days.
-                            # Flip FILTER_V3_ENABLED=true + remove this guard to wire into Gemini.
+                            # Flip ENGINE_V3_ENABLED=true + remove this guard to wire into Gemini.
                             near_miss_v2_score = v3_score
                             near_miss_engine   = "v3"
                             logger.info(
@@ -514,7 +515,7 @@ def run_filter(
                                 v3_score, v3_primary,
                             )
 
-                        if False:  # disabled until validated — remove to activate
+                        if v3_gemini_enabled:
                             # Build a minimal FilterCandidate for Gemini
                             sect_mult = _get_sector_multiplier(sector_v3, ctx)
                             cstar     = _check_cstar_signal(
@@ -867,19 +868,22 @@ def run_filter(
                     f"signal={c.primary_signal_v2} hold={c.suggested_hold_v2}d"
                 )
             else:
-                if c.engine_source == "v2_rescue":
-                    c.co_flagged_by = "v1 gate blocked this symbol — v2 rescued it"
-                else:
+                # v3 candidates already have co_flagged_by set when built
+                if c.engine_source not in ("v2_rescue", "v3"):
                     c.co_flagged_by = f"v1 opinion: score={c.composite_score:.1f} signal={c.primary_signal}"
                 c.composite_score = c.composite_score_v2
                 c.primary_signal  = c.primary_signal_v2
                 c.suggested_hold  = c.suggested_hold_v2
-                c.engine_source   = "v2"
+                if c.engine_source != "v3":  # preserve v3 engine tag
+                    c.engine_source = "v2"
                 merged[c.symbol]  = c
 
         top = sorted(merged.values(), key=lambda c: c.composite_score, reverse=True)
-        logger.info("DUAL-ENGINE: v1_top=%s v2_top=%s",
-                     [c.symbol for c in v1_top], [c.symbol for c in v2_top])
+        v3_in_pool = [c for c in v2_rescue_candidates if c.engine_source == "v3"]
+        logger.info("DUAL-ENGINE: v1_top=%s v2_top=%s v3=%s",
+                     [c.symbol for c in v1_top],
+                     [c.symbol for c in v2_top if c.engine_source != "v3"],
+                     [c.symbol for c in v3_in_pool])
 
     logger.info(
         "run_filter done: %d processed | %d passed | %d gate-skipped | %d no-indicator",

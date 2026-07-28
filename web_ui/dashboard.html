@@ -2476,6 +2476,16 @@
           <span class="set-hint">Detects false tech_score blocks via recovery patterns</span>
           <span class="set-status" id="status-ENGINE_V3_ENABLED"></span>
         </div>
+        <div class="set-row" style="padding-left:24px;">
+          <div class="set-label" style="color:var(--text-muted);">↳ v3 → Send to Gemini</div>
+          <label class="set-toggle">
+            <input type="checkbox" id="set-V3_GEMINI_ENABLED"
+              onchange="updateEngineToggle('v3_gemini', this.checked)">
+            <span class="set-slider"></span>
+          </label>
+          <span class="set-hint">Off = DB log only; On = pass v3 candidates to Gemini/Claude</span>
+          <span class="set-status" id="status-V3_GEMINI_ENABLED"></span>
+        </div>
 
         <!-- V2 Engine Stats & Controls -->
         <div style="border-top: 1px solid var(--border); margin-top: 12px; padding-top: 12px;">
@@ -4390,25 +4400,26 @@
         _setToggle('ENGINE_V1_ENABLED', d.v1?.enabled);
         _setToggle('ENGINE_V2_ENABLED', d.v2?.enabled);
         _setToggle('ENGINE_V3_ENABLED', d.v3?.enabled);
+        _setToggle('V3_GEMINI_ENABLED', d.v3?.gemini_enabled);
       } catch(e) {
         console.warn('loadEngineVersions', e);
       }
     }
 
     async function updateEngineToggle(version, checked) {
+      const v1        = document.getElementById('set-ENGINE_V1_ENABLED').checked;
+      const v2        = document.getElementById('set-ENGINE_V2_ENABLED').checked;
+      const v3        = document.getElementById('set-ENGINE_V3_ENABLED').checked;
+      const v3_gemini = document.getElementById('set-V3_GEMINI_ENABLED').checked;
+
+      let new_v1 = v1, new_v2 = v2, new_v3 = v3, new_v3_gemini = v3_gemini;
+      if (version === 'v1')       new_v1        = checked;
+      if (version === 'v2')       new_v2        = checked;
+      if (version === 'v3')       new_v3        = checked;
+      if (version === 'v3_gemini') new_v3_gemini = checked;
+
       // Prevent disabling all engines
-      const v1 = document.getElementById('set-ENGINE_V1_ENABLED').checked;
-      const v2 = document.getElementById('set-ENGINE_V2_ENABLED').checked;
-      const v3 = document.getElementById('set-ENGINE_V3_ENABLED').checked;
-
-      // Check if this change would disable all
-      let new_v1 = v1, new_v2 = v2, new_v3 = v3;
-      if (version === 'v1') new_v1 = checked;
-      if (version === 'v2') new_v2 = checked;
-      if (version === 'v3') new_v3 = checked;
-
       if (!new_v1 && !new_v2 && !new_v3) {
-        // Revert the change
         document.getElementById('set-ENGINE_' + version.toUpperCase() + '_ENABLED').checked = !checked;
         const st = document.getElementById('status-ENGINE_' + version.toUpperCase() + '_ENABLED');
         if (st) {
@@ -4419,20 +4430,38 @@
         return;
       }
 
-      await saveEngineVersions(new_v1, new_v2, new_v3);
+      // If v3 is being turned off, also turn off v3_gemini
+      if (version === 'v3' && !checked) {
+        new_v3_gemini = false;
+        _setToggle('V3_GEMINI_ENABLED', false);
+      }
+
+      // v3_gemini requires v3 to be on
+      if (version === 'v3_gemini' && checked && !new_v3) {
+        document.getElementById('set-V3_GEMINI_ENABLED').checked = false;
+        const st = document.getElementById('status-V3_GEMINI_ENABLED');
+        if (st) {
+          st.textContent = '✗ Enable v3 first';
+          st.className = 'set-status err';
+          setTimeout(() => { if(st){ st.textContent=''; st.className='set-status'; }}, 3000);
+        }
+        return;
+      }
+
+      await saveEngineVersions(new_v1, new_v2, new_v3, new_v3_gemini);
     }
 
-    async function saveEngineVersions(v1, v2, v3) {
+    async function saveEngineVersions(v1, v2, v3, v3_gemini) {
       try {
         const r = await fetch(API + '/engine-versions', {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ v1: v1, v2: v2, v3: v3 }),
+          body:    JSON.stringify({ v1, v2, v3, v3_gemini }),
         });
         const data = await r.json();
         if (!r.ok) throw new Error(data.detail || 'HTTP ' + r.status);
 
-        // Show success on all three toggles
+        // Show success on all toggles
         ['v1', 'v2', 'v3'].forEach(v => {
           const st = document.getElementById('status-ENGINE_' + v.toUpperCase() + '_ENABLED');
           if (st) {
@@ -4441,11 +4470,19 @@
             setTimeout(() => { if(st){ st.textContent=''; st.className='set-status'; }}, 2000);
           }
         });
+        const stG = document.getElementById('status-V3_GEMINI_ENABLED');
+        if (stG) {
+          stG.textContent = '✓ Saved';
+          stG.className = 'set-status ok';
+          setTimeout(() => { if(stG){ stG.textContent=''; stG.className='set-status'; }}, 2000);
+        }
       } catch(e) {
         ['v1', 'v2', 'v3'].forEach(v => {
           const st = document.getElementById('status-ENGINE_' + v.toUpperCase() + '_ENABLED');
           if (st) { st.textContent = '✗ ' + e.message; st.className = 'set-status err'; }
         });
+        const stG = document.getElementById('status-V3_GEMINI_ENABLED');
+        if (stG) { stG.textContent = '✗ ' + e.message; stG.className = 'set-status err'; }
       }
     }
 
