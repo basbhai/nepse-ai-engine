@@ -10,7 +10,7 @@ results/
 graphify-out/
 prompt/
 agents/
-C:\Users\basbh\.openclaw\workspace/
+.openclaw/
 tools/
 wsl_venv/
 __pycache__/
