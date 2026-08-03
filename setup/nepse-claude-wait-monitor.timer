@@ -1,0 +1,14 @@
+[Unit]
+Description=NEPSE AI — Claude Wait-Condition Monitor Timer (10:30 AM NST = 04:45 UTC)
+Documentation=file:///home/shanvi/nepse-engine/agents/claude_wait_monitor/wait_monitor_prompt.md
+
+[Timer]
+# Fires every day; the wrapper script itself gates on calendar_guard.is_trading_day()
+# so holidays are correctly skipped, not just weekends (unlike a hardcoded Mon-Fri
+# OnCalendar, which would miss holiday awareness).
+OnCalendar=*-*-* 04:45:00 UTC
+Persistent=true
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
