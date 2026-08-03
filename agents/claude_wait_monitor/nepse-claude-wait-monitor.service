@@ -1,0 +1,16 @@
+[Unit]
+Description=NEPSE AI — Claude Wait-Condition Monitor (10:30 AM NST, after morning workflow)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/shanvi/nepse-engine
+ExecStart=/home/shanvi/nepse-engine/agents/claude_wait_monitor/run_wait_monitor.sh
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nepse-claude-wait-monitor
+EnvironmentFile=/home/shanvi/nepse-engine/.env
+
+[Install]
+WantedBy=default.target

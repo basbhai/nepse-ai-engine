@@ -11,8 +11,6 @@ graphify-out/
 prompt/
 agents/*
 !agents/claude_wait_monitor/
-agents/claude_wait_monitor/*
-!agents/claude_wait_monitor/run_wait_monitor.sh
 .openclaw/
 tools/
 wsl_venv/
@@ -33,6 +31,7 @@ SQL backup/
 
 *.bak
 *.md
+!agents/claude_wait_monitor/*.md
 
 
 *.sql
