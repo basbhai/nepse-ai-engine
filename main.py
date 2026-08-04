@@ -293,9 +293,17 @@ def _run_agent(label: str) -> None:
     Run the agentic WAIT monitor. Non-fatal — never blocks the trading loop.
     Called at every exit point so it always runs regardless of whether the
     linear pipeline found candidates this cycle.
+
+    Superseded 2026-08-03 by agents/claude_wait_monitor (10:30am daily,
+    semantic condition checking against indicators/price_history). Gated
+    behind NATIVE_WAIT_MONITOR_ENABLED so it can be flipped back on without
+    a code change if needed.
     """
     try:
         from sheets import get_setting
+        if get_setting("NATIVE_WAIT_MONITOR_ENABLED", "true").lower() != "true":
+            log.debug("%s Native agent WAIT monitor disabled (NATIVE_WAIT_MONITOR_ENABLED=false)", label)
+            return
         if get_setting("AGENT_USE_PIPELINE", "false").lower() == "true":
             from agent import run_wait_pipeline
             summary = run_wait_pipeline()
