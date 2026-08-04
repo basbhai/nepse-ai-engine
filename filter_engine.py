@@ -447,10 +447,10 @@ def run_filter(
             # was deeply oversold and is beginning to reverse. Evidence base:
             # 953 FALSE_BLOCK vs 5,092 CORRECT_BLOCK (nepse_test.v3_feature_analysis).
             # Adds to v2_rescue_candidates pool only if v3 composite >= threshold.
+            # NOTE: Runs even if v2 attempted rescue — v3 has independent scoring logic
             if (
                 v3_enabled
                 and gate_category in ("TECH_SCORE", "RSI_NO_CONFIRM", "CONF_SCORE")
-                and rescue_candidate is None  # v2 didn't already rescue this symbol
             ):
                 try:
                     tech_score_int = int(ind.get("tech_score", 0) or 0)
