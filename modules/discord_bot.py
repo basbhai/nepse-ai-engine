@@ -27,6 +27,8 @@ Commands (all replies ephemeral):
     /capital  — paper capital state for the calling user
     /status   — open positions for the calling user
     /pnl      — closed trades + win rate for the calling user
+    /claude   — admin only: run a one-off Claude prompt (read-only DB tools)
+    /play     — admin only: run a one-off browser task via Playwright
 
 NOT implemented here (dashboard-only or follow-up task):
     /register  — registration is dashboard-only by design
@@ -57,6 +59,7 @@ from modules.trading_core import (
     calc_buy_fees, calc_sell_fees,
     execute_buy, execute_sell,
     lookup_symbols, count_open_positions,
+    run_claude_ondemand, run_claude_play,
 )
 from modules.trading_core import _circuit_breakers
 
@@ -748,6 +751,58 @@ async def cmd_sell(interaction: discord.Interaction, symbol: str, shares: int, p
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
     except Exception:
         log.exception("cmd_sell failed for user %s", interaction.user.id)
+        await _safe_error(interaction)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# /claude  — admin only
+# ═══════════════════════════════════════════════════════════════════════════
+
+@tree.command(guild=GUILD, name="claude", description="Admin only: run a one-off Claude prompt (read-only DB tools)")
+@app_commands.describe(prompt="What should Claude look into?")
+async def cmd_claude(interaction: discord.Interaction, prompt: str):
+    try:
+        await interaction.response.defer(ephemeral=True)
+        if not _is_admin(interaction.user.id):
+            await interaction.followup.send("🚫 Admin only command.", ephemeral=True)
+            return
+
+        await interaction.followup.send("🤖 Running Claude...", ephemeral=True)
+        ok, output = await run_claude_ondemand(prompt)
+
+        prefix = "✅" if ok else "❌"
+        text = output if output else "(no output)"
+        if len(text) > 1900:
+            text = text[:1900] + "\n...(truncated)"
+        await interaction.followup.send(f"{prefix} {text}", ephemeral=True)
+    except Exception:
+        log.exception("cmd_claude failed for user %s", interaction.user.id)
+        await _safe_error(interaction)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# /play  — admin only
+# ═══════════════════════════════════════════════════════════════════════════
+
+@tree.command(guild=GUILD, name="play", description="Admin only: run a one-off browser task via Playwright")
+@app_commands.describe(prompt="URL and what Claude should do there")
+async def cmd_play(interaction: discord.Interaction, prompt: str):
+    try:
+        await interaction.response.defer(ephemeral=True)
+        if not _is_admin(interaction.user.id):
+            await interaction.followup.send("🚫 Admin only command.", ephemeral=True)
+            return
+
+        await interaction.followup.send("🎭 Running browser task...", ephemeral=True)
+        ok, output = await run_claude_play(prompt)
+
+        prefix = "✅" if ok else "❌"
+        text = output if output else "(no output)"
+        if len(text) > 1900:
+            text = text[:1900] + "\n...(truncated)"
+        await interaction.followup.send(f"{prefix} {text}", ephemeral=True)
+    except Exception:
+        log.exception("cmd_play failed for user %s", interaction.user.id)
         await _safe_error(interaction)
 
 

@@ -10,6 +10,7 @@ Do NOT import telegram/discord-specific packages here.
 """
 
 import os
+import asyncio
 import logging
 from decimal import Decimal, ROUND_HALF_UP
 from datetime import datetime, date
@@ -37,6 +38,42 @@ SANDBOX_MODE: bool = False   # overwritten by parse_args() in each bot's main()
 
 # Per-session circuit breakers keyed by telegram_id (or discord user id)
 _circuit_breakers: dict[int, bool] = {}
+
+# ─── On-demand Claude invocation (used by /claude in both bots) ──────────────
+CLAUDE_BIN = os.environ.get("CLAUDE_BIN", os.path.expanduser("~/.local/bin/claude"))
+CLAUDE_ONDEMAND_ALLOWED_TOOLS = (
+    "mcp__nepse-engine__list_tables "
+    "mcp__nepse-engine__get_schema "
+    "mcp__nepse-engine__run_query"
+)
+CLAUDE_ONDEMAND_TIMEOUT_SEC = int(os.environ.get("CLAUDE_ONDEMAND_TIMEOUT_SEC", "180"))
+REPO_DIR = "/home/shanvi/nepse-engine"
+
+# ─── On-demand browser automation (used by /play in both bots) ───────────────
+# Curated subset of the official Playwright MCP server's tools — deliberately
+# excludes browser_evaluate / browser_run_code_unsafe (arbitrary JS execution),
+# all cookie/localStorage/sessionStorage tools (auth-state read/write), network
+# route/mocking tools, browser_file_upload (local filesystem access), and
+# pdf/tracing/video tools (write files on the server).
+CLAUDE_PLAY_ALLOWED_TOOLS = (
+    "mcp__playwright__browser_navigate "
+    "mcp__playwright__browser_navigate_back "
+    "mcp__playwright__browser_snapshot "
+    "mcp__playwright__browser_click "
+    "mcp__playwright__browser_type "
+    "mcp__playwright__browser_press_key "
+    "mcp__playwright__browser_select_option "
+    "mcp__playwright__browser_hover "
+    "mcp__playwright__browser_wait_for "
+    "mcp__playwright__browser_take_screenshot "
+    "mcp__playwright__browser_fill_form "
+    "mcp__playwright__browser_find "
+    "mcp__playwright__browser_tabs "
+    "mcp__playwright__browser_handle_dialog "
+    "mcp__playwright__browser_console_messages "
+    "mcp__playwright__browser_close"
+)
+CLAUDE_PLAY_TIMEOUT_SEC = int(os.environ.get("CLAUDE_PLAY_TIMEOUT_SEC", "240"))
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -550,3 +587,59 @@ def market_gate_message() -> Optional[str]:
         f"Next open: *{s['next_open']}*\n"
         f"Use /status or /capital anytime."
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ON-DEMAND CLAUDE  (admin /claude, /play commands in telegram_bot.py + discord_bot.py)
+# ═══════════════════════════════════════════════════════════════════════════
+
+async def _run_claude(prompt: str, allowed_tools: str, timeout: int) -> tuple[bool, str]:
+    """
+    Run a one-off `claude -p <prompt>` restricted to allowed_tools.
+    Non-blocking: safe to await from an asyncio bot event loop.
+    Returns (ok, output_or_error).
+    """
+    prompt = prompt.strip()
+    if not prompt:
+        return False, "Empty prompt."
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            CLAUDE_BIN, "-p", prompt,
+            "--model", "claude-sonnet-5",
+            "--allowedTools", allowed_tools,
+            cwd=REPO_DIR,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError:
+        return False, f"claude binary not found at {CLAUDE_BIN}"
+    except Exception as e:
+        return False, f"Error launching claude: {e}"
+
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        return False, f"Timed out after {timeout}s."
+
+    if proc.returncode != 0:
+        return False, f"claude exited {proc.returncode}: {stderr.decode(errors='replace')[:500]}"
+
+    return True, stdout.decode(errors="replace").strip()
+
+
+async def run_claude_ondemand(prompt: str) -> tuple[bool, str]:
+    """/claude — read-only DB tools only (list_tables / get_schema / run_query)."""
+    return await _run_claude(prompt, CLAUDE_ONDEMAND_ALLOWED_TOOLS, CLAUDE_ONDEMAND_TIMEOUT_SEC)
+
+
+async def run_claude_play(prompt: str) -> tuple[bool, str]:
+    """/play — curated Playwright browser-automation tools only, see CLAUDE_PLAY_ALLOWED_TOOLS."""
+    steered = (
+        "Use the Playwright browser tools (browser_navigate, browser_snapshot, "
+        "browser_click, etc.) to complete this task — do not use WebFetch or "
+        "any other web-access tool.\n\nTask: " + prompt
+    )
+    return await _run_claude(steered, CLAUDE_PLAY_ALLOWED_TOOLS, CLAUDE_PLAY_TIMEOUT_SEC)

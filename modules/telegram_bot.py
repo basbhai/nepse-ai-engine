@@ -109,7 +109,7 @@ MAX_SLIPPAGE_PCT = Decimal("0.005")  # 0.5% max acceptable slippage
 MIN_ORDER_VOL    = 10                # minimum qty at a level to count
 
 from modules.trading_core import (
-    NST, STARTING_CAPITAL, MAX_POSITIONS, CGT_RATE, SEBON_PCT, DP_FEE,
+    NST, STARTING_CAPITAL, MAX_POSITIONS, SEBON_PCT, DP_FEE,
 )
 
 # Conversation states
@@ -832,6 +832,11 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "`/gate_stats` — false block rates by category\n"
             "`/approve_N` — apply proposal N to settings\n"
             "`/reject_N` — reject proposal N\n"
+            "\n*On-demand Claude*\n"
+            "`/claude <prompt>` — ask Claude to look something up "
+            "(read-only DB tools)\n"
+            "`/play <url> <task>` — Claude drives a browser (Playwright) "
+            "to do the task\n"
         )
     await update.message.reply_text(
         f"*Nepal Paper Trading Bot* | {mode_label()}\n\n"
@@ -975,6 +980,57 @@ async def cmd_signal(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"  _{str(s.get('reasoning',''))[:100]}..._\n"
         )
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+async def cmd_claude(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Admin-only: run a one-off Claude prompt with read-only DB tools."""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("🚫 Admin only command.")
+        return
+
+    prompt = " ".join(ctx.args) if ctx.args else ""
+    if not prompt.strip():
+        await update.message.reply_text(
+            "Usage: `/claude <prompt>`\n"
+            "Example: `/claude how many PENDING WAIT signals are open right now?`",
+            parse_mode="Markdown",
+        )
+        return
+
+    await update.message.reply_text("🤖 Running Claude...")
+    ok, output = await trading_core.run_claude_ondemand(prompt)
+
+    prefix = "✅" if ok else "❌"
+    text = output if output else "(no output)"
+    if len(text) > 3800:
+        text = text[:3800] + "\n...(truncated)"
+    await update.message.reply_text(f"{prefix} {text}")
+
+
+async def cmd_play(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Admin-only: run a one-off browser task via Playwright MCP."""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("🚫 Admin only command.")
+        return
+
+    prompt = " ".join(ctx.args) if ctx.args else ""
+    if not prompt.strip():
+        await update.message.reply_text(
+            "Usage: `/play <url> <task>`\n"
+            "Example: `/play https://merolagani.com/LatestMarket.aspx "
+            "get today's NEPSE index value`",
+            parse_mode="Markdown",
+        )
+        return
+
+    await update.message.reply_text("🎭 Running browser task...")
+    ok, output = await trading_core.run_claude_play(prompt)
+
+    prefix = "✅" if ok else "❌"
+    text = output if output else "(no output)"
+    if len(text) > 3800:
+        text = text[:3800] + "\n...(truncated)"
+    await update.message.reply_text(f"{prefix} {text}")
 
 
 async def cmd_mode(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1699,6 +1755,8 @@ def main():
     app.add_handler(CommandHandler("gate_review",     cmd_gate_review))
     app.add_handler(CommandHandler("gate_stats",      cmd_gate_stats))
     app.add_handler(CommandHandler("council_agenda",  cmd_council_agenda))
+    app.add_handler(CommandHandler("claude",          cmd_claude))
+    app.add_handler(CommandHandler("play",            cmd_play))
 
     # Pattern-matched /approve_N and /reject_N
     app.add_handler(MessageHandler(

@@ -78,20 +78,24 @@ for anything but SELECT (it will reject anything else anyway).
 
 ## Step 5 — Send one notification
 
-Compose a single Telegram/Discord message covering all signals checked today,
-grouped by bucket, e.g.:
+Compose a single Telegram/Discord message covering all signals checked today.
+Discord webhook messages do not render markdown pipe tables — only real `##`
+headings and bullet lists render correctly. So: use a `##` heading per
+bucket with a bullet per symbol underneath. Never write prose paragraphs, and
+never attempt a table. Example:
 
 ```
-🔔 WAIT Monitor — 2026-08-03 10:30 NST
+## WAIT Monitor — 2026-08-03 10:30 NST
 
-✅ MET (1):
-  • KKHC: MACD crossed bullish, price held above 296.60
+## MET (1)
+- KKHC: MACD crossed bullish, price held above 296.60
 
-✏️ CONDITION UPDATED (2):
-  • NHPC: old level 290 broken, revised to wait for pullback to 275-280
-  • IHL: support redefined at 350 (was 361.80, price structure shifted)
+## CONDITION UPDATED (2)
+- NHPC: old level 290 broken, revised to wait for pullback to 275-280
+- IHL: support redefined at 350 (was 361.80, price structure shifted)
 
-⏳ UNCHANGED (12): CHCL, SHEL, USHL, BHCL, ... (list symbols)
+## UNCHANGED (12)
+- CHCL, SHEL, USHL, BHCL, ... (list symbols)
 
 Checked 15 PENDING WAIT signals total.
 ```
