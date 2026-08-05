@@ -23,12 +23,14 @@ Pipeline:
 ─────────────────────────────────────────────────────────────────────────────
 TEST STACK vs PRODUCTION STACK
 ─────────────────────────────────────────────────────────────────────────────
-Set COUNCIL_USE_FREE_STACK = False  → rotates 3 free models, no cost
-Set COUNCIL_USE_FREE_STACK = False → uses original flagship model stack
-
-When you are ready for next real council meeting:
-  1. Set COUNCIL_USE_FREE_STACK = False
-  2. Done. Original models restore automatically.
+Controlled live from the dashboard (Settings → COUNCIL_USE_FREE_STACK), not a
+code edit — _reload_stack_switch() re-reads it from the DB at the top of every
+run()/run_preview() call.
+  true  → rotates free models (see _FREE_MODELS), no cost
+  false → uses the flagship production stack (Grok/GPT/DeepSeek/Gemini/Sonnet,
+          Opus for red team + chairman)
+Falls back to the module-level COUNCIL_USE_FREE_STACK default (True) if the
+setting row doesn't exist yet.
 ─────────────────────────────────────────────────────────────────────────────
 
 PRE-COUNCIL (Saturday before first Sunday):
@@ -83,9 +85,11 @@ log = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ── STACK SWITCH ─────────────────────────────────────────────────────────────
-# Set True for free-model testing, False for real council with flagship models
+# Controlled live via the dashboard (settings.COUNCIL_USE_FREE_STACK), reloaded
+# by _reload_stack_switch() at the top of run() / run_preview() every call.
+# This module-level value is only the fallback used before that reload happens.
 # ═══════════════════════════════════════════════════════════════════════════════
-COUNCIL_USE_FREE_STACK = True  # ← SWITCH: True for free models, False for production models
+COUNCIL_USE_FREE_STACK = True  # ← fallback default: True for free models, False for production models
 
 # ── Free test models (rotate round-robin) ─────────────────────────────────────
 _FREE_MODELS = [
@@ -134,6 +138,35 @@ COUNCIL_GEMINI_MODEL   = _PROD_GEMINI_MODEL   if not COUNCIL_USE_FREE_STACK else
 COUNCIL_SONNET_MODEL   = _PROD_SONNET_MODEL   if not COUNCIL_USE_FREE_STACK else None
 COUNCIL_REDTEAM_MODEL  = _PROD_REDTEAM_MODEL  if not COUNCIL_USE_FREE_STACK else None
 COUNCIL_CHAIRMAN_MODEL = _PROD_CHAIRMAN_MODEL if not COUNCIL_USE_FREE_STACK else None
+
+
+def _reload_stack_switch() -> bool:
+    """
+    Reload COUNCIL_USE_FREE_STACK (and its derived model constants) from the
+    dashboard-controlled settings.COUNCIL_USE_FREE_STACK row. Called once at
+    the top of run() and run_preview(), before any stage executes, so a
+    dashboard toggle takes effect on the next run without a redeploy.
+
+    Every `if COUNCIL_USE_FREE_STACK:` check elsewhere in this module reads
+    the reassigned global, so this is the single place that needs to know
+    about the settings table.
+    """
+    global COUNCIL_USE_FREE_STACK
+    global COUNCIL_AUDIT_MODEL, COUNCIL_REVIEW_MODEL, COUNCIL_REDTEAM_MODEL, COUNCIL_CHAIRMAN_MODEL
+
+    try:
+        COUNCIL_USE_FREE_STACK = get_setting("COUNCIL_USE_FREE_STACK", "true").strip().lower() == "true"
+    except Exception as e:
+        log.warning("_reload_stack_switch: get_setting failed, keeping current value: %s", e)
+
+    COUNCIL_AUDIT_MODEL    = _PROD_AUDIT_MODEL    if not COUNCIL_USE_FREE_STACK else None
+    COUNCIL_REVIEW_MODEL   = _PROD_REVIEW_MODEL   if not COUNCIL_USE_FREE_STACK else None
+    COUNCIL_REDTEAM_MODEL  = _PROD_REDTEAM_MODEL  if not COUNCIL_USE_FREE_STACK else None
+    COUNCIL_CHAIRMAN_MODEL = _PROD_CHAIRMAN_MODEL if not COUNCIL_USE_FREE_STACK else None
+
+    log.info("[stack_switch] COUNCIL_USE_FREE_STACK=%s (from dashboard settings)", COUNCIL_USE_FREE_STACK)
+    return COUNCIL_USE_FREE_STACK
+
 
 # Weight review (quarterly) — always DeepSeek R1
 COUNCIL_WEIGHT_DEEPSEEK = "deepseek/deepseek-r1"
@@ -223,8 +256,8 @@ def _should_council_run() -> tuple[bool, str]:
 
     # ── Trigger 3: Crisis gate ────────────────────────────────────────────────
     try:
-        rows = run_raw_sql("SELECT value FROM financials WHERE kpi_name = 'loss_streak'") or []
-        raw = str((rows[0].get("value") or "") if rows else "")
+        rows = run_raw_sql("SELECT current_value FROM financials WHERE kpi_name = 'current_loss_streak'") or []
+        raw = str((rows[0].get("current_value") or "") if rows else "")
         t3_streak = int(raw.strip() or 0)
         if t3_streak >= 5:
             return (True, f"T3_CRISIS: loss_streak={t3_streak}")
@@ -1640,6 +1673,8 @@ def run_preview(dry_run: bool = False) -> None:
     now_nst   = datetime.now(NST)
     run_month = now_nst.strftime("%Y-%m")
 
+    _reload_stack_switch()
+
     log.info("=" * 65)
     log.info("NEPSE MONTHLY COUNCIL — AGENDA PREVIEW (%s)", run_month)
     log.info("Stack: %s", "FREE TEST" if COUNCIL_USE_FREE_STACK else "PRODUCTION")
@@ -1757,6 +1792,8 @@ def run(dry_run: bool = False, force: bool = False, print_prompts: bool = False)
     now_nst   = datetime.now(NST)
     run_month = now_nst.strftime("%Y-%m")
     now_str   = now_nst.strftime("%Y-%m-%d %H:%M:%S")
+
+    _reload_stack_switch()
 
     # ── Duplicate guard ───────────────────────────────────────────────────────
     if not dry_run and not print_prompts and not force and _check_already_run(run_month):

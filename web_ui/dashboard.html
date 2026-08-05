@@ -2552,6 +2552,22 @@
         </div>
       </div>
 
+      <!-- Monthly Council -->
+      <div class="set-panel">
+        <div class="set-panel-hdr">Monthly Council</div>
+        <div class="set-row">
+          <div class="set-label">Model Stack</div>
+          <label class="set-toggle">
+            <input type="checkbox" id="set-COUNCIL_USE_FREE_STACK"
+              onchange="applySetting('COUNCIL_USE_FREE_STACK', this.checked ? 'true' : 'false'); _updateCouncilStackBadge(this.checked)">
+            <span class="set-slider"></span>
+          </label>
+          <span class="badge" id="badge-COUNCIL_USE_FREE_STACK"></span>
+          <span class="set-hint">ON = FREE STACK — free/rotating test models, no cost. OFF = FULL STACK — production models (Grok/GPT/DeepSeek/Gemini/Sonnet/Opus — real API cost). Takes effect on the next council run, no redeploy needed.</span>
+          <span class="set-status" id="status-COUNCIL_USE_FREE_STACK"></span>
+        </div>
+      </div>
+
       <!-- Notifications -->
       <div class="set-panel">
         <div class="set-panel-hdr">Notifications</div>
@@ -4305,6 +4321,8 @@
         _setToggle('FILTER_V2_ENABLED',     d.FILTER_V2_ENABLED);
         _setToggle('FILTER_V2_GATE_RESCUE', d.FILTER_V2_GATE_RESCUE);
         _setToggle('TELEGRAM_ENABLED',      d.TELEGRAM_ENABLED);
+        _setToggle('COUNCIL_USE_FREE_STACK', d.COUNCIL_USE_FREE_STACK);
+        _updateCouncilStackBadge(String(d.COUNCIL_USE_FREE_STACK || '').toLowerCase() === 'true');
 
         _setInput('FILTER_V2_TOP_N',    d.FILTER_V2_TOP_N);
         _setInput('LOAD_SHEDDING_HRS',  d.LOAD_SHEDDING_HRS);
@@ -4336,6 +4354,17 @@
     function _setToggle(key, val) {
       const el = document.getElementById('set-' + key);
       if (el) el.checked = String(val || '').toLowerCase() === 'true';
+    }
+    function _updateCouncilStackBadge(isFree) {
+      const el = document.getElementById('badge-COUNCIL_USE_FREE_STACK');
+      if (!el) return;
+      if (isFree) {
+        el.textContent = 'FREE STACK';
+        el.className   = 'badge badge-green';
+      } else {
+        el.textContent = 'FULL STACK';
+        el.className   = 'badge badge-red';
+      }
     }
     function _setSelect(key, val) {
       const el = document.getElementById('set-' + key);
