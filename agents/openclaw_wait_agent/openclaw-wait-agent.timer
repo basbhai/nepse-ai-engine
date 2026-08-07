@@ -1,0 +1,19 @@
+[Unit]
+Description=Run OpenClaw Wait-Agent at 3:30 PM daily (NST)
+Documentation=file:///home/shanvi/nepse-engine/agents/openclaw_wait_agent/README.md
+
+[Timer]
+# Run daily at 15:30:00 NST (3:30 PM)
+OnCalendar=*-*-* 15:30:00
+
+# Persistent means: if machine was off at 3:30 PM, run as soon as it boots up
+Persistent=true
+
+# Accuracy: run within 1 second of scheduled time
+AccuracySec=1s
+
+# Don't randomize execution time
+RandomizedDelaySec=0
+
+[Install]
+WantedBy=timers.target

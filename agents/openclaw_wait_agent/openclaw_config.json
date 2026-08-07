@@ -1,0 +1,168 @@
+{
+  "wizard": {
+    "securityAcknowledgedAt": "2026-07-31T14:58:41.533Z",
+    "lastRunAt": "2026-07-31T15:26:39.674Z",
+    "lastRunVersion": "2026.7.1-2",
+    "lastRunCommand": "configure",
+    "lastRunMode": "local"
+  },
+  "agents": {
+    "defaults": {
+      "workspace": "C:\\Users\\basbh\\.openclaw\\workspace",
+      "models": {
+        "openrouter/auto": {
+          "alias": "OpenRouter"
+        },
+        "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free": {},
+        "google/gemini-3.1-pro-preview": {},
+        "openrouter/openai/gpt-oss-20b:free": {},
+        "anthropic/claude-opus-4-8": {
+          "agentRuntime": {
+            "id": "claude-cli"
+          }
+        },
+        "anthropic/claude-sonnet-5": {
+          "agentRuntime": {
+            "id": "claude-cli"
+          }
+        },
+        "anthropic/claude-opus-4-7": {
+          "agentRuntime": {
+            "id": "claude-cli"
+          }
+        },
+        "anthropic/claude-sonnet-4-6": {
+          "agentRuntime": {
+            "id": "claude-cli"
+          }
+        },
+        "anthropic/claude-opus-4-6": {
+          "agentRuntime": {
+            "id": "claude-cli"
+          }
+        },
+        "openrouter/deepseek/deepseek-v4-flash": {},
+        "openrouter/qwen/qwen3.5-flash-02-23": {}
+      },
+      "model": {
+        "primary": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+        "fallbacks": [
+          "openrouter/auto",
+          "google/gemini-3.1-pro-preview",
+          "openrouter/openai/gpt-oss-20b:free",
+          "openrouter/deepseek/deepseek-v4-flash",
+          "openrouter/qwen/qwen3.5-flash-02-23"
+        ]
+      }
+    }
+  },
+  "gateway": {
+    "mode": "local",
+    "auth": {
+      "mode": "token",
+      "token": {
+        "source": "env",
+        "provider": "default",
+        "id": "OPENCLAW_GATEWAY_TOKEN"
+      }
+    },
+    "port": 18789,
+    "bind": "loopback",
+    "tailscale": {
+      "mode": "off",
+      "resetOnExit": false
+    },
+    "controlUi": {
+      "allowInsecureAuth": true
+    },
+    "nodes": {
+      "denyCommands": [
+        "camera.snap",
+        "camera.clip",
+        "screen.record",
+        "contacts.add",
+        "calendar.add",
+        "reminders.add",
+        "sms.send",
+        "sms.search"
+      ]
+    }
+  },
+  "session": {
+    "dmScope": "per-channel-peer"
+  },
+  "tools": {
+    "profile": "coding",
+    "web": {
+      "search": {
+        "provider": "duckduckgo",
+        "enabled": true
+      }
+    }
+  },
+  "plugins": {
+    "entries": {
+      "openrouter": {
+        "enabled": true
+      },
+      "discord": {
+        "enabled": true
+      },
+      "duckduckgo": {
+        "enabled": true
+      },
+      "google": {
+        "enabled": true
+      },
+      "anthropic": {
+        "enabled": true
+      }
+    }
+  },
+  "auth": {
+    "profiles": {
+      "openrouter:default": {
+        "provider": "openrouter",
+        "mode": "api_key"
+      },
+      "google:default": {
+        "provider": "google",
+        "mode": "api_key"
+      },
+      "anthropic:claude-cli": {
+        "provider": "claude-cli",
+        "mode": "oauth"
+      }
+    }
+  },
+  "channels": {
+    "discord": {
+      "enabled": true,
+      "token": {
+        "source": "env",
+        "provider": "default",
+        "id": "DISCORD_BOT_TOKEN"
+      },
+      "groupPolicy": "allowlist",
+      "guilds": {}
+    }
+  },
+  "skills": {
+    "install": {
+      "nodeManager": "npm"
+    }
+  },
+  "hooks": {
+    "internal": {
+      "entries": {
+        "session-memory": {
+          "enabled": true
+        }
+      }
+    }
+  },
+  "meta": {
+    "lastTouchedVersion": "2026.7.1-2",
+    "lastTouchedAt": "2026-07-31T15:26:39.997Z"
+  }
+}

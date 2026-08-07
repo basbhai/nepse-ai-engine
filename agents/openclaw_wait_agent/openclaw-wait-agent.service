@@ -1,0 +1,30 @@
+[Unit]
+Description=OpenClaw NEPSE Wait-Condition Validator Agent
+After=network.target
+Requires=openclaw-wait-agent.timer
+
+[Service]
+Type=oneshot
+User=shanvi
+WorkingDirectory=/home/shanvi/nepse-engine/agents/openclaw_wait_agent
+EnvironmentFile=/home/shanvi/nepse-engine/agents/openclaw_wait_agent/.env
+
+# OpenClaw execution
+ExecStart=/usr/local/bin/openclaw run --agent wait-agent --config config/openclaw.json
+
+# Ensure logs directory exists
+ExecStartPre=mkdir -p /home/shanvi/nepse-engine/logs/agents
+
+# On success, log execution
+ExecStartPost=/bin/bash -c 'echo "[$(date)] Execution complete" >> /home/shanvi/nepse-engine/logs/agents/wait_agent_executions.log'
+
+# Standard output to systemd journal
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=openclaw-wait-agent
+
+# Restart policy (don't retry on failure, just log)
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

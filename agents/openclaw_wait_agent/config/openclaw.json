@@ -1,0 +1,69 @@
+{
+  "mcpServers": {
+    "reporter": {
+      "type": "http",
+      "baseUrl": "http://192.168.1.200:8766",
+      "timeout": 30,
+      "tools": [
+        {
+          "name": "execute_query",
+          "description": "Execute SELECT query via /reporter/run endpoint",
+          "endpoint": "/reporter/run",
+          "method": "POST",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "sql": {
+                "type": "string",
+                "description": "SELECT-only SQL query"
+              },
+              "params": {
+                "type": "object",
+                "description": "Query parameters for parameterized queries"
+              }
+            },
+            "required": ["sql"]
+          },
+          "validation": {
+            "enforce_select_only": true,
+            "forbidden_keywords": ["INSERT", "UPDATE", "DELETE", "DROP", "TRUNCATE"]
+          }
+        }
+      ]
+    }
+  },
+  "channels": {
+    "discord": {
+      "type": "discord",
+      "webhook_url_env": "DISCORD_WEBHOOK_WAIT_AGENT",
+      "enabled": true,
+      "message_template": {
+        "title": "WAIT Condition Met",
+        "color": 65280,
+        "footer": "NEPSE Wait-Agent"
+      }
+    }
+  },
+  "llmProviders": [
+    {
+      "name": "anthropic",
+      "type": "anthropic",
+      "apiKeyEnv": "ANTHROPIC_API_KEY",
+      "models": ["claude-3-5-sonnet-20241022"]
+    },
+    {
+      "name": "openrouter",
+      "type": "openrouter",
+      "apiKeyEnv": "OPENROUTER_API_KEY",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "models": ["meta-llama/llama-4-scout"]
+    }
+  ],
+  "execution": {
+    "heartbeatInterval": 86400,
+    "heartbeatTimeNST": "15:30:00",
+    "timezone": "Asia/Kathmandu",
+    "maxConcurrency": 1,
+    "timeout": 60
+  }
+}
