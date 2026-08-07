@@ -21,13 +21,16 @@ Auth model:
     must register at the dashboard (/register page) to link their Discord
     account before commands work.
 
-Commands (all replies ephemeral):
+Commands (ephemeral unless noted):
     /help     — list commands, no auth required
     /mode     — PAPER/LIVE + sandbox indicator
     /capital  — paper capital state for the calling user
     /status   — open positions for the calling user
     /pnl      — closed trades + win rate for the calling user
-    /claude   — admin only: run a one-off Claude prompt (read-only DB tools)
+    /claude   — admin only: run a one-off Claude prompt (read-only DB tools).
+                Answer is DM'd, not ephemeral (ephemeral messages can't be
+                replied to) — reply to the DM to continue that conversation,
+                resumed via the same headless `claude -r <session_id>`.
     /play     — admin only: run a one-off browser task via Playwright
 
 NOT implemented here (dashboard-only or follow-up task):
@@ -36,6 +39,7 @@ NOT implemented here (dashboard-only or follow-up task):
 """
 
 import os
+import asyncio
 import logging
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -60,6 +64,7 @@ from modules.trading_core import (
     execute_buy, execute_sell,
     lookup_symbols, count_open_positions,
     run_claude_ondemand, run_claude_play,
+    register_claude_thread, resolve_claude_thread,
 )
 from modules.trading_core import _circuit_breakers
 
@@ -140,6 +145,43 @@ async def on_ready():
         )
     except Exception:
         log.exception("Failed to sync slash commands to guild %s", _guild_id)
+
+
+@bot.event
+async def on_message(message: discord.Message):
+    """
+    /claude answers are DM'd (ephemeral messages can't be replied to). A DM
+    reply to one of those messages resumes that exact headless session
+    instead of requiring /claude again. Everything else is ignored — this
+    bot has no other DM-based or channel on_message behavior to preserve.
+    """
+    if message.author.bot:
+        return
+    if not isinstance(message.channel, discord.DMChannel):
+        return
+    if not message.reference or not message.reference.message_id:
+        return
+
+    session_id = resolve_claude_thread(message.reference.message_id, message.author.id)
+    if not session_id:
+        return
+    if not _is_admin(message.author.id):
+        return
+
+    try:
+        ok, output, new_session_id = await run_claude_ondemand(
+            message.content, resume_session_id=session_id,
+        )
+        prefix = "✅" if ok else "❌"
+        text = output if output else "(no output)"
+        if len(text) > 1900:
+            text = text[:1900] + "\n...(truncated)"
+        suffix = "\n\n*Reply to this DM to continue the conversation.*" if (ok and new_session_id) else ""
+        sent = await message.channel.send(f"{prefix} {text}{suffix}")
+        if ok and new_session_id:
+            register_claude_thread(sent.id, new_session_id, message.author.id)
+    except Exception:
+        log.exception("claude DM reply-thread failed for user %s", message.author.id)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -758,6 +800,29 @@ async def cmd_sell(interaction: discord.Interaction, symbol: str, shares: int, p
 # /claude  — admin only
 # ═══════════════════════════════════════════════════════════════════════════
 
+async def _claude_bg_and_dm(user: discord.User, prompt: str, resume_session_id=None):
+    """
+    Runs on-demand Claude in the background (does not block the interaction /
+    event loop on a single long-running query) and DMs the result when done,
+    registering it for reply-to-continue. Falls back to a plain error DM if
+    DMs are disabled — there's no ephemeral followup to fall back to here
+    since this runs detached from the original interaction.
+    """
+    try:
+        ok, output, session_id = await run_claude_ondemand(prompt, resume_session_id=resume_session_id)
+        prefix = "✅" if ok else "❌"
+        text = output if output else "(no output)"
+        if len(text) > 1900:
+            text = text[:1900] + "\n...(truncated)"
+        suffix = "\n\n*Reply to this DM to continue the conversation.*" if (ok and session_id) else ""
+        dm = await user.create_dm()
+        sent = await dm.send(f"{prefix} {text}{suffix}")
+        if ok and session_id:
+            register_claude_thread(sent.id, session_id, user.id)
+    except Exception:
+        log.exception("claude background run/DM failed for user %s", user.id)
+
+
 @tree.command(guild=GUILD, name="claude", description="Admin only: run a one-off Claude prompt (read-only DB tools)")
 @app_commands.describe(prompt="What should Claude look into?")
 async def cmd_claude(interaction: discord.Interaction, prompt: str):
@@ -767,14 +832,8 @@ async def cmd_claude(interaction: discord.Interaction, prompt: str):
             await interaction.followup.send("🚫 Admin only command.", ephemeral=True)
             return
 
-        await interaction.followup.send("🤖 Running Claude...", ephemeral=True)
-        ok, output = await run_claude_ondemand(prompt)
-
-        prefix = "✅" if ok else "❌"
-        text = output if output else "(no output)"
-        if len(text) > 1900:
-            text = text[:1900] + "\n...(truncated)"
-        await interaction.followup.send(f"{prefix} {text}", ephemeral=True)
+        await interaction.followup.send("🤖 Running Claude... answer will arrive by DM.", ephemeral=True)
+        asyncio.create_task(_claude_bg_and_dm(interaction.user, prompt))
     except Exception:
         log.exception("cmd_claude failed for user %s", interaction.user.id)
         await _safe_error(interaction)
@@ -794,7 +853,7 @@ async def cmd_play(interaction: discord.Interaction, prompt: str):
             return
 
         await interaction.followup.send("🎭 Running browser task...", ephemeral=True)
-        ok, output = await run_claude_play(prompt)
+        ok, output, _session_id = await run_claude_play(prompt)
 
         prefix = "✅" if ok else "❌"
         text = output if output else "(no output)"

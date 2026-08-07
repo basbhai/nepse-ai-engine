@@ -10,6 +10,8 @@ Do NOT import telegram/discord-specific packages here.
 """
 
 import os
+import time
+import json
 import asyncio
 import logging
 from decimal import Decimal, ROUND_HALF_UP
@@ -44,10 +46,16 @@ CLAUDE_BIN = os.environ.get("CLAUDE_BIN", os.path.expanduser("~/.local/bin/claud
 CLAUDE_ONDEMAND_ALLOWED_TOOLS = (
     "mcp__nepse-engine__list_tables "
     "mcp__nepse-engine__get_schema "
-    "mcp__nepse-engine__run_query"
+    "mcp__nepse-engine__run_query "
+    "Read(./agents/claude_agent/**) "
+    "Write(./agents/claude_agent/**)"
 )
-CLAUDE_ONDEMAND_TIMEOUT_SEC = int(os.environ.get("CLAUDE_ONDEMAND_TIMEOUT_SEC", "180"))
+# /claude runs in the background (fire-and-follow-up, see run_claude_ondemand_bg
+# in telegram_bot.py/discord_bot.py) so the command handler never blocks on this —
+# this is a safety cap against a genuinely runaway process, not a UX timeout.
+CLAUDE_ONDEMAND_BG_TIMEOUT_SEC = int(os.environ.get("CLAUDE_ONDEMAND_BG_TIMEOUT_SEC", "1200"))
 REPO_DIR = "/home/shanvi/nepse-engine"
+CLAUDE_AGENT_DIR = os.path.join(REPO_DIR, "agents", "claude_agent")
 
 # ─── On-demand browser automation (used by /play in both bots) ───────────────
 # Curated subset of the official Playwright MCP server's tools — deliberately
@@ -593,53 +601,132 @@ def market_gate_message() -> Optional[str]:
 # ON-DEMAND CLAUDE  (admin /claude, /play commands in telegram_bot.py + discord_bot.py)
 # ═══════════════════════════════════════════════════════════════════════════
 
-async def _run_claude(prompt: str, allowed_tools: str, timeout: int) -> tuple[bool, str]:
+async def _run_claude(
+    prompt: str,
+    allowed_tools: str,
+    timeout: int,
+    resume_session_id: Optional[str] = None,
+) -> tuple[bool, str, Optional[str]]:
     """
-    Run a one-off `claude -p <prompt>` restricted to allowed_tools.
+    Run a one-off `claude -p <prompt>` restricted to allowed_tools, in headless
+    JSON mode so we get back both the answer text and the session_id (needed
+    for reply-to-continue threading — see register_claude_thread()).
+
+    If resume_session_id is given, continues that exact session (-r flag)
+    instead of starting a fresh one — same context, same conversation.
+
     Non-blocking: safe to await from an asyncio bot event loop.
-    Returns (ok, output_or_error).
+    Returns (ok, output_or_error, session_id_or_None).
     """
     prompt = prompt.strip()
     if not prompt:
-        return False, "Empty prompt."
+        return False, "Empty prompt.", None
+
+    args = [
+        CLAUDE_BIN, "-p", prompt,
+        "--model", "claude-sonnet-5",
+        "--allowedTools", allowed_tools,
+        "--output-format", "json",
+        # --allowedTools alone pre-approves the tool, but headless -p mode still
+        # has no TTY to confirm a file WRITE without this — without it, Write
+        # calls silently fail with "I don't have permission" (confirmed live).
+        # No-op for tool sets with no Write/Edit tools (e.g. /play).
+        "--permission-mode", "acceptEdits",
+    ]
+    if resume_session_id:
+        args += ["-r", resume_session_id]
 
     try:
         proc = await asyncio.create_subprocess_exec(
-            CLAUDE_BIN, "-p", prompt,
-            "--model", "claude-sonnet-5",
-            "--allowedTools", allowed_tools,
+            *args,
             cwd=REPO_DIR,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
     except FileNotFoundError:
-        return False, f"claude binary not found at {CLAUDE_BIN}"
+        return False, f"claude binary not found at {CLAUDE_BIN}", None
     except Exception as e:
-        return False, f"Error launching claude: {e}"
+        return False, f"Error launching claude: {e}", None
 
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except asyncio.TimeoutError:
         proc.kill()
         await proc.wait()
-        return False, f"Timed out after {timeout}s."
+        return False, f"Timed out after {timeout}s.", None
 
     if proc.returncode != 0:
-        return False, f"claude exited {proc.returncode}: {stderr.decode(errors='replace')[:500]}"
+        return False, f"claude exited {proc.returncode}: {stderr.decode(errors='replace')[:500]}", None
 
-    return True, stdout.decode(errors="replace").strip()
+    raw = stdout.decode(errors="replace").strip()
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        # Fallback: not valid JSON (shouldn't happen with --output-format json,
+        # but never crash the bot over a parse hiccup) — return raw text, no session.
+        return True, raw, None
+
+    session_id = parsed.get("session_id")
+    if parsed.get("is_error"):
+        return False, str(parsed.get("result") or raw)[:500], session_id
+    return True, str(parsed.get("result") or ""), session_id
 
 
-async def run_claude_ondemand(prompt: str) -> tuple[bool, str]:
-    """/claude — read-only DB tools only (list_tables / get_schema / run_query)."""
-    return await _run_claude(prompt, CLAUDE_ONDEMAND_ALLOWED_TOOLS, CLAUDE_ONDEMAND_TIMEOUT_SEC)
+async def run_claude_ondemand(
+    prompt: str, resume_session_id: Optional[str] = None,
+) -> tuple[bool, str, Optional[str]]:
+    """/claude — read-only DB tools, plus Read/Write scoped to agents/claude_agent/."""
+    os.makedirs(CLAUDE_AGENT_DIR, exist_ok=True)
+    return await _run_claude(
+        prompt, CLAUDE_ONDEMAND_ALLOWED_TOOLS, CLAUDE_ONDEMAND_BG_TIMEOUT_SEC,
+        resume_session_id=resume_session_id,
+    )
 
 
-async def run_claude_play(prompt: str) -> tuple[bool, str]:
+async def run_claude_play(
+    prompt: str, resume_session_id: Optional[str] = None,
+) -> tuple[bool, str, Optional[str]]:
     """/play — curated Playwright browser-automation tools only, see CLAUDE_PLAY_ALLOWED_TOOLS."""
     steered = (
         "Use the Playwright browser tools (browser_navigate, browser_snapshot, "
         "browser_click, etc.) to complete this task — do not use WebFetch or "
         "any other web-access tool.\n\nTask: " + prompt
     )
-    return await _run_claude(steered, CLAUDE_PLAY_ALLOWED_TOOLS, CLAUDE_PLAY_TIMEOUT_SEC)
+    return await _run_claude(
+        steered, CLAUDE_PLAY_ALLOWED_TOOLS, CLAUDE_PLAY_TIMEOUT_SEC,
+        resume_session_id=resume_session_id,
+    )
+
+
+# ─── Reply-to-continue threading ──────────────────────────────────────────────
+# In-memory only — cleared on bot restart (acceptable: this is an ephemeral
+# admin chat convenience, not trading state). Maps a bot message's platform
+# message ID (as a string — Telegram ints and Discord snowflakes both stringify
+# fine) to (session_id, owner_user_id, expires_at), so a user replying to that
+# specific message resumes the same headless Claude session instead of starting
+# a new one. Ownership-checked so one admin can't hijack another's thread.
+_CLAUDE_THREAD_TTL_SEC = 30 * 60  # 30 min of inactivity before a thread expires
+_claude_threads: dict[str, tuple[str, str, float]] = {}
+
+
+def register_claude_thread(msg_id, session_id: str, user_id) -> None:
+    """Call after sending a Claude answer, with the ID of the message that was sent."""
+    now = time.time()
+    expired = [k for k, v in _claude_threads.items() if v[2] < now]
+    for k in expired:
+        _claude_threads.pop(k, None)
+    _claude_threads[str(msg_id)] = (session_id, str(user_id), now + _CLAUDE_THREAD_TTL_SEC)
+
+
+def resolve_claude_thread(msg_id, user_id) -> Optional[str]:
+    """
+    If msg_id is a tracked Claude message and user_id is its owner and it
+    hasn't expired, returns the session_id to resume. Otherwise None.
+    """
+    entry = _claude_threads.get(str(msg_id))
+    if not entry:
+        return None
+    session_id, owner_id, expiry = entry
+    if time.time() > expiry or str(user_id) != owner_id:
+        return None
+    return session_id

@@ -66,6 +66,7 @@ ENV vars:
 import os
 import sys
 import json
+import asyncio
 import logging
 import argparse
 from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
@@ -982,8 +983,29 @@ async def cmd_signal(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
+async def _claude_bg_and_deliver(
+    ctx: ContextTypes.DEFAULT_TYPE, chat_id, user_id, prompt: str, resume_session_id=None,
+):
+    """
+    Runs on-demand Claude in the background (does not block the command
+    handler / event loop on a single long-running query) and delivers the
+    result as a fresh message when done, registering it for reply-to-continue.
+    """
+    ok, output, session_id = await trading_core.run_claude_ondemand(
+        prompt, resume_session_id=resume_session_id,
+    )
+    prefix = "✅" if ok else "❌"
+    text = output if output else "(no output)"
+    if len(text) > 3800:
+        text = text[:3800] + "\n...(truncated)"
+    suffix = "\n\n_Reply to this message to continue the conversation._" if (ok and session_id) else ""
+    sent = await ctx.bot.send_message(chat_id=chat_id, text=f"{prefix} {text}{suffix}", parse_mode="Markdown")
+    if ok and session_id:
+        trading_core.register_claude_thread(sent.message_id, session_id, user_id)
+
+
 async def cmd_claude(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Admin-only: run a one-off Claude prompt with read-only DB tools."""
+    """Admin-only: run a one-off Claude prompt with read-only DB tools + agents/claude_agent/ Read/Write."""
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("🚫 Admin only command.")
         return
@@ -997,14 +1019,38 @@ async def cmd_claude(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    await update.message.reply_text("🤖 Running Claude...")
-    ok, output = await trading_core.run_claude_ondemand(prompt)
+    await update.message.reply_text("🤖 Running Claude... answer will follow shortly.")
+    asyncio.create_task(_claude_bg_and_deliver(
+        ctx, update.effective_chat.id, update.effective_user.id, prompt,
+    ))
 
-    prefix = "✅" if ok else "❌"
-    text = output if output else "(no output)"
-    if len(text) > 3800:
-        text = text[:3800] + "\n...(truncated)"
-    await update.message.reply_text(f"{prefix} {text}")
+
+async def claude_reply_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    Catches replies to a prior /claude answer and resumes that exact headless
+    session instead of starting a new one. Falls through to nlp_fallback for
+    any reply that isn't continuing a tracked Claude thread (e.g. yes/no
+    confirmations sent via Telegram's reply UI, or a reply to an unrelated
+    message), so existing behavior for those is unaffected.
+    """
+    replied = update.message.reply_to_message
+    session_id = (
+        trading_core.resolve_claude_thread(replied.message_id, update.effective_user.id)
+        if replied else None
+    )
+    if not session_id:
+        await nlp_fallback(update, ctx)
+        return
+
+    if not is_admin(update.effective_user.id):
+        await nlp_fallback(update, ctx)
+        return
+
+    await update.message.reply_text("🤖 Running Claude... answer will follow shortly.")
+    asyncio.create_task(_claude_bg_and_deliver(
+        ctx, update.effective_chat.id, update.effective_user.id, update.message.text,
+        resume_session_id=session_id,
+    ))
 
 
 async def cmd_play(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1024,7 +1070,7 @@ async def cmd_play(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text("🎭 Running browser task...")
-    ok, output = await trading_core.run_claude_play(prompt)
+    ok, output, _session_id = await trading_core.run_claude_play(prompt)
 
     prefix = "✅" if ok else "❌"
     text = output if output else "(no output)"
@@ -1750,7 +1796,7 @@ def main():
     app.add_handler(CommandHandler("resume",   cmd_resume))
     app.add_handler(CommandHandler("help",     cmd_help))
     app.add_handler(CommandHandler("start",    cmd_help))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, nlp_fallback))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, claude_reply_handler))
         # Gate tuning commands (admin only)
     app.add_handler(CommandHandler("gate_review",     cmd_gate_review))
     app.add_handler(CommandHandler("gate_stats",      cmd_gate_stats))
