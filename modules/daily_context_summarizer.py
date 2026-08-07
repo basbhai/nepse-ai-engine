@@ -18,7 +18,6 @@ Called by:
     nightly_summary.yml (GitHub Actions, ~9 PM NST Sun-Thu)
 """
 
-from curses import raw
 import os
 import sys
 import logging

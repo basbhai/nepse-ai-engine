@@ -62,7 +62,7 @@ def format_token_stats(text: str, label: str, model_type: str = "gemini") -> str
 
 def view_daily_context(args):
     """View the Gemini prompt for daily_context_summarizer."""
-    from analysis.daily_context_summarizer import get_prompt_for_date
+    from modules.daily_context_summarizer import get_prompt_for_date
 
     target = args.date or datetime.now(NST).strftime("%Y-%m-%d")
     prompt = get_prompt_for_date(target)

@@ -185,13 +185,13 @@ def run(dry_run: bool = False, skip_guard: bool = False) -> int:
 
     # ── Step 11: Daily context summarizer ────────────────────────────────────
     def _summarizer():
-        from analysis.daily_context_summarizer import run as run_summarizer
+        from modules.daily_context_summarizer import run as run_summarizer
         run_summarizer()
     results["summarizer"] = _step("daily_context_summarizer", _summarizer, dry_run)
 
     # ── Step 12: Backup sync ──────────────────────────────────────────────────
     def _backup():
-        from analysis.backup_sync import run as run_backup
+        from modules.backup_sync import run as run_backup
         run_backup()
     results["backup"] = _step("backup_sync (local → Neon)", _backup, dry_run)
 

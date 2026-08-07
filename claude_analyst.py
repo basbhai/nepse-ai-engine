@@ -268,7 +268,7 @@ def _load_macro_context() -> dict:
         }
 
 
-def _load_lessons(symbol: str, sector: str, limit: int = 6) -> list[str]:
+def _load_lessons(symbol: str, sector: str, limit: int = 10) -> list[str]:
     try:
         from sheets import run_raw_sql, get_setting
 

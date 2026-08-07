@@ -790,10 +790,12 @@ LESSON TYPES:
 SIGNAL_FILTER | SECTOR_FILTER | MACRO_FILTER | ENTRY_TIMING | STOP_CALC |
 PORTFOLIO_RULE | DIVIDEND_PATTERN | CALENDAR_EFFECT | FAILURE_MODE | LIQUIDITY_GAP
 
-ENTRY ACTIONS (escalating strength  -  use ONLY these exact strings):
-MONITOR | ADD_TO_REASONING | SOFT_BLOCK | REDUCE_CONFIDENCE_BY_15 | REDUCE_CONFIDENCE_BY_20 |
-REDUCE_CONFIDENCE_BY_25 | REDUCE_ALLOCATION_BY_20 | REDUCE_ALLOCATION_BY_30 |
-REDUCE_ALLOCATION_BY_40 | INCREASE_CONFIDENCE_BY_15 | INCREASE_ALLOCATION_BY_25 |
+ENTRY ACTIONS (escalating strength):
+MONITOR | ADD_TO_REASONING | SOFT_BLOCK |
+REDUCE_CONFIDENCE_BY_N  (N: 5–40, choose based on evidence strength, e.g. REDUCE_CONFIDENCE_BY_12) |
+REDUCE_ALLOCATION_BY_N  (N: 10–50, choose based on evidence strength, e.g. REDUCE_ALLOCATION_BY_35) |
+INCREASE_CONFIDENCE_BY_N (N: 5–30, choose based on evidence strength, e.g. INCREASE_CONFIDENCE_BY_10) |
+INCREASE_ALLOCATION_BY_N (N: 10–40, choose based on evidence strength, e.g. INCREASE_ALLOCATION_BY_20) |
 REQUIRE_VOLUME_CONFIRM | REQUIRE_MACRO_STABLE | WAIT_FOR_CONFIRMATION | BLOCK_ENTRY
 
 Action semantics (read carefully before choosing):
@@ -1097,6 +1099,29 @@ bounce_failed: true=dead-cat bounce detected. vwap_dev: % deviation from VWAP. b
 
 _REQUIRED_LESSON_FIELDS = {"lesson_type", "condition", "finding", "action", "confidence_level"}
 
+_FIXED_ACTIONS = {
+    "MONITOR", "ADD_TO_REASONING", "SOFT_BLOCK",
+    "REQUIRE_VOLUME_CONFIRM", "REQUIRE_MACRO_STABLE", "FREE_DESCISION_BASED_ON_DATA"
+    "WAIT_FOR_CONFIRMATION", "BLOCK_ENTRY",
+}
+_NUMERIC_ACTION_BOUNDS = {
+    "REDUCE_CONFIDENCE_BY_":   (5,  40),
+    "REDUCE_ALLOCATION_BY_":   (10, 50),
+    "INCREASE_CONFIDENCE_BY_": (5,  30),
+    "INCREASE_ALLOCATION_BY_": (10, 40),
+}
+
+def _is_valid_action(action: str) -> bool:
+    if action in _FIXED_ACTIONS:
+        return True
+    for prefix, (lo, hi) in _NUMERIC_ACTION_BOUNDS.items():
+        if action.startswith(prefix):
+            try:
+                return lo <= int(action[len(prefix):]) <= hi
+            except ValueError:
+                return False
+    return False
+
 
 def _validate_lesson(lesson: dict, index: int) -> bool:
     """Validate a single lesson object from GPT output. Returns True if valid."""
@@ -1119,25 +1144,7 @@ def _validate_lesson(lesson: dict, index: int) -> bool:
         lesson["consumer"] = "ALL"
 
     # Validate action
-    valid_actions = {
-            "MONITOR",
-            "ADD_TO_REASONING",
-            "SOFT_BLOCK",
-            "REDUCE_CONFIDENCE_BY_15",
-            "REDUCE_CONFIDENCE_BY_20",
-            "REDUCE_CONFIDENCE_BY_25",
-            "REDUCE_ALLOCATION_BY_20",
-            "REDUCE_ALLOCATION_BY_30",
-            "REDUCE_ALLOCATION_BY_40",
-            "INCREASE_CONFIDENCE_BY_15",
-            "INCREASE_ALLOCATION_BY_25",
-            "REQUIRE_VOLUME_CONFIRM",
-            "REQUIRE_MACRO_STABLE",
-            "WAIT_FOR_CONFIRMATION",
-            "BLOCK_ENTRY",
-            # TIGHTEN_STOP removed — post-entry action, not an entry filter
-        }
-    if lesson.get("action") not in valid_actions:
+    if not _is_valid_action(lesson.get("action", "")):
         log.warning("Lesson #%d has invalid action: %s  -  skipping",
                      index, lesson.get("action"))
         return False
