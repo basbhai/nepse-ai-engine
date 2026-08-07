@@ -10,6 +10,7 @@ results/
 graphify-out/
 prompt/
 agents/*
+data/
 !agents/claude_wait_monitor/
 !agents/claude_agent/
 .openclaw/

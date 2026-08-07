@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/shanvi/nepse-engine/venv/bin/python /home/shanvi/nepse-engine/modules/claude_bot_guard_hook.py",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
