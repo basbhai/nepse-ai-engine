@@ -305,10 +305,10 @@ def _run_agent(label: str) -> None:
             log.debug("%s Native agent WAIT monitor disabled (NATIVE_WAIT_MONITOR_ENABLED=false)", label)
             return
         if get_setting("AGENT_USE_PIPELINE", "false").lower() == "true":
-            from agent import run_wait_pipeline
+            from agents.wait_agent import run_wait_pipeline
             summary = run_wait_pipeline()
         else:
-            from agent import run_wait_monitor
+            from agents.wait_agent import run_wait_monitor
             summary = run_wait_monitor()
         log.info(
             "%s Agent WAIT monitor: ran=%s reason=%s escalations=%d elapsed=%dms",
