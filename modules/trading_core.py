@@ -614,6 +614,7 @@ async def _run_claude(
     allowed_tools: str,
     timeout: int,
     resume_session_id: Optional[str] = None,
+    add_dir: Optional[str] = None,
 ) -> tuple[bool, str, Optional[str]]:
     """
     Run a one-off `claude -p <prompt>` restricted to allowed_tools, in headless
@@ -622,6 +623,11 @@ async def _run_claude(
 
     If resume_session_id is given, continues that exact session (-r flag)
     instead of starting a fresh one — same context, same conversation.
+
+    add_dir: extra directory to open in the filesystem sandbox. Needed
+    whenever allowed_tools scopes Read/Write/Edit to a path outside cwd
+    (REPO_DIR) — --allowedTools only grants *permission*, the sandbox still
+    confines actual filesystem access to cwd unless --add-dir opens it too.
 
     Non-blocking: safe to await from an asyncio bot event loop.
     Returns (ok, output_or_error, session_id_or_None).
@@ -641,6 +647,8 @@ async def _run_claude(
         # No-op for tool sets with no Write/Edit tools (e.g. /play).
         "--permission-mode", "acceptEdits",
     ]
+    if add_dir:
+        args += ["--add-dir", add_dir]
     if resume_session_id:
         args += ["-r", resume_session_id]
 
@@ -687,7 +695,7 @@ async def run_claude_ondemand(
     os.makedirs(CLAUDE_AGENT_DIR, exist_ok=True)
     return await _run_claude(
         prompt, CLAUDE_ONDEMAND_ALLOWED_TOOLS, CLAUDE_ONDEMAND_BG_TIMEOUT_SEC,
-        resume_session_id=resume_session_id,
+        resume_session_id=resume_session_id, add_dir=CLAUDE_AGENT_DIR,
     )
 
 
