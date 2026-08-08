@@ -43,19 +43,27 @@ _circuit_breakers: dict[int, bool] = {}
 
 # ─── On-demand Claude invocation (used by /claude in both bots) ──────────────
 CLAUDE_BIN = os.environ.get("CLAUDE_BIN", os.path.expanduser("~/.local/bin/claude"))
+# File CRU (no delete — Claude Code has no Delete tool; that requires Bash,
+# which is deliberately excluded here) scoped to CLAUDE_AGENT_DIR via path
+# globs Claude Code actually enforces. Do NOT add "Bash" to this list: Bash
+# allowedTools patterns only match the command's literal text, they do not
+# confine what the process can touch on disk — since /claude is reachable
+# remotely (Telegram/Discord), that would be unscoped remote code execution,
+# not a folder-scoped sandbox.
+CLAUDE_AGENT_DIR = "/home/shanvi/claude_agent_reports"
 CLAUDE_ONDEMAND_ALLOWED_TOOLS = (
     "mcp__nepse-engine__list_tables "
     "mcp__nepse-engine__get_schema "
     "mcp__nepse-engine__run_query "
-    "Read(./agents/claude_agent/**) "
-    "Write(./agents/claude_agent/**)"
+    f"Read({CLAUDE_AGENT_DIR}/**) "
+    f"Write({CLAUDE_AGENT_DIR}/**) "
+    f"Edit({CLAUDE_AGENT_DIR}/**)"
 )
 # /claude runs in the background (fire-and-follow-up, see run_claude_ondemand_bg
 # in telegram_bot.py/discord_bot.py) so the command handler never blocks on this —
 # this is a safety cap against a genuinely runaway process, not a UX timeout.
 CLAUDE_ONDEMAND_BG_TIMEOUT_SEC = int(os.environ.get("CLAUDE_ONDEMAND_BG_TIMEOUT_SEC", "1200"))
 REPO_DIR = "/home/shanvi/nepse-engine"
-CLAUDE_AGENT_DIR = os.path.join(REPO_DIR, "agents", "claude_agent")
 
 # ─── On-demand browser automation (used by /play in both bots) ───────────────
 # Curated subset of the official Playwright MCP server's tools — deliberately
@@ -675,7 +683,7 @@ async def _run_claude(
 async def run_claude_ondemand(
     prompt: str, resume_session_id: Optional[str] = None,
 ) -> tuple[bool, str, Optional[str]]:
-    """/claude — read-only DB tools, plus Read/Write scoped to agents/claude_agent/."""
+    """/claude — read-only DB tools, plus Read/Write/Edit scoped to claude_agent_reports/."""
     os.makedirs(CLAUDE_AGENT_DIR, exist_ok=True)
     return await _run_claude(
         prompt, CLAUDE_ONDEMAND_ALLOWED_TOOLS, CLAUDE_ONDEMAND_BG_TIMEOUT_SEC,

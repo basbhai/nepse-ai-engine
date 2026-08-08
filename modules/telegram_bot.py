@@ -1005,7 +1005,7 @@ async def _claude_bg_and_deliver(
 
 
 async def cmd_claude(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Admin-only: run a one-off Claude prompt with read-only DB tools + agents/claude_agent/ Read/Write."""
+    """Admin-only: run a one-off Claude prompt with read-only DB tools + claude_agent_reports/ Read/Write/Edit."""
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("🚫 Admin only command.")
         return
