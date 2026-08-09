@@ -6,7 +6,7 @@ Denies Edit/Write on any *.py or .env file that already exists on disk
 (reports, one-off scripts, CSVs, etc. — "copy files") regardless of
 extension, and allows Edit/Write on non-.py/.env existing files.
 
-WORKSPACE_DIR (/home/shanvi/claude_agent) is the bot's own scratch
+WORKSPACE_DIR (/home/shanvi/claude_agent_reports) is the bot's own scratch
 directory — it's fully exempt from the "existing .py file" restriction (the
 bot can freely create AND edit .py files there across runs, not just
 create brand-new ones), since nothing under it is live project code. .env
@@ -27,7 +27,7 @@ import os
 import re
 import sys
 
-WORKSPACE_DIR = "/home/shanvi/claude_agent"
+WORKSPACE_DIR = "/home/shanvi/claude_agent_reports"
 
 
 def deny(reason: str) -> None:

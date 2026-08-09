@@ -43,34 +43,24 @@ _circuit_breakers: dict[int, bool] = {}
 
 # ─── On-demand Claude invocation (used by /claude in both bots) ──────────────
 CLAUDE_BIN = os.environ.get("CLAUDE_BIN", os.path.expanduser("~/.local/bin/claude"))
-# File CRU (no delete — Claude Code has no Delete tool; that requires Bash,
-# which is deliberately excluded here) scoped to CLAUDE_AGENT_DIR via path
-# globs Claude Code actually enforces. Do NOT add "Bash" to this list: Bash
-# allowedTools patterns only match the command's literal text, they do not
-# confine what the process can touch on disk — since /claude is reachable
-# remotely (Telegram/Discord), that would be unscoped remote code execution,
-# not a folder-scoped sandbox.
-CLAUDE_AGENT_DIR = "/home/shanvi/claude_agent_reports"
-CLAUDE_ONDEMAND_ALLOWED_TOOLS = (
-    "mcp__nepse-engine__list_tables "
-    "mcp__nepse-engine__get_schema "
-    "mcp__nepse-engine__run_query "
-    f"Read({CLAUDE_AGENT_DIR}/**) "
-    f"Write({CLAUDE_AGENT_DIR}/**) "
-    f"Edit({CLAUDE_AGENT_DIR}/**)"
-)
-# /claude runs in the background (fire-and-follow-up, see run_claude_ondemand_bg
-# in telegram_bot.py/discord_bot.py) so the command handler never blocks on this —
-# this is a safety cap against a genuinely runaway process, not a UX timeout.
-CLAUDE_ONDEMAND_BG_TIMEOUT_SEC = int(os.environ.get("CLAUDE_ONDEMAND_BG_TIMEOUT_SEC", "1200"))
+# Runs headless with cwd forced to REPO_DIR (see _run_claude), so it always
+# picks up this project's local MCP servers from ~/.claude.json regardless of
+# which directory the bot process itself was started from.
 REPO_DIR = "/home/shanvi/nepse-engine"
+# Guard hook (modules/claude_bot_guard_hook.py) wired in via --settings in
+# _run_claude — belt-and-suspenders on top of --allowedTools for Edit/Write/
+# Bash on live .py/.env files.
+GUARD_SETTINGS_PATH = os.path.join(REPO_DIR, "modules", "claude_bot_guard_settings.json")
 
 # ─── On-demand browser automation (used by /play in both bots) ───────────────
 # Curated subset of the official Playwright MCP server's tools — deliberately
 # excludes browser_evaluate / browser_run_code_unsafe (arbitrary JS execution),
 # all cookie/localStorage/sessionStorage tools (auth-state read/write), network
 # route/mocking tools, browser_file_upload (local filesystem access), and
-# pdf/tracing/video tools (write files on the server).
+# pdf/tracing/video tools (write files on the server). Reused as-is inside
+# CLAUDE_ONDEMAND_ALLOWED_TOOLS below rather than granting /claude raw
+# "mcp__playwright" — that curated boundary still matters for a
+# remotely-triggered bot even under /claude.
 CLAUDE_PLAY_ALLOWED_TOOLS = (
     "mcp__playwright__browser_navigate "
     "mcp__playwright__browser_navigate_back "
@@ -89,6 +79,41 @@ CLAUDE_PLAY_ALLOWED_TOOLS = (
     "mcp__playwright__browser_console_messages "
     "mcp__playwright__browser_close"
 )
+
+# File CRU (no delete — Claude Code has no Delete tool; that requires Bash,
+# which is deliberately excluded here) scoped to CLAUDE_AGENT_DIR via path
+# globs Claude Code actually enforces. Do NOT add "Bash" to this list: Bash
+# allowedTools patterns only match the command's literal text, they do not
+# confine what the process can touch on disk — since /claude is reachable
+# remotely (Telegram/Discord), that would be unscoped remote code execution,
+# not a folder-scoped sandbox.
+CLAUDE_AGENT_DIR = "/home/shanvi/claude_agent_reports"
+# All four locally-configured project MCP servers (~/.claude.json →
+# projects["/home/shanvi/nepse-engine"].mcpServers), granted in full since
+# each is already self-restricted at the server level:
+#   nepse-engine  — run_query is regex-guarded to single SELECT statements
+#                   (see agents/openclaw_wait_agent/nepse_mcp_server.py)
+#   atrad-scraper — read-only market-data lookups, no writes at all
+#   docs          — docx/xlsx read/write; writes confined to
+#                   CLAUDE_AGENT_DIR or data/documents/ via _validate_write_path
+#   email         — send_email/list_emails/read_email; genuinely capable of
+#                   sending mail as this account, included because it was
+#                   explicitly asked for, same trust level as an admin
+#                   Telegram/Discord command already implies
+CLAUDE_ONDEMAND_ALLOWED_TOOLS = (
+    "mcp__nepse-engine "
+    "mcp__atrad-scraper "
+    "mcp__docs "
+    "mcp__email "
+    + CLAUDE_PLAY_ALLOWED_TOOLS + " "
+    f"Read({CLAUDE_AGENT_DIR}/**) "
+    f"Write({CLAUDE_AGENT_DIR}/**) "
+    f"Edit({CLAUDE_AGENT_DIR}/**)"
+)
+# /claude runs in the background (fire-and-follow-up, see run_claude_ondemand_bg
+# in telegram_bot.py/discord_bot.py) so the command handler never blocks on this —
+# this is a safety cap against a genuinely runaway process, not a UX timeout.
+CLAUDE_ONDEMAND_BG_TIMEOUT_SEC = int(os.environ.get("CLAUDE_ONDEMAND_BG_TIMEOUT_SEC", "1200"))
 CLAUDE_PLAY_TIMEOUT_SEC = int(os.environ.get("CLAUDE_PLAY_TIMEOUT_SEC", "240"))
 
 
@@ -615,6 +640,7 @@ async def _run_claude(
     timeout: int,
     resume_session_id: Optional[str] = None,
     add_dir: Optional[str] = None,
+    guard_mode: Optional[str] = None,
 ) -> tuple[bool, str, Optional[str]]:
     """
     Run a one-off `claude -p <prompt>` restricted to allowed_tools, in headless
@@ -629,6 +655,11 @@ async def _run_claude(
     (REPO_DIR) — --allowedTools only grants *permission*, the sandbox still
     confines actual filesystem access to cwd unless --add-dir opens it too.
 
+    guard_mode: value for CLAUDE_BOT_GUARD_MODE, read by
+    modules/claude_bot_guard_hook.py (wired in below via --settings) to decide
+    whether Bash is allowed at all — "ondemand" for /claude, None for /play.
+    Defense-in-depth on top of --allowedTools, not a substitute for it.
+
     Non-blocking: safe to await from an asyncio bot event loop.
     Returns (ok, output_or_error, session_id_or_None).
     """
@@ -641,6 +672,7 @@ async def _run_claude(
         "--model", "claude-sonnet-5",
         "--allowedTools", allowed_tools,
         "--output-format", "json",
+        "--settings", GUARD_SETTINGS_PATH,
         # --allowedTools alone pre-approves the tool, but headless -p mode still
         # has no TTY to confirm a file WRITE without this — without it, Write
         # calls silently fail with "I don't have permission" (confirmed live).
@@ -652,10 +684,17 @@ async def _run_claude(
     if resume_session_id:
         args += ["-r", resume_session_id]
 
+    env = os.environ.copy()
+    if guard_mode:
+        env["CLAUDE_BOT_GUARD_MODE"] = guard_mode
+    else:
+        env.pop("CLAUDE_BOT_GUARD_MODE", None)
+
     try:
         proc = await asyncio.create_subprocess_exec(
             *args,
             cwd=REPO_DIR,
+            env=env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -691,11 +730,13 @@ async def _run_claude(
 async def run_claude_ondemand(
     prompt: str, resume_session_id: Optional[str] = None,
 ) -> tuple[bool, str, Optional[str]]:
-    """/claude — read-only DB tools, plus Read/Write/Edit scoped to claude_agent_reports/."""
+    """/claude — all local MCP servers (nepse-engine, atrad-scraper, docs, email),
+    curated Playwright, plus Read/Write/Edit scoped to claude_agent_reports/."""
     os.makedirs(CLAUDE_AGENT_DIR, exist_ok=True)
     return await _run_claude(
         prompt, CLAUDE_ONDEMAND_ALLOWED_TOOLS, CLAUDE_ONDEMAND_BG_TIMEOUT_SEC,
         resume_session_id=resume_session_id, add_dir=CLAUDE_AGENT_DIR,
+        guard_mode="ondemand",
     )
 
 

@@ -60,7 +60,7 @@ from openpyxl.styles import Font, PatternFill
 
 from mcp.server import MCPServer
 
-WORKSPACE_DIR = Path("/home/shanvi/claude_agent")
+WORKSPACE_DIR = Path("/home/shanvi/claude_agent_reports")
 REPO_DOCS_DIR = ROOT / "data" / "documents"
 ALLOWED_WRITE_ROOTS = [WORKSPACE_DIR, REPO_DOCS_DIR]
 
@@ -154,7 +154,7 @@ def write_docx(
     font: str = "Calibri",
 ) -> dict:
     """Create a formatted .docx file. `path` must end in .docx and resolve
-    under /home/shanvi/claude_agent or data/documents/ in this repo.
+    under /home/shanvi/claude_agent_reports or data/documents/ in this repo.
 
     `title` becomes the document's Title-styled heading (optional).
     `font` sets the document-wide default font (Normal style) — use a
@@ -263,7 +263,7 @@ def read_docx(path: str) -> dict:
 @mcp.tool()
 def write_xlsx(path: str, sheets: list[dict], font: str = "Arial") -> dict:
     """Create a formatted .xlsx file. `path` must end in .xlsx and resolve
-    under /home/shanvi/claude_agent or data/documents/ in this repo.
+    under /home/shanvi/claude_agent_reports or data/documents/ in this repo.
     `font` sets the workbook-wide default font (Arial/Times New Roman —
     match the official skill's "professional font" convention).
 
