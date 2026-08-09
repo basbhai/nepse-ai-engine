@@ -108,7 +108,13 @@ CLAUDE_ONDEMAND_ALLOWED_TOOLS = (
     + CLAUDE_PLAY_ALLOWED_TOOLS + " "
     f"Read({CLAUDE_AGENT_DIR}/**) "
     f"Write({CLAUDE_AGENT_DIR}/**) "
-    f"Edit({CLAUDE_AGENT_DIR}/**)"
+    f"Edit({CLAUDE_AGENT_DIR}/**) "
+    "Skill(data-scientist) "
+    "Skill(statistical-analyst) "
+    "Skill(data-analyst) "
+    "Skill(business-intelligence) "
+    "Skill(analytics-engineer) "
+    "Skill(ml-ops-engineer)"
 )
 # /claude runs in the background (fire-and-follow-up, see run_claude_ondemand_bg
 # in telegram_bot.py/discord_bot.py) so the command handler never blocks on this —
