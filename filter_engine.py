@@ -106,6 +106,7 @@ from filter_common import (
     _get_fundamental_adj,
     _load_broker_flow_cache,
     _compute_broker_flow_adj,
+    _compute_ema_pullback_adj,
     _compute_vos_adj,
     _compute_live_adj,
     _compute_composite_score,
@@ -174,6 +175,20 @@ def _try_v2_rescue(
         ind_score_v2, primary_v2, hold_days_v2 = filter_v2.compute_indicator_score_v2(
             momentum, recent_map.get(sym, []), sector,
         )
+
+        # ── Study 5 / Study 7 — EMA20-dip / uptrend-pullback (PHASE 1/2/4, 2026-08) ──
+        ema_20  = float(ind.get("ema_20",  0) or 0)
+        ema_200 = float(ind.get("ema_200", 0) or 0)
+        if ema_20 and ema_200:
+            price_vs_ema20_pct  = round((ltp - ema_20)  / ema_20  * 100, 2)
+            price_vs_ema200_pct = round((ltp - ema_200) / ema_200 * 100, 2)
+            ema20_dip_fired        = filter_v2._compute_ema20_dip(price_vs_ema20_pct, price_vs_ema200_pct)
+            uptrend_pullback_fired = filter_v2._compute_uptrend_pullback(price_vs_ema20_pct, price_vs_ema200_pct)
+        else:
+            price_vs_ema20_pct = price_vs_ema200_pct = 0.0
+            ema20_dip_fired = uptrend_pullback_fired = False
+        ema_pullback_adj = _compute_ema_pullback_adj(ema20_dip_fired, uptrend_pullback_fired)
+
         composite_v2 = _compute_composite_score(
             indicator_score=ind_score_v2, sector_mult=sect_mult,
             candle_bonus=c_bonus, cstar_signal=cstar,
@@ -181,6 +196,7 @@ def _try_v2_rescue(
             geo_combined=ctx["combined_geo"], ipo_drain=ctx["ipo_drain"],
             fundamental_adj=fund_adj, vos_adj=vos_adj,
             broker_flow_adj=broker_flow_adj, live_adj=live_adj,
+            ema_pullback_adj=ema_pullback_adj,
             min_conf_score=ctx.get("min_conf_score", MIN_CONF_SCORE),
         )
 
@@ -253,6 +269,12 @@ def _try_v2_rescue(
             composite_score_v2 = composite_v2,
             primary_signal_v2  = primary_v2,
             suggested_hold_v2  = hold_days_v2,
+
+            ema20_dip_fired        = ema20_dip_fired,
+            uptrend_pullback_fired = uptrend_pullback_fired,
+            price_vs_ema20_pct     = price_vs_ema20_pct,
+            price_vs_ema200_pct    = price_vs_ema200_pct,
+            ema_pullback_adj       = ema_pullback_adj,
 
             vwap_dev        = float(getattr(price_row, "vwap_dev",       0) or 0),
             bid_ask_ratio   = float(getattr(price_row, "bid_ask_ratio",  0) or 0),
@@ -737,11 +759,25 @@ def run_filter(
         composite_v2  = 0.0
         primary_v2    = ""
         hold_days_v2  = 0
+        price_vs_ema20_pct = price_vs_ema200_pct = 0.0
+        ema20_dip_fired = uptrend_pullback_fired = False
+        ema_pullback_adj = 0.0
         if v2_enabled:
             try:
                 ind_score_v2, primary_v2, hold_days_v2 = filter_v2.compute_indicator_score_v2(
                     momentum, recent_map.get(sym, []), sector,
                 )
+
+                # ── Study 5 / Study 7 — EMA20-dip / uptrend-pullback (PHASE 1/2/4, 2026-08) ──
+                ema_20  = float(ind.get("ema_20",  0) or 0)
+                ema_200 = float(ind.get("ema_200", 0) or 0)
+                if ema_20 and ema_200:
+                    price_vs_ema20_pct  = round((ltp - ema_20)  / ema_20  * 100, 2)
+                    price_vs_ema200_pct = round((ltp - ema_200) / ema_200 * 100, 2)
+                    ema20_dip_fired        = filter_v2._compute_ema20_dip(price_vs_ema20_pct, price_vs_ema200_pct)
+                    uptrend_pullback_fired = filter_v2._compute_uptrend_pullback(price_vs_ema20_pct, price_vs_ema200_pct)
+                ema_pullback_adj = _compute_ema_pullback_adj(ema20_dip_fired, uptrend_pullback_fired)
+
                 composite_v2 = _compute_composite_score(
                     indicator_score=ind_score_v2, sector_mult=sect_mult,
                     candle_bonus=c_bonus, cstar_signal=cstar,
@@ -749,6 +785,7 @@ def run_filter(
                     geo_combined=ctx["combined_geo"], ipo_drain=ctx["ipo_drain"],
                     fundamental_adj=fund_adj, vos_adj=vos_adj,
                     broker_flow_adj=broker_flow_adj, live_adj=live_adj,
+                    ema_pullback_adj=ema_pullback_adj,
                     min_conf_score=ctx.get("min_conf_score", MIN_CONF_SCORE),
                 )
             except Exception as exc:
@@ -821,6 +858,12 @@ def run_filter(
             composite_score_v2 = composite_v2,
             primary_signal_v2  = primary_v2,
             suggested_hold_v2  = hold_days_v2,
+
+            ema20_dip_fired        = ema20_dip_fired,
+            uptrend_pullback_fired = uptrend_pullback_fired,
+            price_vs_ema20_pct     = price_vs_ema20_pct,
+            price_vs_ema200_pct    = price_vs_ema200_pct,
+            ema_pullback_adj       = ema_pullback_adj,
 
             vwap_dev        = float(getattr(price_row, "vwap_dev",       0) or 0),
             bid_ask_ratio   = float(getattr(price_row, "bid_ask_ratio",  0) or 0),
@@ -916,15 +959,21 @@ def _log_filter_candidates(candidates: list, date: str) -> None:
                 """
                 INSERT INTO filter_candidates_log
                     (date, symbol, sector, composite_score, primary_signal,
-                     tech_score, macro_score, market_state, engine_source, last_seen)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, now())
+                     tech_score, macro_score, market_state, engine_source, last_seen,
+                     ema20_dip_fired, uptrend_pullback_fired,
+                     price_vs_ema20_pct, price_vs_ema200_pct)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, now(), %s, %s, %s, %s)
                 ON CONFLICT (symbol, date) DO UPDATE SET
-                    pass_count      = filter_candidates_log.pass_count + 1,
-                    last_seen       = now(),
-                    composite_score = EXCLUDED.composite_score,
-                    tech_score      = EXCLUDED.tech_score,
-                    macro_score     = EXCLUDED.macro_score,
-                    engine_source   = EXCLUDED.engine_source
+                    pass_count              = filter_candidates_log.pass_count + 1,
+                    last_seen               = now(),
+                    composite_score         = EXCLUDED.composite_score,
+                    tech_score              = EXCLUDED.tech_score,
+                    macro_score             = EXCLUDED.macro_score,
+                    engine_source           = EXCLUDED.engine_source,
+                    ema20_dip_fired         = EXCLUDED.ema20_dip_fired,
+                    uptrend_pullback_fired  = EXCLUDED.uptrend_pullback_fired,
+                    price_vs_ema20_pct      = EXCLUDED.price_vs_ema20_pct,
+                    price_vs_ema200_pct     = EXCLUDED.price_vs_ema200_pct
                 """,
                 (
                     date,
@@ -936,6 +985,10 @@ def _log_filter_candidates(candidates: list, date: str) -> None:
                     float(c.nepal_score),
                     c.market_state,
                     c.engine_source,
+                    "true" if c.ema20_dip_fired else "false",
+                    "true" if c.uptrend_pullback_fired else "false",
+                    str(c.price_vs_ema20_pct),
+                    str(c.price_vs_ema200_pct),
                 ),
             )
         logger.info("filter_candidates_log: wrote %d candidates", len(candidates))
@@ -969,6 +1022,11 @@ def format_candidate_for_gemini(c: FilterCandidate) -> str:
     engine_str = f" | ENGINE:{c.engine_source}"
     if c.co_flagged_by:
         engine_str += f" [{c.co_flagged_by}]"
+    ema_pullback_str = ""
+    if c.uptrend_pullback_fired:
+        ema_pullback_str = f" | UPTREND_PULLBACK(S7) vs20:{c.price_vs_ema20_pct:+.2f}% vs200:{c.price_vs_ema200_pct:+.2f}%"
+    elif c.ema20_dip_fired:
+        ema_pullback_str = f" | EMA20_DIP(S5) vs20:{c.price_vs_ema20_pct:+.2f}% vs200:{c.price_vs_ema200_pct:+.2f}%"
     return (
         f"SYM:{c.symbol} SEC:{c.sector} LTP:{c.ltp:.2f} CHG:{c.change_pct:+.2f}% "
         f"VOL:{c.volume:,} SCORE:{c.composite_score:.1f} TECH:{c.tech_score} "
@@ -976,7 +1034,7 @@ def format_candidate_for_gemini(c: FilterCandidate) -> str:
         f"BB:{c.bb_signal}[{c.bb_pct_b:.2f}] EMA:{c.ema_trend} "
         f"OBV:{c.obv_trend} ATR%:{c.atr_pct:.1f} CONF:{c.conf_score:.0f} "
         f"CANDLE:{candle} CSTAR:{cstar} HOLD:{c.suggested_hold}d SIG:{c.primary_signal}"
-    ) + momentum_str + engine_str
+    ) + momentum_str + engine_str + ema_pullback_str
 
 
 # ══════════════════════════════════════════════════════════════════════════════

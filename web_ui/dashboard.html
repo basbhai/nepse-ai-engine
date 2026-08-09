@@ -2529,6 +2529,49 @@
             <span class="set-status" id="status-FILTER_V2_GATE_RESCUE"></span>
           </div>
         </div>
+
+        <!-- Study 5/7 — EMA Pullback Patterns (2026-08, inert until enabled) -->
+        <div style="border-top: 1px solid var(--border); margin-top: 12px; padding-top: 12px;">
+          <div class="set-row">
+            <div class="set-label">EMA Pullback Patterns (Study 5/7)</div>
+          </div>
+          <div class="set-row">
+            <div class="set-label">EMA20-Dip (Study 5)</div>
+            <label class="set-toggle">
+              <input type="checkbox" id="set-EMA_PULLBACK_ENABLED"
+                onchange="applySetting('EMA_PULLBACK_ENABLED', this.checked ? 'true' : 'false')">
+              <span class="set-slider"></span>
+            </label>
+            <span class="set-hint">58.0% win rate ex-2025 (n=5,705) — off contributes 0 to score</span>
+            <span class="set-status" id="status-EMA_PULLBACK_ENABLED"></span>
+          </div>
+          <div class="set-row">
+            <div class="set-label">EMA20-Dip Weight</div>
+            <input type="number" class="set-input-sm" id="set-EMA_PULLBACK_WEIGHT" min="0" max="20" step="0.5"
+              onblur="applySetting('EMA_PULLBACK_WEIGHT', this.value)"
+              onkeydown="if(event.key==='Enter') applySetting('EMA_PULLBACK_WEIGHT', this.value)">
+            <span class="set-hint">Composite score bonus when ema20_dip_fired (points)</span>
+            <span class="set-status" id="status-EMA_PULLBACK_WEIGHT"></span>
+          </div>
+          <div class="set-row">
+            <div class="set-label">Uptrend-Pullback (Study 7)</div>
+            <label class="set-toggle">
+              <input type="checkbox" id="set-UPTREND_PULLBACK_ENABLED"
+                onchange="applySetting('UPTREND_PULLBACK_ENABLED', this.checked ? 'true' : 'false')">
+              <span class="set-slider"></span>
+            </label>
+            <span class="set-hint">59.6% win rate ex-2025 (n=995), most crisis-resilient finding — off contributes 0 to score</span>
+            <span class="set-status" id="status-UPTREND_PULLBACK_ENABLED"></span>
+          </div>
+          <div class="set-row">
+            <div class="set-label">Uptrend-Pullback Weight</div>
+            <input type="number" class="set-input-sm" id="set-UPTREND_PULLBACK_WEIGHT" min="0" max="20" step="0.5"
+              onblur="applySetting('UPTREND_PULLBACK_WEIGHT', this.value)"
+              onkeydown="if(event.key==='Enter') applySetting('UPTREND_PULLBACK_WEIGHT', this.value)">
+            <span class="set-hint">Composite score bonus when uptrend_pullback_fired (points) — takes precedence over EMA20-dip when both fire</span>
+            <span class="set-status" id="status-UPTREND_PULLBACK_WEIGHT"></span>
+          </div>
+        </div>
       </div>
 
       <!-- Claude Analyst -->
@@ -4323,6 +4366,11 @@
         _setToggle('TELEGRAM_ENABLED',      d.TELEGRAM_ENABLED);
         _setToggle('COUNCIL_USE_FREE_STACK', d.COUNCIL_USE_FREE_STACK);
         _updateCouncilStackBadge(String(d.COUNCIL_USE_FREE_STACK || '').toLowerCase() === 'true');
+
+        _setToggle('EMA_PULLBACK_ENABLED',      d.EMA_PULLBACK_ENABLED);
+        _setToggle('UPTREND_PULLBACK_ENABLED',  d.UPTREND_PULLBACK_ENABLED);
+        _setInput('EMA_PULLBACK_WEIGHT',        d.EMA_PULLBACK_WEIGHT);
+        _setInput('UPTREND_PULLBACK_WEIGHT',    d.UPTREND_PULLBACK_WEIGHT);
 
         _setInput('FILTER_V2_TOP_N',    d.FILTER_V2_TOP_N);
         _setInput('LOAD_SHEDDING_HRS',  d.LOAD_SHEDDING_HRS);

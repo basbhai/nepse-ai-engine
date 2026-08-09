@@ -244,6 +244,49 @@ def _score_sma_v2(recent_rows: list[dict]) -> float:
     return _compute_ema_progression(recent_rows)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# PHASE 2 ADDITION (2026-08) — Study 5 (EMA20-dip) / Study 7 (uptrend-pullback)
+#
+# Pure functions only: no DB access, no dependency on another engine's return
+# value. Inputs are the already-computed price-vs-EMA percentages; callers
+# (filter_engine.py) compute those from ltp/ema_20/ema_200 and decide overlap
+# precedence at the scoring call site — not baked in here as a shared-state
+# guard (the exact thing that broke filter_v3.py's eligibility check).
+#
+# Thresholds are 6-year backtested (n=11,339 / n=2,739), validated ex-2025 too.
+# ══════════════════════════════════════════════════════════════════════════════
+
+EMA20_DIP_MAX_PRICE_VS_EMA20_PCT    = -4.93   # price must be <= this % below EMA20
+EMA20_DIP_MIN_PRICE_VS_EMA200_PCT   = -8.60   # price must stay above this % below EMA200
+
+UPTREND_PULLBACK_MIN_PRICE_VS_EMA200_PCT = 11.87   # confirmed uptrend: price this % above EMA200
+UPTREND_PULLBACK_MAX_PRICE_VS_EMA20_PCT  = -5.41   # sharp dip within it: price this % below EMA20
+
+
+def _compute_ema20_dip(price_vs_ema20_pct: float, price_vs_ema200_pct: float) -> bool:
+    """
+    Study 5: price >=4.93% below its 20-day EMA while still within 8.6% of
+    its 200-day EMA. 58.6% win rate over 6 years (n=11,339); 58.0% ex-2025.
+    """
+    return (
+        price_vs_ema20_pct <= EMA20_DIP_MAX_PRICE_VS_EMA20_PCT
+        and price_vs_ema200_pct > EMA20_DIP_MIN_PRICE_VS_EMA200_PCT
+    )
+
+
+def _compute_uptrend_pullback(price_vs_ema20_pct: float, price_vs_ema200_pct: float) -> bool:
+    """
+    Study 7: price >11.87% above its 200-day EMA (confirmed uptrend) and
+    >=5.41% below its 20-day EMA (sharp dip within it). 71.3% win rate over
+    6 years (n=2,739); 59.6% ex-2025 — strongest, most crisis-resilient
+    finding of the research arc.
+    """
+    return (
+        price_vs_ema200_pct > UPTREND_PULLBACK_MIN_PRICE_VS_EMA200_PCT
+        and price_vs_ema20_pct <= UPTREND_PULLBACK_MAX_PRICE_VS_EMA20_PCT
+    )
+
+
 def compute_indicator_score_v2(
     momentum:     dict,
     recent_rows:  list[dict],

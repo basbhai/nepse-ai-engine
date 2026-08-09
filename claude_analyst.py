@@ -970,6 +970,35 @@ def _build_prompt(
         "  bounce_failed=YES → AVOID regardless of other indicators. Dead-cat trap.\n"
     )
 
+    # ── Study 5 / Study 7 — EMA pullback context (PHASE 3, 2026-08) ────────────
+    # Shown for every candidate regardless of whether the dashboard weight is
+    # on — informational only here; the composite-score contribution is 0
+    # until EMA_PULLBACK_ENABLED / UPTREND_PULLBACK_ENABLED are flipped.
+    _price_vs_ema20_pct     = float(getattr(flag, "price_vs_ema20_pct",  0.0) or 0.0)
+    _price_vs_ema200_pct    = float(getattr(flag, "price_vs_ema200_pct", 0.0) or 0.0)
+    _ema20_dip_fired        = bool(getattr(flag, "ema20_dip_fired",        False))
+    _uptrend_pullback_fired = bool(getattr(flag, "uptrend_pullback_fired", False))
+    if _ema20_dip_fired or _uptrend_pullback_fired:
+        _ema_pullback_note = (
+            "UPTREND-PULLBACK (Study 7): confirmed uptrend with a sharp dip within it — "
+            "71.3% 6yr win rate (n=2,739), 59.6% ex-2025, most crisis-resilient finding."
+            if _uptrend_pullback_fired else
+            "EMA20-DIP (Study 5): price stretched below its 20-day EMA while still near "
+            "its 200-day trend — 58.6% 6yr win rate (n=11,339), 58.0% ex-2025."
+        )
+    else:
+        _ema_pullback_note = "Neither pattern fired."
+    ema_pullback_block = (
+        "\n═══════════════════════════════════════════════\n"
+        "EMA PULLBACK PATTERNS (Study 5 / Study 7, backtested)\n"
+        "═══════════════════════════════════════════════\n"
+        f"Price vs 20-day EMA:  {_price_vs_ema20_pct:+.2f}%\n"
+        f"Price vs 200-day EMA: {_price_vs_ema200_pct:+.2f}%\n"
+        f"EMA20-dip fired:        {'YES' if _ema20_dip_fired else 'No'}\n"
+        f"Uptrend-pullback fired: {'YES' if _uptrend_pullback_fired else 'No'}\n"
+        f"{_ema_pullback_note}\n"
+    )
+
     # ── Intraday breadth context ──────────────────────────────────────────────
     try:
         from sheets import get_intraday_breadth
@@ -1124,6 +1153,7 @@ Trading Day:     {day_context}
 Herding Check:   {herding_alert}
 {event_ctx_section}
 {momentum_block}
+{ema_pullback_block}
 ==============================================
 LEARNING HUB LESSONS (most relevant first)
 ==============================================

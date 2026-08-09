@@ -186,6 +186,15 @@ class FilterCandidate:
     fundamental_reason: str   = ""
     broker_flow_adj:  float = 0.0
 
+    # Study 5 (EMA20-dip) / Study 7 (uptrend-pullback) — v2 only, inert until
+    # dashboard-enabled (see _compute_ema_pullback_adj). v1 candidates keep
+    # these at their defaults since v1 never computes them.
+    ema20_dip_fired:         bool  = False
+    uptrend_pullback_fired:  bool  = False
+    price_vs_ema20_pct:      float = 0.0
+    price_vs_ema200_pct:     float = 0.0
+    ema_pullback_adj:        float = 0.0
+
     # Dual-engine (v1/v2) arbitration fields
     engine_source:      str   = "v1"    # "v1" | "v2" | "BOTH"
     indicator_score_v2: float = 0.0
@@ -401,6 +410,11 @@ def _load_recent_indicators(symbols: list[str], today: str, lookback: int = 7) -
     snapshot. Purely additive — v1's _compute_momentum() never reads this
     key, so this does not change v1 behavior. Flagging here since this is
     the one line in Phase 1 that touches a query rather than just moving code.
+
+    PHASE 1 ADDITION (2026-08): ema_20, ema_200 added to the SELECT so v2
+    can compute the EMA20-dip / uptrend-pullback features (price vs. its
+    own EMAs) without a second query. Purely additive — no existing reader
+    of this dict's rows breaks from two new keys being present.
     """
     if not symbols:
         return {}
@@ -409,7 +423,7 @@ def _load_recent_indicators(symbols: list[str], today: str, lookback: int = 7) -
         placeholders = ",".join(["%s"] * len(symbols))
         rows = run_raw_sql(
             f"""
-            SELECT symbol, date, rsi_14, macd_histogram, bb_pct_b, obv_trend, ema_trend
+            SELECT symbol, date, rsi_14, macd_histogram, bb_pct_b, obv_trend, ema_trend, ema_20, ema_200
             FROM indicators
             WHERE symbol IN ({placeholders})
               AND date < %s
@@ -1311,6 +1325,37 @@ def _compute_broker_flow_adj(sym: str, flow_cache: dict, holdings_cache: dict) -
     return max(0.0, adj)
 
 
+def _compute_ema_pullback_adj(ema20_dip_fired: bool, uptrend_pullback_fired: bool) -> float:
+    """
+    PHASE 4 ADDITION (2026-08) — Study 5 / Study 7 composite score bonus.
+    Same settings-driven pattern as _compute_broker_flow_adj(): bonus values
+    (and whether each signal is even active) come from the settings table,
+    defaulting to 0/disabled so this contributes nothing until deliberately
+    flipped on the dashboard.
+
+    Overlap precedence: uptrend_pullback wins when both fire on the same
+    candidate — it's the stronger, more selective, more crisis-resilient
+    finding (Study 7 vs Study 5), and both facts stem from the same
+    underlying "price above its long-term trend" condition, so summing
+    would double-count rather than add independent signal.
+    """
+    try:
+        from sheets import get_setting
+        uptrend_enabled = str(get_setting("UPTREND_PULLBACK_ENABLED", "false")).strip().lower() == "true"
+        uptrend_weight  = float(get_setting("UPTREND_PULLBACK_WEIGHT", "0"))
+        dip_enabled     = str(get_setting("EMA_PULLBACK_ENABLED",      "false")).strip().lower() == "true"
+        dip_weight      = float(get_setting("EMA_PULLBACK_WEIGHT",     "0"))
+    except Exception:
+        uptrend_enabled, uptrend_weight = False, 0.0
+        dip_enabled,     dip_weight     = False, 0.0
+
+    if uptrend_pullback_fired and uptrend_enabled:
+        return uptrend_weight
+    if ema20_dip_fired and dip_enabled:
+        return dip_weight
+    return 0.0
+
+
 def _compute_vos_adj(vos: float) -> float:
     """
     Score adjustment based on volume/outstanding-shares ratio.
@@ -1415,6 +1460,7 @@ def _compute_composite_score(
     vos_adj:          float = 0.0,   # volume/OS ratio adjustment
     broker_flow_adj:  float = 0.0,   # broker accumulation/distribution bonus
     live_adj:         float = 0.0,   # intraday live signal (vwap_dev, bid_ask_ratio, dpr_proximity)
+    ema_pullback_adj: float = 0.0,   # Study 5/7 EMA20-dip / uptrend-pullback bonus — 0 until dashboard-enabled
     min_conf_score:   float = MIN_CONF_SCORE,  # dynamic — read from settings via ctx
 ) -> float:
     """
@@ -1428,6 +1474,7 @@ def _compute_composite_score(
     - ipo_pen = -3 if IPO drain active
     + fund_adj= -3 to +3 (fundamental quality, sector-aware)
     + live_adj= -1.5 to +2.0 (intraday: vwap_dev, bid_ask_ratio, dpr_proximity)
+    + ema_pullback_adj = 0 by default (Study 5/7, dashboard-gated)
     """
     base       = indicator_score * sector_mult
     conf_bonus = min((conf_score - min_conf_score) / 10, 5.0) if conf_score > min_conf_score else 0.0
@@ -1448,6 +1495,7 @@ def _compute_composite_score(
  
     return round(
         max(0.0, base + candle_bonus + cstar_b + conf_bonus
-                 + geo_adj + ipo_pen + fundamental_adj + vos_adj + broker_flow_adj + live_adj),
+                 + geo_adj + ipo_pen + fundamental_adj + vos_adj + broker_flow_adj + live_adj
+                 + ema_pullback_adj),
         2,
     )
