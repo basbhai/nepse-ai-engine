@@ -1605,6 +1605,29 @@ model wait_parse_log {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// AI CALL LOG — full request/response for every OpenRouter call (Claude, GPT,
+// DeepSeek). Written by AI/openrouter.py on every ask_claude/ask_gpt/
+// ask_deepseek call, success or failure — one row per call, for audit/review.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model ai_call_log {
+  id             Serial
+  called_at      Text!        // YYYY-MM-DD HH:MM:SS NST
+  model          Text!        // e.g. anthropic/claude-sonnet-4-6
+  context        Text!        // caller tag, e.g. claude_analyst, learning_hub
+  symbol         Text         // candidate symbol if applicable, else blank
+  system_prompt  Text         // full system prompt sent
+  user_prompt    Text         // full user prompt sent
+  response_raw   Text         // full raw response text (pre-parse)
+  success        Text         // "true"/"false"
+  error_msg      Text         // populated only on failure
+  latency_ms     Text
+
+  @@index([context])
+  @@index([symbol])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // BROKER FLOW (daily accumulation / distribution per symbol)
 // Populated by modules/broker_flow_scraper.py at 9 PM NST.
 // No backfill — forward only.

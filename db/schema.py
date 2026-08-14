@@ -57,6 +57,7 @@ TABS: dict[str, str] = {
     "pattern_validation_log": "pattern_validation_log",
     "agent_trace": "agent_trace",
     "wait_parse_log": "wait_parse_log",
+    "ai_call_log": "ai_call_log",
     "broker_flow": "broker_flow",
     "broker_holdings": "broker_holdings",
     "filter_candidates_log": "filter_candidates_log",
@@ -1614,6 +1615,27 @@ TABLE_DDL: dict[str, str] = {
         ON "wait_parse_log" (market_log_id);
     """,
 
+    "ai_call_log": """
+    CREATE TABLE IF NOT EXISTS "ai_call_log" (
+        id SERIAL PRIMARY KEY,
+        called_at TEXT NOT NULL,
+        model TEXT NOT NULL,
+        context TEXT NOT NULL,
+        symbol TEXT,
+        system_prompt TEXT,
+        user_prompt TEXT,
+        response_raw TEXT,
+        success TEXT,
+        error_msg TEXT,
+        latency_ms TEXT,
+        inserted_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS ix_ai_call_log_context
+        ON "ai_call_log" (context);
+    CREATE INDEX IF NOT EXISTS ix_ai_call_log_symbol
+        ON "ai_call_log" (symbol);
+    """,
+
     "broker_flow": """
     CREATE TABLE IF NOT EXISTS "broker_flow" (
         id SERIAL PRIMARY KEY,
@@ -1816,8 +1838,9 @@ TABLE_COLUMNS: dict[str, list[str]] = {
     "pattern_validation_log": ["id", "event_type", "event_date", "event_cluster_id", "pattern_id", "lag_start", "lag_end", "magnitude_applied", "market_regime", "nepal_crisis_score_at_detection", "predicted_date_start", "predicted_date_end", "actual_nepse_pct", "magnitude_error", "outcome", "co_occurrence_count", "escalated_from", "scored_by", "scored_at", "inserted_at"],
     "agent_trace": ["cycle_ts", "step", "tool", "request_args", "response", "escalated", "decision", "elapsed_ms", "created_at"],
     "wait_parse_log": ["market_log_id", "parsed_at", "raw_condition", "parsed_json", "model_used"],
+    "ai_call_log": ["called_at", "model", "context", "symbol", "system_prompt", "user_prompt", "response_raw", "success", "error_msg", "latency_ms"],
     "broker_flow": ["date", "symbol", "name", "acc_broker_count_1d", "acc_amount_1d", "acc_qty_1d", "acc_top_broker_1d", "acc_top_broker_pct_1d", "dist_broker_count_1d", "dist_amount_1d", "dist_qty_1d", "dist_top_broker_1d", "dist_top_broker_pct_1d", "net_flow_1d", "flow_bias_1d", "acc_broker_count_1w", "acc_amount_1w", "acc_qty_1w", "acc_top_broker_1w", "acc_top_broker_pct_1w", "dist_broker_count_1w", "dist_amount_1w", "dist_qty_1w", "dist_top_broker_1w", "dist_top_broker_pct_1w", "net_flow_1w", "flow_bias_1w", "acc_brokers_1d_json", "dist_brokers_1d_json", "acc_brokers_1w_json", "created_at"],
     "broker_holdings": ["date", "symbol", "name", "total_involved_brokers", "top3_holding_pct", "total_qty", "hold_qty", "hold_pct", "public_trade_pct", "stealth_score", "ltp", "change", "change_pct", "top_broker_1_name", "top_broker_1_code", "top_broker_1_hold", "top_broker_1_pct", "top_broker_2_name", "top_broker_2_code", "top_broker_2_hold", "top_broker_2_pct", "top_broker_3_name", "top_broker_3_code", "top_broker_3_hold", "top_broker_3_pct", "top_brokers_json", "created_at"],
-    "filter_candidates_log": ["date", "symbol", "sector", "composite_score", "primary_signal", "tech_score", "macro_score", "market_state", "pass_count", "last_seen", "created_at", "engine_source", "ema20_dip_fired", "uptrend_pullback_fired", "price_vs_ema20_pct", "price_vs_ema200_pct"],
+    "filter_candidates_log": ["date", "symbol", "sector", "composite_score", "primary_signal", "tech_score", "macro_score", "market_state", "pass_count", "last_seen", "created_at", "engine_source"],
     "stealth_signals": ["symbol", "broker_id", "broker_name", "signal_date", "streak_days", "vol_ratio", "price_range", "entry_price", "status", "trigger_date", "trigger_price", "trigger_type", "trigger_vol_ratio", "close_date", "close_price", "return_pct", "window_days", "vol_thresh", "price_thresh", "streak_thresh", "created_at", "updated_at"],
 }

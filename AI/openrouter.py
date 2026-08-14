@@ -87,6 +87,42 @@ def _alert_admin(context: str, last_error: str) -> None:
         log.error("Failed to send Telegram alert: %s", e)
 
 
+def _log_ai_call(
+    model: str,
+    context: str,
+    system_prompt: str,
+    user_prompt: str,
+    response_raw: Optional[str],
+    success: bool,
+    error_msg: str,
+    latency_ms: float,
+    symbol: str = "",
+) -> None:
+    """
+    Persist full request/response for every OpenRouter call to ai_call_log —
+    for future audit/review. Best-effort: never raises, never blocks the
+    caller on a logging failure.
+    """
+    try:
+        from datetime import datetime
+        from config import NST
+        from sheets import write_row
+        write_row("ai_call_log", {
+            "called_at":     datetime.now(NST).strftime("%Y-%m-%d %H:%M:%S"),
+            "model":         model,
+            "context":       context,
+            "symbol":        symbol,
+            "system_prompt": system_prompt or "",
+            "user_prompt":   user_prompt or "",
+            "response_raw":  response_raw or "",
+            "success":       "true" if success else "false",
+            "error_msg":     error_msg or "",
+            "latency_ms":    f"{latency_ms:.0f}",
+        })
+    except Exception as exc:
+        log.warning("[%s] _log_ai_call failed (non-fatal): %s", context, exc)
+
+
 def _strip_fences(raw: str) -> str:
     """Strip markdown code fences models sometimes add."""
     if raw.startswith("```"):
@@ -268,6 +304,7 @@ def ask_claude(
     max_tokens: int = 1200,
     temperature: float = 0.2,
     context: str = "claude",
+    symbol: str = "",
 ) -> Optional[dict]:
     """
     Call Claude Sonnet via OpenRouter. Returns parsed JSON dict or None.
@@ -281,6 +318,8 @@ def ask_claude(
         max_tokens:  Max tokens (default 1200 — sufficient for signal JSON).
         temperature: Sampling temperature (default 0.2).
         context:     Caller name — shown in logs and Telegram alerts.
+        symbol:      Candidate symbol, if applicable — recorded in ai_call_log
+                     for cross-referencing against market_log/trade_journal.
 
     Returns:
         Parsed dict, or None if all retries fail or JSON is invalid.
@@ -300,6 +339,7 @@ def ask_claude(
         {"role": "user",   "content": prompt},
     ]
 
+    t0 = time.monotonic()
     raw = _call(
         model       = CLAUDE_MODEL,
         messages    = messages,
@@ -307,14 +347,23 @@ def ask_claude(
         temperature = temperature,
         context     = context,
     )
+    latency_ms = (time.monotonic() - t0) * 1000
+
     if raw is None:
+        _log_ai_call(CLAUDE_MODEL, context, system_prompt, prompt, None,
+                      False, "all retries failed / empty response", latency_ms, symbol)
         return None
 
     raw = _strip_fences(raw)
     try:
-        return json.loads(raw)
+        parsed = json.loads(raw)
+        _log_ai_call(CLAUDE_MODEL, context, system_prompt, prompt, raw,
+                      True, "", latency_ms, symbol)
+        return parsed
     except json.JSONDecodeError as exc:
         log.error("[%s] Claude returned invalid JSON: %s | raw: %s", context, exc, raw[:300])
+        _log_ai_call(CLAUDE_MODEL, context, system_prompt, prompt, raw,
+                      False, f"invalid JSON: {exc}", latency_ms, symbol)
         return None
 
 
@@ -350,13 +399,19 @@ def ask_gpt(
         {"role": "user",   "content": prompt},
     ]
 
-    return _call(
+    t0 = time.monotonic()
+    raw = _call(
         model       = GPT_MODEL,
         messages    = messages,
         max_tokens  = max_tokens,
         temperature = temperature,
         context     = context,
     )
+    latency_ms = (time.monotonic() - t0) * 1000
+    _log_ai_call(GPT_MODEL, context, system, prompt, raw,
+                  raw is not None, "" if raw is not None else "all retries failed / empty response",
+                  latency_ms)
+    return raw
 
 
 def ask_deepseek(
@@ -389,6 +444,7 @@ def ask_deepseek(
         {"role": "user", "content": prompt},
     ]
 
+    t0 = time.monotonic()
     raw = _call(
         model       = DEEPSEEK_MODEL,
         messages    = messages,
@@ -397,14 +453,22 @@ def ask_deepseek(
         context     = context,
         extra_body  = {"reasoning": {"enabled": True}},
     )
+    latency_ms = (time.monotonic() - t0) * 1000
+
     if raw is None:
+        _log_ai_call(DEEPSEEK_MODEL, context, "", prompt, None,
+                      False, "all retries failed / empty response", latency_ms)
         return None
 
     raw = _strip_fences(raw)
     try:
-        return json.loads(raw)
+        parsed = json.loads(raw)
+        _log_ai_call(DEEPSEEK_MODEL, context, "", prompt, raw, True, "", latency_ms)
+        return parsed
     except json.JSONDecodeError as exc:
         log.error("[%s] DeepSeek returned invalid JSON: %s | raw: %s", context, exc, raw[:300])
+        _log_ai_call(DEEPSEEK_MODEL, context, "", prompt, raw,
+                      False, f"invalid JSON: {exc}", latency_ms)
         return None
 
 
