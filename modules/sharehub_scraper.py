@@ -100,15 +100,19 @@ SYMBOL_TO_ID = {
 
 def get_trading_days(from_date: date, to_date: date) -> list[date]:
     """
-    Generate all potential trading days (Sun–Thu) between two dates.
+    Generate all potential trading days between two dates, per
+    calendar_guard.TRADING_DAYS (dashboard-controllable via SETTINGS[Trading_Days],
+    defaults to Mon-Fri — NEPSE's schedule has changed more than once in 2026,
+    this used to be a hardcoded Sun-Thu set here that drifted out of sync when
+    calendar_guard was updated and this file wasn't).
     We don't filter holidays here — the API will return empty for holidays.
     """
+    from calendar_guard import TRADING_DAYS
+
     days = []
     current = from_date
     while current <= to_date:
-        # weekday(): Mon=0 ... Sun=6
-        # Trading days: Sun=6, Mon=0, Tue=1, Wed=2, Thu=3
-        if current.weekday() in (6, 0, 1, 2, 3):
+        if current.weekday() in TRADING_DAYS:
             days.append(current)
         current += timedelta(days=1)
     return days

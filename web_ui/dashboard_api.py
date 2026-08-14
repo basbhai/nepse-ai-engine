@@ -1355,6 +1355,7 @@ _SETTINGS_WHITELIST = {
     "COUNCIL_USE_FREE_STACK",
     "EMA_PULLBACK_ENABLED", "EMA_PULLBACK_WEIGHT",
     "UPTREND_PULLBACK_ENABLED", "UPTREND_PULLBACK_WEIGHT",
+    "Trading_Days",
 }
 
 _SETTINGS_DEFAULTS: dict[str, str] = {
@@ -1381,6 +1382,7 @@ _SETTINGS_DEFAULTS: dict[str, str] = {
     "EMA_PULLBACK_WEIGHT":      "0",
     "UPTREND_PULLBACK_ENABLED": "false",
     "UPTREND_PULLBACK_WEIGHT":  "0",
+    "Trading_Days":             "MON,TUE,WED,THU,FRI",
 }
 
 

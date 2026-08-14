@@ -7,7 +7,14 @@ Purpose : Determine if NEPSE is currently open for trading.
           If is_open() returns False, the workflow exits immediately.
 
 Nepal Standard Time : UTC+5:45  (non-standard offset — handled manually)
-Market hours        : Sunday–Thursday, 10:45 AM – 3:00 PM NST
+Market hours        : Monday–Friday, 10:45 AM – 3:00 PM NST (see TRADING_DAYS
+                      below — NEPSE has changed its trading week more than
+                      once in 2026; dashboard-controllable to avoid another
+                      multi-file drift when it changes again)
+Trading days source : SETTINGS tab key: Trading_Days
+                      Format: "MON,TUE,WED,THU,FRI" (comma-separated, any
+                      case/order). Falls back to the Mon-Fri default below
+                      if unset, empty, or unparseable — never blocks on it.
 Holiday source      : Two-layer system:
                         Layer 1 — Hardcoded FY 2082/83 BS gazette list
                         Layer 2 — SETTINGS tab key: Is_Holiday
@@ -70,12 +77,101 @@ def today_nst() -> date:
 
 # Python weekday(): Monday=0, Tuesday=1, Wednesday=2, Thursday=3,
 #                   Friday=4,   Saturday=5, Sunday=6
-TRADING_DAYS = frozenset({ 0, 1, 2, 3,4})  #  Mon, Tue, Wed, Thu, fri
+_DEFAULT_TRADING_DAYS = frozenset({0, 1, 2, 3, 4})  # Mon, Tue, Wed, Thu, Fri
+
+TRADING_DAYS_SETTING_KEY = "Trading_Days"
 
 WEEKDAY_NAMES = {
     0: "Monday", 1: "Tuesday", 2: "Wednesday", 3: "Thursday",
     4: "Friday", 5: "Saturday", 6: "Sunday",
 }
+
+_DAY_NAME_TO_WEEKDAY = {
+    "MON": 0, "MONDAY": 0, "TUE": 1, "TUESDAY": 1, "WED": 2, "WEDNESDAY": 2,
+    "THU": 3, "THURSDAY": 3, "FRI": 4, "FRIDAY": 4, "SAT": 5, "SATURDAY": 5,
+    "SUN": 6, "SUNDAY": 6,
+}
+
+
+def _parse_trading_days_value(raw: str) -> frozenset[int]:
+    """
+    Parse the Trading_Days SETTINGS value into a frozenset of weekday ints.
+
+    Expected format: "MON,TUE,WED,THU,FRI" (comma-separated day abbreviations
+    or full names, any case). Malformed/unrecognized entries are logged and
+    skipped — never crash. Returns empty frozenset if raw is blank or nothing
+    parses, so the caller can fall back to _DEFAULT_TRADING_DAYS.
+    """
+    days: set[int] = set()
+    if not raw or not raw.strip():
+        return frozenset()
+
+    for entry in raw.split(","):
+        entry = entry.strip().upper()
+        if not entry:
+            continue
+        if entry not in _DAY_NAME_TO_WEEKDAY:
+            logger.warning(
+                "calendar_guard: Trading_Days entry not recognized — "
+                "skipped: '%s'", entry
+            )
+            continue
+        days.add(_DAY_NAME_TO_WEEKDAY[entry])
+
+    return frozenset(days)
+
+
+def _load_settings_trading_days() -> frozenset[int]:
+    """
+    Read Trading_Days from SETTINGS via sheets.get_setting().
+    Returns _DEFAULT_TRADING_DAYS on any failure, blank value, or unparseable
+    value — never raises, never leaves TRADING_DAYS empty.
+    Called once at module import.
+    """
+    try:
+        from sheets import get_setting  # noqa: PLC0415
+    except ImportError:
+        logger.warning(
+            "calendar_guard: sheets.py not importable — "
+            "Trading_Days default used (Mon-Fri)"
+        )
+        return _DEFAULT_TRADING_DAYS
+
+    try:
+        raw = get_setting(TRADING_DAYS_SETTING_KEY, default="")
+        parsed = _parse_trading_days_value(str(raw or ""))
+        if parsed:
+            logger.info(
+                "calendar_guard: loaded TRADING_DAYS from SETTINGS[%s]: %s",
+                TRADING_DAYS_SETTING_KEY,
+                sorted(WEEKDAY_NAMES[d] for d in parsed),
+            )
+            return parsed
+        return _DEFAULT_TRADING_DAYS
+
+    except Exception as exc:
+        logger.warning(
+            "calendar_guard: could not read SETTINGS[%s] (%s) — "
+            "Trading_Days default used (Mon-Fri)",
+            TRADING_DAYS_SETTING_KEY, exc,
+        )
+        return _DEFAULT_TRADING_DAYS
+
+
+# Loaded at import — falls back to Mon-Fri default if Sheets unavailable or unset
+TRADING_DAYS = _load_settings_trading_days()
+
+
+def reload_trading_days() -> frozenset[int]:
+    """
+    Re-fetch Trading_Days from SETTINGS and rebuild TRADING_DAYS in-place.
+    Not needed in normal GitHub Actions flow (each run is a fresh import).
+    Useful for long-running local processes or tests, or right after a
+    dashboard edit if immediate effect is needed in the same process.
+    """
+    global TRADING_DAYS
+    TRADING_DAYS = _load_settings_trading_days()
+    return TRADING_DAYS
 
 
 # ══════════════════════════════════════════════════════════════════════════════
