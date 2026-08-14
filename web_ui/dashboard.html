@@ -2718,6 +2718,19 @@
         </div>
       </div>
 
+      <!-- Trading Calendar -->
+      <div class="set-panel">
+        <div class="set-panel-hdr">Trading Calendar</div>
+        <div class="set-row">
+          <div class="set-label">Trading Days</div>
+          <input type="text" class="set-input" id="set-Trading_Days" placeholder="MON,TUE,WED,THU,FRI"
+            onblur="applySetting('Trading_Days', this.value)"
+            onkeydown="if(event.key==='Enter') applySetting('Trading_Days', this.value)">
+          <span class="set-hint">Comma-separated (MON…SUN, any order/case). NEPSE has changed this schedule twice in 2026 — update here instead of code. Falls back to Mon-Fri if blank/invalid.</span>
+          <span class="set-status" id="status-Trading_Days"></span>
+        </div>
+      </div>
+
     </div><!-- /s-settings -->
 
   </div><!-- /main -->
@@ -4376,6 +4389,7 @@
         _setInput('LOAD_SHEDDING_HRS',  d.LOAD_SHEDDING_HRS);
         _setInput('SEBON_EVENT',        d.SEBON_EVENT  || '');
         _setInput('BUDGET_EVENT',       d.BUDGET_EVENT || '');
+        _setInput('Trading_Days',       d.Trading_Days || '');
         _setInput('CLAUDE_MAX_CALLS_PER_DAY', d.CLAUDE_MAX_CALLS_PER_DAY);
 
         _setSelect('NOTIFY_CHANNEL',         d.NOTIFY_CHANNEL);
