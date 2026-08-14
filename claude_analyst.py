@@ -282,6 +282,13 @@ def _load_lessons(symbol: str, sector: str, limit: int = 10) -> list[str]:
             "learning_seeder": w_seeder,
         }
         _conf_mult = {"HIGH": 1.2, "MEDIUM": 1.0, "LOW": 0.8}
+        _conf_rank = {"HIGH": 2, "MEDIUM": 1, "LOW": 0}
+        # HIGH-confidence lessons alone routinely exceed `limit`, which silently
+        # starves MEDIUM-confidence lessons of any seat even when their live
+        # sample size is large and their effect size is strong. Reserve a fixed
+        # number of slots for the strongest-evidence MEDIUM lessons so they're
+        # never fully crowded out by the HIGH tier.
+        RESERVED_MEDIUM_SLOTS = min(4, limit)
 
         rows = run_raw_sql(
             """
@@ -305,7 +312,53 @@ def _load_lessons(symbol: str, sector: str, limit: int = 10) -> list[str]:
             cm = _conf_mult.get(r.get("confidence_level", "LOW"), 1.0)
             return sw * cm
 
-        sorted_rows = sorted(rows or [], key=_eff_weight, reverse=True)[:limit]
+        def _sort_key(r: dict) -> tuple:
+            # Confidence tier is the primary sort key so HIGH-confidence lessons
+            # always rank ahead of MEDIUM/LOW regardless of source_weight; within
+            # a tier, source_weight * confidence_mult breaks ties as before.
+            conf_rank = _conf_rank.get(r.get("confidence_level", "LOW"), 0)
+            return (conf_rank, _eff_weight(r))
+
+        def _trade_count(r: dict) -> int:
+            try:
+                return int(float(r.get("trade_count") or 0))
+            except (TypeError, ValueError):
+                return 0
+
+        all_rows    = rows or []
+        high_rows   = [r for r in all_rows if r.get("confidence_level") == "HIGH"]
+        medium_rows = [r for r in all_rows if r.get("confidence_level") == "MEDIUM"]
+        low_rows    = [r for r in all_rows if r.get("confidence_level") not in ("HIGH", "MEDIUM")]
+
+        # Reserve slots for the best-evidenced MEDIUM lessons (ranked by live
+        # sample size) before HIGH claims the rest of the budget. Restrict the
+        # reserved pool to live self-audit output (gpt_weekly/monthly_council) —
+        # bulk-imported academic backtests (source=research_*) carry enormous
+        # trade_count by construction (full historical dataset, not paper-trade
+        # results) and would otherwise crowd out the live lessons this reserve
+        # exists to protect.
+        _live_sources = {"gpt_weekly", "monthly_council"}
+        live_medium_rows  = [r for r in medium_rows if r.get("source") in _live_sources]
+        other_medium_rows = [r for r in medium_rows if r.get("source") not in _live_sources]
+        live_medium_rows.sort(key=_trade_count, reverse=True)
+        other_medium_rows.sort(key=_trade_count, reverse=True)
+        guaranteed_medium = live_medium_rows[:RESERVED_MEDIUM_SLOTS]
+        leftover_medium   = live_medium_rows[RESERVED_MEDIUM_SLOTS:] + other_medium_rows
+
+        high_rows.sort(key=_eff_weight, reverse=True)
+        high_budget   = max(limit - len(guaranteed_medium), 0)
+        selected_high = high_rows[:high_budget]
+
+        selected = selected_high + guaranteed_medium
+        remaining_slots = limit - len(selected)
+        if remaining_slots > 0:
+            backfill_pool = sorted(
+                high_rows[high_budget:] + leftover_medium + low_rows,
+                key=_eff_weight, reverse=True,
+            )
+            selected += backfill_pool[:remaining_slots]
+
+        sorted_rows = sorted(selected, key=_sort_key, reverse=True)[:limit]
 
         lessons = []
         for r in sorted_rows:
@@ -1615,7 +1668,7 @@ def run_analysis(flags: list) -> list[AnalystResult]:
             fund_ctx=fund_ctx,
             broker_ctx=broker_ctx,
         )
-        claude_json = ask_claude(prompt, context="claude_analyst")
+        claude_json = ask_claude(prompt, context="claude_analyst", symbol=sym)
 
         if claude_json is None:
             logger.warning("%s: Claude returned no result -- skipping", sym)
