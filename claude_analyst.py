@@ -1109,11 +1109,11 @@ Use this to inform conviction:
             "  edge (BB_LOWER_TOUCH + OBV rising, or confirmed broker accumulation) justifies the entry."
         )
     else:
-        _risk_reward_rule = (
-            "- Risk/reward: compute risk_reward honestly as (target - entry) / (entry - stop_loss) and report it in\n"
-            "  the JSON. [RISK_REWARD_GATE_ENABLED=false — no preferred threshold or WAIT/AVOID default applies;\n"
-            "  weigh it as one input among technicals/fundamentals/lessons, not a gate.]"
-        )
+        # No risk/reward guidance at all -- entry_price/stop_loss/target are still
+        # required JSON fields regardless, and risk_reward itself is recalculated
+        # in Python from those (see _target/_entry/_risk below), never trusted from
+        # Claude's own output -- so dropping this line entirely cannot break parsing.
+        _risk_reward_rule = ""
     
     
     # ── News catalyst block ───────────────────────────────────────────────────
