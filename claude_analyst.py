@@ -269,7 +269,7 @@ def _load_macro_context() -> dict:
         }
 
 
-def _load_lessons(symbol: str, sector: str, limit: int = 10) -> tuple[list[str], set[int]]:
+def _load_lessons(symbol: str, sector: str, limit: int = 14) -> tuple[list[str], set[int]]:
     """Return (lesson_strings, valid_lesson_ids). IDs are used for FK validation."""
     try:
         from sheets import run_raw_sql, get_setting
@@ -285,12 +285,6 @@ def _load_lessons(symbol: str, sector: str, limit: int = 10) -> tuple[list[str],
         }
         _conf_mult = {"HIGH": 1.2, "MEDIUM": 1.0, "LOW": 0.8}
         _conf_rank = {"HIGH": 2, "MEDIUM": 1, "LOW": 0}
-        # HIGH-confidence lessons alone routinely exceed `limit`, which silently
-        # starves MEDIUM-confidence lessons of any seat even when their live
-        # sample size is large and their effect size is strong. Reserve a fixed
-        # number of slots for the strongest-evidence MEDIUM lessons so they're
-        # never fully crowded out by the HIGH tier.
-        RESERVED_MEDIUM_SLOTS = min(4, limit)
 
         rows = run_raw_sql(
             """
@@ -332,35 +326,40 @@ def _load_lessons(symbol: str, sector: str, limit: int = 10) -> tuple[list[str],
         medium_rows = [r for r in all_rows if r.get("confidence_level") == "MEDIUM"]
         low_rows    = [r for r in all_rows if r.get("confidence_level") not in ("HIGH", "MEDIUM")]
 
-        # Reserve slots for the best-evidenced MEDIUM lessons (ranked by live
-        # sample size) before HIGH claims the rest of the budget. Restrict the
-        # reserved pool to live self-audit output (gpt_weekly/monthly_council) —
-        # bulk-imported academic backtests (source=research_*) carry enormous
-        # trade_count by construction (full historical dataset, not paper-trade
-        # results) and would otherwise crowd out the live lessons this reserve
-        # exists to protect.
+        # ALL HIGH-confidence lessons always load — never squeezed out by MEDIUM.
+        # At least GUARANTEED_MEDIUM_SLOTS of the best-evidenced MEDIUM lessons
+        # always get a seat too, even when HIGH alone already exceeds `limit` —
+        # the effective cap grows to fit both: max(limit, len(high_rows) + guaranteed).
+        # Any further remaining slots (if any) go to more MEDIUM lessons, ranked
+        # by live sample size. Restrict that ranking to live self-audit output
+        # (gpt_weekly/monthly_council) — bulk-imported academic backtests
+        # (source=research_*) carry enormous trade_count by construction (full
+        # historical dataset, not paper-trade results) and would otherwise crowd
+        # out the live lessons this ranking exists to surface.
+        selected_high = high_rows
+
         _live_sources = {"gpt_weekly", "monthly_council"}
         live_medium_rows  = [r for r in medium_rows if r.get("source") in _live_sources]
         other_medium_rows = [r for r in medium_rows if r.get("source") not in _live_sources]
         live_medium_rows.sort(key=_trade_count, reverse=True)
         other_medium_rows.sort(key=_trade_count, reverse=True)
-        guaranteed_medium = live_medium_rows[:RESERVED_MEDIUM_SLOTS]
-        leftover_medium   = live_medium_rows[RESERVED_MEDIUM_SLOTS:] + other_medium_rows
 
-        high_rows.sort(key=_eff_weight, reverse=True)
-        high_budget   = max(limit - len(guaranteed_medium), 0)
-        selected_high = high_rows[:high_budget]
+        GUARANTEED_MEDIUM_SLOTS = min(2, len(medium_rows))
+        effective_limit = max(limit, len(selected_high) + GUARANTEED_MEDIUM_SLOTS)
 
-        selected = selected_high + guaranteed_medium
-        remaining_slots = limit - len(selected)
+        remaining_slots = effective_limit - len(selected_high)
+        selected_medium = (live_medium_rows + other_medium_rows)[:remaining_slots]
+
+        selected = selected_high + selected_medium
+        remaining_slots = effective_limit - len(selected)
         if remaining_slots > 0:
             backfill_pool = sorted(
-                high_rows[high_budget:] + leftover_medium + low_rows,
+                (live_medium_rows + other_medium_rows)[len(selected_medium):] + low_rows,
                 key=_eff_weight, reverse=True,
             )
             selected += backfill_pool[:remaining_slots]
 
-        sorted_rows = sorted(selected, key=_sort_key, reverse=True)[:limit]
+        sorted_rows = sorted(selected, key=_sort_key, reverse=True)[:effective_limit]
 
         lessons = []
         for r in sorted_rows:
@@ -1592,19 +1591,28 @@ def _write_to_db(result: AnalystResult, flag=None) -> None:
         # UPDATE existing Gemini row -- one row per signal, not two
         market_log_id = getattr(flag, "market_log_id", None) if flag else None
 
+        rows_updated = 0
         if market_log_id:
-            update_row("market_log", columns, {"id": str(market_log_id)})
-            logger.info(
-                "Updated market_log id=%s: %s %s",
-                market_log_id, result.action, result.symbol,
-            )
-            if result.action == "WAIT":
-                _supersede_stale_waits(result.symbol, market_log_id)
-        else:
-            # Fallback insert -- no Gemini row to update
+            rows_updated = update_row("market_log", columns, {"id": str(market_log_id)})
+            if rows_updated:
+                logger.info(
+                    "Updated market_log id=%s: %s %s",
+                    market_log_id, result.action, result.symbol,
+                )
+                if result.action == "WAIT":
+                    _supersede_stale_waits(result.symbol, market_log_id)
+            else:
+                logger.error(
+                    "update_row(market_log) affected 0 rows for id=%s -- "
+                    "falling back to insert for %s %s",
+                    market_log_id, result.action, result.symbol,
+                )
+
+        if not market_log_id or not rows_updated:
+            # Fallback insert -- no Gemini row to update, or the update failed
             write_row("market_log", columns)
             logger.info(
-                "Inserted new market_log row: %s %s (no market_log_id)",
+                "Inserted new market_log row: %s %s (no market_log_id or update failed)",
                 result.action, result.symbol,
             )
             if result.action == "WAIT":
