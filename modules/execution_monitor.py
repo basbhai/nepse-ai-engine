@@ -183,7 +183,9 @@ def _load_open_positions(paper_mode: bool) -> list[dict]:
                        pp.total_shares AS shares,
                        pp.total_cost,
                        pp.first_buy_date,
-                       pp.updated_at
+                       pp.updated_at,
+                       pp.peak_price,
+                       pp.trail_active
                 FROM paper_portfolio pp
                 WHERE pp.status = 'OPEN'
                 ORDER BY pp.first_buy_date ASC
@@ -223,15 +225,68 @@ def _enrich_from_market_log(row: dict) -> None:
         else:
             row["stop_loss"] = None
             row["target"]    = None
-        # peak_price: use current entry as starting peak if not tracked
-        row["peak_price"]   = float(row.get("entry_price") or 0)
-        row["trail_active"] = False
+        # Restore persisted trail state; fall back to entry if never written.
+        # price_history catch-up is done once at startup via _catchup_peak_from_history(),
+        # not here — this runs every 30s cycle and the history query would be wasteful.
+        entry_price = float(row.get("entry_price") or 0)
+        saved_peak  = row.get("peak_price")
+        saved_trail = row.get("trail_active")
+        true_peak   = float(saved_peak) if saved_peak else entry_price
+        row["peak_price"]   = true_peak
+        row["trail_active"] = (str(saved_trail).lower() == "true" if saved_trail
+                               else (true_peak - entry_price) / entry_price * 100 >= TRAIL_ACTIVATE_PCT)
     except Exception as e:
         log.warning("enrich_from_market_log(%s): %s", row.get("symbol"), e)
         row["stop_loss"] = None
         row["target"]    = None
-        row["peak_price"] = float(row.get("entry_price") or 0)
+        row["peak_price"]   = float(row.get("entry_price") or 0)
         row["trail_active"] = False
+
+
+def _persist_trail_state(symbol: str, peak_price: float, trail_active: bool) -> None:
+    """Write peak_price and trail_active back to paper_portfolio so restarts don't reset them."""
+    try:
+        run_raw_sql("""
+            UPDATE paper_portfolio
+            SET peak_price   = %s,
+                trail_active = %s
+            WHERE symbol = %s AND status = 'OPEN'
+        """, (str(peak_price), str(trail_active).lower(), symbol))
+    except Exception as e:
+        log.warning("persist_trail_state(%s): %s", symbol, e)
+
+
+def _catchup_peak_from_history(positions: list[dict]) -> None:
+    """
+    Called once at startup. For each open position, query price_history for the
+    MAX(high) since entry_date and promote peak_price + trail_active in the DB if
+    the historical high exceeds the stored peak. Covers sessions the monitor missed.
+    """
+    for pos in positions:
+        symbol     = pos.get("symbol", "")
+        entry_date = pos.get("first_buy_date") or ""
+        entry_price = float(pos.get("entry_price") or pos.get("wacc") or 0)
+        db_peak    = float(pos.get("peak_price") or entry_price)
+        if not symbol or not entry_date:
+            continue
+        try:
+            rows = run_raw_sql("""
+                SELECT MAX(CAST(high AS numeric)) AS max_high
+                FROM price_history
+                WHERE symbol = %s AND date >= %s
+            """, (symbol, entry_date))
+            if not rows or not rows[0].get("max_high"):
+                continue
+            hist_peak = float(rows[0]["max_high"])
+            if hist_peak > db_peak:
+                trail = (hist_peak - entry_price) / entry_price * 100 >= TRAIL_ACTIVATE_PCT
+                _persist_trail_state(symbol, hist_peak, trail)
+                pos["peak_price"]   = hist_peak
+                pos["trail_active"] = trail
+                log.info("Catchup %s: peak promoted %.2f → %.2f (trail_active=%s)",
+                         symbol, db_peak, hist_peak, trail)
+        except Exception as e:
+            log.warning("catchup_peak_from_history(%s): %s", symbol, e)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -656,7 +711,8 @@ def _check_guard(pos: dict, ltp: float, state_store: dict) -> Optional[str]:
         pos["trail_active"] = True
 
     if pos.get("trail_active"):
-        floor = peak * (1 - TRAIL_FLOOR_PCT / 100)
+        trail_distance = entry * TRAIL_FLOOR_PCT / 100
+        floor = peak - trail_distance
         if ltp <= floor:
             return "TRAILING_STOP"
 
@@ -898,6 +954,12 @@ def run_monitor(paper_mode: bool = True, once: bool = False) -> None:
 
     _ensure_session()
 
+    # One-time startup: promote peak_price from price_history for any sessions missed
+    _startup_positions = _load_open_positions(paper_mode)
+    if _startup_positions:
+        _catchup_peak_from_history(_startup_positions)
+        log.info("Startup peak catch-up complete for %d position(s)", len(_startup_positions))
+
     while True:
         cycle_start = time.time()
 
@@ -987,6 +1049,12 @@ def run_monitor(paper_mode: bool = True, once: bool = False) -> None:
                     "peak_price":   pos.get("peak_price"),
                     "trail_active": pos.get("trail_active", False),
                 }
+                if paper_mode:
+                    _persist_trail_state(
+                        symbol,
+                        pos.get("peak_price") or float(pos.get("entry_price") or 0),
+                        pos.get("trail_active", False),
+                    )
 
             # ── 3. INTELLIGENCE — GIS score ───────────────────────────────────
             if run_intelligence:

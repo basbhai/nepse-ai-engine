@@ -1209,6 +1209,8 @@ model paper_portfolio {
   updated_at      Text
   test_mode       Text  @default("false")
   audited         Text  @default("false")
+  peak_price      Text
+  trail_active    Text  @default("false")
 
   @@index([telegram_id])
   @@index([telegram_id, status])

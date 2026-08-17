@@ -1188,6 +1188,8 @@ TABLE_DDL: dict[str, str] = {
         updated_at TEXT,
         test_mode TEXT DEFAULT 'false',
         audited TEXT DEFAULT 'false',
+        peak_price TEXT,
+        trail_active TEXT DEFAULT 'false',
         inserted_at TIMESTAMPTZ DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS ix_paper_portfolio_telegram_id
