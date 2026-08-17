@@ -2441,6 +2441,17 @@
         <h2>Settings</h2><span class="tag">CONTROL</span>
       </div>
 
+      <!-- Trading Mode -->
+      <div class="set-panel" style="border:2px solid var(--red);background:rgba(239,83,80,.06)">
+        <div class="set-panel-hdr" style="color:var(--red)">⚡ Trading Mode</div>
+        <div class="set-row">
+          <div class="set-label">Current Mode</div>
+          <span id="badge-trading-mode" class="badge badge-green">…</span>
+          <button class="btn-sm" style="margin-left:16px" onclick="openTradingModeModal()">Switch Mode</button>
+          <span class="set-hint">Requires exact confirmation phrase — restarts execution monitor automatically.</span>
+        </div>
+      </div>
+
       <!-- Filter Engines -->
       <div class="set-panel">
         <div class="set-panel-hdr">Filter Engines</div>
@@ -2734,6 +2745,25 @@
     </div><!-- /s-settings -->
 
   </div><!-- /main -->
+
+  <!-- ═══ Trading Mode Modal ═══════════════════════════════════════════ -->
+  <div id="modal-trading-mode" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:9999;align-items:center;justify-content:center;">
+    <div style="background:var(--surface,#1e1e1e);border:1px solid #444;border-radius:10px;padding:32px;max-width:420px;width:90%;box-shadow:0 8px 40px rgba(0,0,0,.6)">
+      <h3 id="modal-tm-title" style="margin:0 0 10px;font-size:1.1rem"></h3>
+      <p id="modal-tm-warning" style="color:#aaa;font-size:.9rem;margin:0 0 18px"></p>
+      <p style="margin:0 0 8px;font-size:.9rem">Type exactly to confirm:</p>
+      <code id="modal-tm-phrase" style="display:block;background:#111;padding:8px 12px;border-radius:4px;letter-spacing:.05em;margin-bottom:14px;color:#ffa726"></code>
+      <input id="modal-tm-input" type="text" autocomplete="off" spellcheck="false"
+        style="width:100%;box-sizing:border-box;padding:10px;background:#111;border:1px solid #555;border-radius:4px;color:#eee;font-size:.95rem;margin-bottom:14px"
+        placeholder="Type the phrase above…"
+        onkeydown="if(event.key==='Enter') confirmTradingModeSwitch()">
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <button onclick="closeTradingModeModal()" style="padding:8px 18px;border-radius:4px;border:1px solid #555;background:transparent;color:#ccc;cursor:pointer">Cancel</button>
+        <button onclick="confirmTradingModeSwitch()" style="padding:8px 18px;border-radius:4px;border:none;background:var(--red,#ef5350);color:#fff;font-weight:600;cursor:pointer">Confirm Switch</button>
+      </div>
+      <div id="modal-tm-status" style="margin-top:12px;font-size:.85rem;min-height:18px"></div>
+    </div>
+  </div>
 
   <!-- ═══════════════════════ BOTTOM NAV (mobile) ═══════════════ -->
   <nav id="bottom-nav" aria-label="Mobile navigation">
@@ -3463,10 +3493,12 @@
       loadStealth();
       loadGateTracker();
       loadSettings();
+      loadTradingMode();
       setInterval(refreshAll, 5 * 60 * 1000);
       setInterval(nrbCheckAPI, 15000);
       setInterval(loadStealth, 30000);
       setInterval(loadGateTracker, 5 * 60 * 1000);
+      setInterval(loadTradingMode, 30000);
       setInterval(loadSettings, 5 * 60 * 1000);
     });
 
@@ -4362,6 +4394,74 @@
         content.innerHTML = `<span style="color:var(--red)">Error loading file: ${esc(e.message)}</span>`;
       }
     }
+
+    /* ── Trading Mode ──────────────────────────────────────────────────── */
+
+    let _tmPhrase = '', _tmTarget = '';
+
+    async function loadTradingMode() {
+      try {
+        const d = await fetchJSON('/settings/trading-mode');
+        const badge = document.getElementById('badge-trading-mode');
+        if (badge) {
+          const live = !d.paper_mode;
+          badge.textContent = live ? '🔴 LIVE' : '📄 PAPER';
+          badge.className   = 'badge ' + (live ? 'badge-red' : 'badge-green');
+        }
+        _tmPhrase = d.confirm_phrase;
+        _tmTarget = d.paper_mode ? 'LIVE' : 'PAPER';
+      } catch(e) {}
+    }
+
+    function openTradingModeModal() {
+      const toLive = _tmTarget === 'LIVE';
+      document.getElementById('modal-tm-title').textContent    = toLive ? '⚠️ Switch to LIVE Trading' : 'Switch to PAPER Trading';
+      document.getElementById('modal-tm-warning').textContent  = toLive
+        ? 'Real money will be at risk. Auto-close hooks will fire on live positions. Execution monitor restarts automatically.'
+        : 'All order execution will be simulated. No real trades will be placed.';
+      document.getElementById('modal-tm-phrase').textContent   = _tmPhrase;
+      document.getElementById('modal-tm-input').value          = '';
+      document.getElementById('modal-tm-status').textContent   = '';
+      document.getElementById('modal-trading-mode').style.display = 'flex';
+      setTimeout(() => document.getElementById('modal-tm-input').focus(), 50);
+    }
+
+    function closeTradingModeModal() {
+      document.getElementById('modal-trading-mode').style.display = 'none';
+    }
+
+    async function confirmTradingModeSwitch() {
+      const typed = (document.getElementById('modal-tm-input').value || '').trim();
+      const st    = document.getElementById('modal-tm-status');
+      if (typed !== _tmPhrase) {
+        st.textContent = '✗ Phrase mismatch — type exactly: ' + _tmPhrase;
+        st.style.color = 'var(--red,#ef5350)';
+        return;
+      }
+      st.textContent = 'Switching… restarting monitor…';
+      st.style.color = '#aaa';
+      try {
+        const r = await fetch(API + '/settings/trading-mode/switch', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ confirm: typed }),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || 'HTTP ' + r.status);
+        const restartNote = d.monitor_restarted ? '✓ Monitor restarted.' : '⚠ Monitor restart failed: ' + d.restart_msg;
+        st.textContent = `✓ Switched to ${d.new_mode}. ${restartNote}`;
+        st.style.color = 'var(--green,#66bb6a)';
+        setTimeout(() => { closeTradingModeModal(); loadTradingMode(); }, 3000);
+      } catch(e) {
+        st.textContent = '✗ ' + e.message;
+        st.style.color = 'var(--red,#ef5350)';
+      }
+    }
+
+    // Close modal on backdrop click
+    document.getElementById('modal-trading-mode').addEventListener('click', function(e) {
+      if (e.target === this) closeTradingModeModal();
+    });
 
     /* ── Settings ──────────────────────────────────────────────────────── */
 
