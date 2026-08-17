@@ -101,12 +101,12 @@
       100% { background-position: 600px 0; }
     }
     @keyframes logs-pivot-in {
-      from { opacity: 0; transform: rotate(60deg); filter: blur(6px); }
-      to   { opacity: 1; transform: rotate(90deg); filter: blur(0px); }
+      from { opacity: 0; transform: rotate(60deg) translateY(-100%); filter: blur(6px); }
+      to   { opacity: 1; transform: rotate(90deg) translateY(-100%); filter: blur(0px); }
     }
     @keyframes logs-pivot-out {
-      from { opacity: 1; transform: rotate(90deg); filter: blur(0px); }
-      to   { opacity: 0; transform: rotate(115deg); filter: blur(6px); }
+      from { opacity: 1; transform: rotate(90deg) translateY(-100%); filter: blur(0px); }
+      to   { opacity: 0; transform: rotate(115deg) translateY(-100%); filter: blur(6px); }
     }
 
     /* ═══════════════════════════════════════════════════════════
@@ -1494,6 +1494,59 @@
       background: var(--red);
     }
 
+    /* ── Theme toggle button ──────────────────────────────────────────── */
+    #theme-toggle {
+      position: fixed;
+      top: 12px;
+      right: 16px;
+      z-index: 9999;
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      background: var(--bg3);
+      border: 1px solid var(--border2);
+      color: var(--text2);
+      font-size: 13px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background var(--t), border-color var(--t), color var(--t);
+      line-height: 1;
+      padding: 0;
+    }
+
+    #theme-toggle:hover {
+      background: var(--green);
+      border-color: var(--green);
+      color: #000;
+    }
+
+    /* ── Register link button ─────────────────────────────────────────── */
+    /* Register + toggle live in a fixed cluster, no overlap with content */
+    #register-link {
+      position: fixed;
+      top: 12px;
+      right: 52px;
+      z-index: 9999;
+      height: 30px;
+      padding: 0 12px;
+      border-radius: 5px;
+      background: var(--bg3);
+      border: 1px solid var(--border2);
+      color: var(--text2);
+      font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-decoration: none;
+      letter-spacing: .05em;
+      transition: background var(--t), border-color var(--t), color var(--t);
+    }
+    #register-link:hover { background: var(--green); border-color: var(--green); color: #000; }
+
     /* ═══════════════════════════════════════════════════════════
    MOBILE  < 768px
 ═══════════════════════════════════════════════════════════ */
@@ -1521,7 +1574,25 @@
       .dash-panels { grid-template-columns: 1fr; }
       .dash-panel-side { border-top: 1px solid var(--border); }
       .dash-panel-main { border-right: none; }
-      #s-dashboard.active-view { grid-template-rows: auto 1fr; }
+
+      /* Desktop dashboard uses a fixed-height 2-pane layout where each pane
+         scrolls independently (#s-dashboard/.dash-panels: overflow:hidden).
+         Stacked single-column on mobile, that combination has no scroll path
+         once the two panes' combined content exceeds the viewport, silently
+         clipping whatever comes after the charts (Recent Signals included).
+         Let the whole dashboard section scroll as one column instead, like
+         every other .std-view section already does. */
+      #s-dashboard.active-view {
+        grid-template-rows: auto 1fr;
+        overflow-y: auto;
+      }
+      .dash-panels {
+        overflow: visible;
+      }
+      .dash-panel-main,
+      .dash-panel-side {
+        overflow: visible;
+      }
 
       body {
         font-size: 12px;
@@ -1674,6 +1745,12 @@
       /* Register link hidden on mobile (dev-only action) */
       #register-link {
         display: none;
+      }
+
+      /* Reserve space so section-header content (badges, status text) wraps
+         clear of the fixed theme toggle instead of running under it */
+      .section-header {
+        padding-right: 56px;
       }
 
       /* ── Smooth scrollable feedback on touch ── */
@@ -2026,10 +2103,15 @@
         position: fixed;
         top: 0;
         left: 0;
+        /* .std-view's max-width:100% overflow guard would otherwise clamp
+           this rotated box to the portrait viewport width instead of svh */
+        max-width: none;
         width: 100svh;
         height: 100svw;
         transform-origin: top left;
-        transform: rotate(90deg);
+        /* translateY(-100%) pulls the rotated box back onto screen — rotate()
+           alone around the top-left corner swings it fully off-viewport left */
+        transform: rotate(90deg) translateY(-100%);
         z-index: 600;
         margin: 0;
         padding: 16px;
@@ -2065,6 +2147,7 @@
         position: fixed;
         top: 0;
         left: 0;
+        max-width: none;
         width: 100svh;
         height: 100svw;
         transform-origin: top left;
@@ -2102,59 +2185,6 @@
     body.light-mode tr:hover td {
       background: rgba(0, 0, 0, .04);
     }
-
-    /* ── Theme toggle button ──────────────────────────────────────────── */
-    #theme-toggle {
-      position: fixed;
-      top: 12px;
-      right: 16px;
-      z-index: 9999;
-      width: 30px;
-      height: 30px;
-      border-radius: 50%;
-      background: var(--bg3);
-      border: 1px solid var(--border2);
-      color: var(--text2);
-      font-size: 13px;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: background var(--t), border-color var(--t), color var(--t);
-      line-height: 1;
-      padding: 0;
-    }
-
-    #theme-toggle:hover {
-      background: var(--green);
-      border-color: var(--green);
-      color: #000;
-    }
-
-    /* ── Register link button ─────────────────────────────────────────── */
-    /* Register + toggle live in a fixed cluster, no overlap with content */
-    #register-link {
-      position: fixed;
-      top: 12px;
-      right: 52px;
-      z-index: 9999;
-      height: 30px;
-      padding: 0 12px;
-      border-radius: 5px;
-      background: var(--bg3);
-      border: 1px solid var(--border2);
-      color: var(--text2);
-      font-size: 11px;
-      font-family: 'JetBrains Mono', monospace;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      text-decoration: none;
-      letter-spacing: .05em;
-      transition: background var(--t), border-color var(--t), color var(--t);
-    }
-    #register-link:hover { background: var(--green); border-color: var(--green); color: #000; }
 
     /* Push KPI pills clear of fixed Register+toggle (≈145px from right) — desktop only */
     @media (min-width: 768px) {
@@ -4280,6 +4310,14 @@
     function switchView(id) {
       var prev = document.querySelector('.section.active-view');
       if (prev && prev.id === id) return; // already active
+
+      /* Logs' landscape overlay is position:fixed + high z-index so it
+         renders above every section, not just its own — exit it before
+         switching away or it stays pinned on top of the new tab. */
+      var logsSection = document.getElementById('s-logs');
+      if (id !== 's-logs' && logsSection && logsSection.classList.contains('logs-landscape')) {
+        toggleLogsLandscape();
+      }
 
       function _apply() {
         document.querySelectorAll('.section').forEach(function(s) {
