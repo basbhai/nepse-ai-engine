@@ -3,12 +3,12 @@
 
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>NEPSE AI Engine</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link
-    href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Roboto:wght@400;500&family=Roboto+Mono:wght@400;600&display=swap"
+    href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap"
     rel="stylesheet" />
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -17,20 +17,88 @@
    DESIGN TOKENS
 ═══════════════════════════════════════════════════════════ */
     :root {
-      --bg: #0d0d0d;
-      --bg2: #111111;
-      --bg3: #171717;
-      --bg4: #1e1e1e;
-      --border: #252525;
-      --green: #00d97e;
-      --amber: #f59e0b;
-      --red: #ef4444;
-      --blue: #60a5fa;
+      /* Surface stack */
+      --bg:    #070707;
+      --bg2:   #0e0e0e;
+      --bg3:   #151515;
+      --bg4:   #1c1c1c;
+
+      /* Borders */
+      --border:  #1d1d1d;
+      --border2: #2b2b2b;
+
+      /* Signal palette — semantic, never decorative */
+      --green:  #00d97e;
+      --amber:  #f59e0b;
+      --red:    #ef4444;
+      --blue:   #60a5fa;
       --purple: #a78bfa;
-      --text: #d4d4d4;
-      --muted: #6b7280;
+
+      /* Text hierarchy */
+      --text:  #e8e8e8;
+      --text2: #999999;
+      --muted: #4c4c52;
+
+      /* Elevation */
+      --elev-1: 0 1px 3px rgba(0,0,0,.6), 0 2px 8px rgba(0,0,0,.3);
+      --elev-2: 0 4px 20px rgba(0,0,0,.55), 0 1px 4px rgba(0,0,0,.4);
+      --elev-modal: 0 24px 64px rgba(0,0,0,.75), 0 4px 20px rgba(0,0,0,.5);
+
+      /* Transitions */
+      --t:      140ms ease;
+      --t-slow: 300ms ease;
+
+      /* Layout */
       --sidebar-w: 220px;
-      --bnav-h: 58px;
+      --bnav-h:    58px;
+      --radius:    7px;
+
+      /* Market-state hue (JS sets this; transitions via @property) */
+      --mstate-hue: 152;
+      transition: --mstate-hue 2s cubic-bezier(.4,0,.2,1);
+    }
+
+    /* ═══════════════════════════════════════════════════════════
+   REGISTERED CUSTOM PROPERTIES  (enables CSS transitions on them)
+═══════════════════════════════════════════════════════════ */
+    @property --mstate-hue {
+      syntax: '<number>';
+      inherits: true;
+      initial-value: 152;
+    }
+    @property --fill {
+      syntax: '<number>';
+      inherits: false;
+      initial-value: 0;
+    }
+    @property --row-d {
+      syntax: '<time>';
+      inherits: false;
+      initial-value: 0ms;
+    }
+
+    /* ═══════════════════════════════════════════════════════════
+   KEYFRAMES
+═══════════════════════════════════════════════════════════ */
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    @keyframes fadein {
+      from { opacity: 0; }
+      to   { opacity: 1; }
+    }
+    @keyframes slideup {
+      from { opacity: 0; transform: translateY(14px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes pulsedot {
+      0%   { box-shadow: 0 0 0 0   rgba(0,217,126,.6); }
+      70%  { box-shadow: 0 0 0 6px rgba(0,217,126,0);  }
+      100% { box-shadow: 0 0 0 0   rgba(0,217,126,0);  }
+    }
+    @keyframes shimmer-load {
+      0%   { background-position: -600px 0; }
+      100% { background-position: 600px 0; }
     }
 
     /* ═══════════════════════════════════════════════════════════
@@ -56,6 +124,8 @@
       font-size: 13px;
       line-height: 1.6;
       overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
     }
 
     /* ═══════════════════════════════════════════════════════════
@@ -76,71 +146,85 @@
     }
 
     #sidebar .logo {
-      padding: 20px 16px 14px;
+      padding: 22px 18px 16px;
       border-bottom: 1px solid var(--border);
     }
 
     #sidebar .logo h1 {
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 700;
       color: var(--green);
-      letter-spacing: .05em;
+      letter-spacing: .14em;
       text-transform: uppercase;
     }
 
     #sidebar .logo p {
       font-size: 10px;
       color: var(--muted);
-      margin-top: 2px;
+      margin-top: 4px;
+      letter-spacing: .04em;
     }
 
     #sidebar nav {
       flex: 1;
-      padding: 10px 0;
+      padding: 8px 0;
     }
 
     #sidebar nav a {
       display: block;
-      padding: 9px 16px;
+      padding: 8px 18px;
       color: var(--muted);
       text-decoration: none;
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 500;
+      letter-spacing: .03em;
       border-left: 2px solid transparent;
-      transition: color .15s, background .15s;
+      transition: color var(--t), background var(--t), border-color var(--t);
     }
 
-    #sidebar nav a:hover,
+    #sidebar nav a:hover {
+      color: var(--text2);
+      background: rgba(255,255,255,.025);
+    }
+
     #sidebar nav a.active {
-      color: var(--green);
-      background: rgba(0, 217, 126, .05);
-      border-left-color: var(--green);
+      color: hsl(var(--mstate-hue), 82%, 50%);
+      background: hsla(var(--mstate-hue), 82%, 50%, .07);
+      border-left-color: hsl(var(--mstate-hue), 82%, 50%);
+      transition: color 2s cubic-bezier(.4,0,.2,1),
+                  background 2s cubic-bezier(.4,0,.2,1),
+                  border-color 2s cubic-bezier(.4,0,.2,1);
     }
 
     #sidebar nav .divider {
       height: 1px;
       background: var(--border);
-      margin: 6px 16px;
+      margin: 8px 18px;
     }
 
     #sidebar .refresh-info {
-      padding: 12px 16px;
+      padding: 12px 18px;
       font-size: 10px;
       color: var(--muted);
       border-top: 1px solid var(--border);
+      letter-spacing: .03em;
     }
 
     #sidebar .refresh-info span {
-      color: var(--green);
+      color: var(--text2);
     }
 
     /* ═══════════════════════════════════════════════════════════
    MAIN CONTENT
 ═══════════════════════════════════════════════════════════ */
+    /* ── App shell: fixed height, sections switch on nav click ── */
     #main {
       margin-left: var(--sidebar-w);
-      padding: 24px 24px 60px;
-      min-width: 0;
+      height: 100vh;
+      overflow: hidden;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
     }
 
     /* ═══════════════════════════════════════════════════════════
@@ -181,15 +265,15 @@
       font-size: 9px;
       font-weight: 500;
       text-transform: uppercase;
-      letter-spacing: .04em;
+      letter-spacing: .05em;
       border-top: 2px solid transparent;
-      transition: color .15s, border-color .15s;
+      transition: color var(--t), border-color var(--t), background var(--t);
       padding: 6px 4px;
       min-height: 44px;
     }
 
     #bottom-nav a .bico {
-      font-size: 15px;
+      font-size: 13px;
       line-height: 1;
     }
 
@@ -197,42 +281,315 @@
     #bottom-nav a.active {
       color: var(--green);
       border-top-color: var(--green);
-      background: rgba(0, 217, 126, .04);
+      background: rgba(0,217,126,.04);
     }
 
     /* ═══════════════════════════════════════════════════════════
    SECTIONS
 ═══════════════════════════════════════════════════════════ */
-    .section {
-      margin-bottom: 52px;
+    /* ── Section switch View Transitions ── */
+    @keyframes sec-out { to   { opacity: 0; transform: translateX(-10px) scale(.99); filter: blur(1px); } }
+    @keyframes sec-in  { from { opacity: 0; transform: translateX(10px)  scale(.99); filter: blur(1px); } }
+    ::view-transition-old(section-content) { animation: sec-out 180ms ease forwards; }
+    ::view-transition-new(section-content) { animation: sec-in  300ms cubic-bezier(.16,1,.3,1) forwards; }
+    ::view-transition-old(root), ::view-transition-new(root) { animation: none; }
+
+    /* ── Dashboard entrance — KPI bar items drop from top ── */
+    .dash-kpi-item, .dash-kpi-pills {
+      transition: opacity .38s ease, transform .38s cubic-bezier(.16,1,.3,1);
+    }
+    .dash-kpi-item:nth-child(1) { transition-delay:   0ms; }
+    .dash-kpi-item:nth-child(2) { transition-delay:  55ms; }
+    .dash-kpi-item:nth-child(3) { transition-delay: 110ms; }
+    .dash-kpi-item:nth-child(4) { transition-delay: 165ms; }
+    .dash-kpi-pills             { transition-delay: 220ms; }
+    @starting-style {
+      .dash-kpi-item, .dash-kpi-pills { opacity: 0; transform: translateY(-12px); }
     }
 
+    /* ── Dashboard panels slide from their sides ── */
+    .dash-panel-main {
+      transition: opacity .42s ease, transform .42s cubic-bezier(.16,1,.3,1);
+    }
+    .dash-panel-side {
+      transition: opacity .42s 90ms ease, transform .42s 90ms cubic-bezier(.16,1,.3,1);
+    }
+    @starting-style {
+      .dash-panel-main { opacity: 0; transform: translateX(-14px); }
+      .dash-panel-side { opacity: 0; transform: translateX(14px); }
+    }
+
+    /* ── Dashboard stat cards stagger up ── */
+    .dash-stat-card {
+      transition: opacity .3s ease, transform .3s cubic-bezier(.16,1,.3,1), border-color var(--t);
+    }
+    .dash-stat-card:nth-child(1) { transition-delay:   0ms; }
+    .dash-stat-card:nth-child(2) { transition-delay:  40ms; }
+    .dash-stat-card:nth-child(3) { transition-delay:  80ms; }
+    .dash-stat-card:nth-child(4) { transition-delay: 120ms; }
+    @starting-style {
+      .dash-stat-card { opacity: 0; transform: translateY(10px); }
+    }
+
+    /* ── Signal feed rows slide from right ── */
+    .feed-row {
+      transition: opacity .28s var(--row-d, 0ms) ease,
+                  transform .28s var(--row-d, 0ms) cubic-bezier(.16,1,.3,1),
+                  background var(--t);
+    }
+    @starting-style {
+      .feed-row { opacity: 0; transform: translateX(10px); }
+    }
+
+    /* ── Chart boxes fade in ── */
+    .chart-box {
+      transition: opacity .4s ease, box-shadow var(--t), border-color var(--t);
+    }
+    @starting-style {
+      .chart-box { opacity: 0; }
+    }
+
+    /* ── prefers-reduced-motion ── */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 1ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 50ms !important;
+        transition-delay: 0ms !important;
+      }
+      .api-dot.online  { animation: none; box-shadow: 0 0 0 2px rgba(0,217,126,.5); }
+      .dash-live-dot   { animation: none; }
+    }
+
+    /* ── Market log scrollable container ── */
+    .ml-scroll-host {
+      max-height: 600px;
+      overflow-y: auto;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+    }
+    .ml-scroll-host table { min-width: 640px; }
+    .ml-footer-bar {
+      padding: 7px 12px;
+      font-size: 10px;
+      color: var(--muted);
+      letter-spacing: .07em;
+      border-top: 1px solid var(--border);
+      background: var(--bg3);
+      display: flex;
+      justify-content: flex-end;
+    }
+
+    /* ── App shell: sections hidden by default, active-view fills the shell ── */
+    .section {
+      display: none;
+      flex: 1;
+      overflow: hidden;
+      animation: fadein .25s ease;
+    }
+    .section.active-view {
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      padding: 0;
+    }
+    /* Standard sections (non-dashboard): scrollable with internal padding */
+    .section.active-view.std-view {
+      padding: 24px 28px 48px;
+    }
+
+    /* ── Section header (used in non-dashboard sections) ── */
     .section-header {
       display: flex;
       align-items: center;
       gap: 10px;
       flex-wrap: wrap;
-      margin-bottom: 18px;
-      padding-bottom: 10px;
+      margin-bottom: 20px;
+      padding-bottom: 12px;
       border-bottom: 1px solid var(--border);
     }
-
     .section-header h2 {
-      font-size: 14px;
+      font-size: 10px;
       font-weight: 700;
-      color: var(--green);
+      color: var(--text2);
       text-transform: uppercase;
-      letter-spacing: .08em;
+      letter-spacing: .14em;
+      display: flex;
+      align-items: center;
+      gap: 10px;
     }
-
+    .section-header h2::before {
+      content: '';
+      display: inline-block;
+      width: 5px; height: 5px;
+      border-radius: 50%;
+      background: hsl(var(--mstate-hue), 82%, 48%);
+      flex-shrink: 0;
+      transition: background 2s cubic-bezier(.4,0,.2,1);
+    }
     .section-header .tag {
       font-size: 10px;
       padding: 2px 8px;
-      background: rgba(0, 217, 126, .1);
-      border: 1px solid rgba(0, 217, 126, .3);
+      background: rgba(0,217,126,.07);
+      border: 1px solid rgba(0,217,126,.18);
       color: var(--green);
-      border-radius: 4px;
+      border-radius: 3px;
+      letter-spacing: .07em;
     }
+
+    /* ════════════════════════════════════════════════════════════
+       DASHBOARD COMMAND GRID
+    ════════════════════════════════════════════════════════════ */
+    #s-dashboard.active-view {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      overflow: hidden;
+      padding: 0;
+    }
+
+    /* KPI strip across top */
+    .dash-kpi-bar {
+      display: flex;
+      align-items: stretch;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg2);
+      flex-shrink: 0;
+      overflow-x: auto;
+    }
+    .dash-kpi-item {
+      padding: 14px 22px;
+      border-right: 1px solid var(--border);
+      min-width: 130px;
+      flex-shrink: 0;
+    }
+    .dash-kpi-label {
+      font-size: 9px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .1em;
+      margin-bottom: 5px;
+    }
+    .dash-kpi-val {
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: -.02em;
+      line-height: 1;
+    }
+    .dash-kpi-sub {
+      font-size: 10px;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+    .dash-kpi-pills {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 0 16px;
+      margin-left: auto;
+      flex-shrink: 0;
+    }
+    .dash-kpi-lbl {
+      font-size: 9px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .08em;
+    }
+    .dash-live-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: hsl(var(--mstate-hue), 82%, 50%);
+      animation: pulsedot 2.4s ease infinite;
+      transition: background 2s cubic-bezier(.4,0,.2,1);
+    }
+
+    /* Two-column panel area */
+    .dash-panels {
+      display: grid;
+      grid-template-columns: 1fr 360px;
+      overflow: hidden;
+      min-height: 0;
+    }
+    .dash-panel-main {
+      border-right: 1px solid var(--border);
+      overflow-y: auto;
+      padding: 20px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+    .dash-panel-side {
+      overflow-y: auto;
+      padding: 16px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    /* Side panel stat cards: 2-col micro grid */
+    .dash-stat-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .dash-stat-card {
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 12px 14px;
+      box-shadow: var(--elev-1);
+    }
+    .dash-stat-card .label {
+      font-size: 9px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .09em;
+      margin-bottom: 5px;
+    }
+    .dash-stat-card .value {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -.02em;
+      line-height: 1;
+      color: var(--green);
+    }
+    .dash-stat-card .sub {
+      font-size: 10px;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+    /* Signal feed in side panel */
+    .dash-signal-feed {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .dash-signal-feed .feed-hdr {
+      font-size: 9px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .1em;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 8px;
+    }
+    .dash-signal-feed .feed-body {
+      flex: 1;
+      overflow-y: auto;
+    }
+    .feed-row {
+      display: grid;
+      grid-template-columns: 72px 1fr auto auto;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 12px;
+    }
+    .feed-row:last-child { border-bottom: none; }
+    .feed-symbol { color: var(--green); font-weight: 700; font-size: 13px; }
+    .feed-conf   { font-size: 11px; color: var(--text2); text-align: right; }
+    .feed-date   { font-size: 10px; color: var(--muted); }
+    .feed-empty  { color: var(--muted); font-size: 12px; padding: 20px 0; text-align: center; }
 
     /* ═══════════════════════════════════════════════════════════
    RESPONSIVE GRIDS
@@ -305,32 +662,38 @@
     .card {
       background: var(--bg2);
       border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 14px;
+      border-radius: var(--radius);
+      padding: 16px;
+      box-shadow: var(--elev-1);
+      transition: border-color var(--t), box-shadow var(--t);
     }
+    .card:hover { border-color: var(--border2); }
 
     .stat-card {
       text-align: center;
+      padding: 20px 14px;
     }
 
     .stat-card .label {
       font-size: 10px;
       color: var(--muted);
       text-transform: uppercase;
-      letter-spacing: .06em;
+      letter-spacing: .09em;
     }
 
     .stat-card .value {
-      font-size: 20px;
+      font-size: 28px;
       font-weight: 700;
-      margin-top: 4px;
+      margin-top: 8px;
       color: var(--green);
+      letter-spacing: -.02em;
+      line-height: 1;
     }
 
     .stat-card .sub {
       font-size: 11px;
       color: var(--muted);
-      margin-top: 2px;
+      margin-top: 6px;
     }
 
     /* ═══════════════════════════════════════════════════════════
@@ -349,45 +712,42 @@
 
     th {
       text-align: left;
-      padding: 8px 10px;
+      padding: 9px 12px;
       font-size: 10px;
       font-weight: 600;
       color: var(--muted);
       text-transform: uppercase;
-      letter-spacing: .06em;
+      letter-spacing: .08em;
       border-bottom: 1px solid var(--border);
       white-space: nowrap;
+      background: var(--bg3);
     }
 
     td {
-      padding: 8px 10px;
+      padding: 9px 12px;
       font-size: 12px;
       border-bottom: 1px solid var(--border);
       vertical-align: top;
+      transition: background var(--t);
     }
 
-    tr:last-child td {
-      border-bottom: none;
-    }
+    tr:last-child td { border-bottom: none; }
 
-    tr:hover td {
-      background: rgba(255, 255, 255, .02);
-    }
+    tr:hover td { background: rgba(255,255,255,.018); }
 
-    tr.row-win td {
-      background: rgba(0, 217, 126, .04);
-    }
+    tr.row-win  td { background: rgba(0,217,126,.03); }
+    tr.row-loss td { background: rgba(239,68,68,.03); }
+    tr.row-wait td { background: rgba(96,165,250,.03); }
+    tr.row-pending td { background: rgba(245,158,11,.03); }
 
-    tr.row-loss td {
-      background: rgba(239, 68, 68, .04);
+    /* ── Staggered row entrance ── */
+    tbody tr {
+      transition: opacity .35s var(--row-d, 0ms) ease,
+                  transform .35s var(--row-d, 0ms) ease,
+                  background var(--t);
     }
-
-    tr.row-wait td {
-      background: rgba(96, 165, 250, .04);
-    }
-
-    tr.row-pending td {
-      background: rgba(245, 158, 11, .04);
+    @starting-style {
+      tbody tr { opacity: 0; transform: translateY(6px); }
     }
 
     /* ═══════════════════════════════════════════════════════════
@@ -395,50 +755,21 @@
 ═══════════════════════════════════════════════════════════ */
     .badge {
       display: inline-block;
-      padding: 2px 7px;
-      border-radius: 4px;
+      padding: 2px 8px;
+      border-radius: 3px;
       font-size: 10px;
-      font-weight: 600;
+      font-weight: 700;
       text-transform: uppercase;
-      letter-spacing: .05em;
+      letter-spacing: .07em;
       white-space: nowrap;
     }
 
-    .badge-green {
-      background: rgba(0, 217, 126, .15);
-      color: var(--green);
-      border: 1px solid rgba(0, 217, 126, .3);
-    }
-
-    .badge-red {
-      background: rgba(239, 68, 68, .15);
-      color: var(--red);
-      border: 1px solid rgba(239, 68, 68, .3);
-    }
-
-    .badge-amber {
-      background: rgba(245, 158, 11, .15);
-      color: var(--amber);
-      border: 1px solid rgba(245, 158, 11, .3);
-    }
-
-    .badge-blue {
-      background: rgba(96, 165, 250, .15);
-      color: var(--blue);
-      border: 1px solid rgba(96, 165, 250, .3);
-    }
-
-    .badge-purple {
-      background: rgba(167, 139, 250, .15);
-      color: var(--purple);
-      border: 1px solid rgba(167, 139, 250, .3);
-    }
-
-    .badge-grey {
-      background: rgba(107, 114, 128, .15);
-      color: var(--muted);
-      border: 1px solid rgba(107, 114, 128, .3);
-    }
+    .badge-green  { background: rgba(0,217,126,.09);  color: var(--green);  border: 1px solid rgba(0,217,126,.22); }
+    .badge-red    { background: rgba(239,68,68,.09);   color: var(--red);    border: 1px solid rgba(239,68,68,.22); }
+    .badge-amber  { background: rgba(245,158,11,.09);  color: var(--amber);  border: 1px solid rgba(245,158,11,.22); }
+    .badge-blue   { background: rgba(96,165,250,.09);  color: var(--blue);   border: 1px solid rgba(96,165,250,.22); }
+    .badge-purple { background: rgba(167,139,250,.09); color: var(--purple); border: 1px solid rgba(167,139,250,.22); }
+    .badge-grey   { background: rgba(76,76,82,.14);    color: var(--text2);  border: 1px solid rgba(76,76,82,.28); }
 
     /* ═══════════════════════════════════════════════════════════
    CHARTS
@@ -446,16 +777,17 @@
     .chart-box {
       background: var(--bg2);
       border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 14px;
+      border-radius: var(--radius);
+      padding: 16px;
+      box-shadow: var(--elev-1);
     }
 
     .chart-box .chart-title {
-      font-size: 11px;
+      font-size: 10px;
       color: var(--muted);
       text-transform: uppercase;
-      letter-spacing: .06em;
-      margin-bottom: 10px;
+      letter-spacing: .09em;
+      margin-bottom: 14px;
     }
 
     .chart-box canvas {
@@ -468,33 +800,27 @@
     .spinner {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 10px;
       color: var(--muted);
       font-size: 12px;
-      padding: 20px 0;
+      padding: 24px 0;
     }
 
     .spinner::before {
       content: '';
       width: 14px;
       height: 14px;
-      border: 2px solid var(--border);
+      border: 2px solid var(--border2);
       border-top-color: var(--green);
       border-radius: 50%;
       animation: spin .7s linear infinite;
       flex-shrink: 0;
     }
 
-    @keyframes spin {
-      to {
-        transform: rotate(360deg);
-      }
-    }
-
     .error-box {
-      background: rgba(239, 68, 68, .08);
-      border: 1px solid rgba(239, 68, 68, .3);
-      border-radius: 6px;
+      background: rgba(239,68,68,.07);
+      border: 1px solid rgba(239,68,68,.22);
+      border-radius: 5px;
       padding: 12px 16px;
       color: var(--red);
       font-size: 12px;
@@ -513,14 +839,15 @@
     .filter-bar select,
     .filter-bar input {
       background: var(--bg3);
-      border: 1px solid var(--border);
+      border: 1px solid var(--border2);
       color: var(--text);
       padding: 8px 10px;
-      border-radius: 4px;
+      border-radius: 5px;
       font-family: inherit;
       font-size: 12px;
       outline: none;
       min-height: 36px;
+      transition: border-color var(--t);
     }
 
     .filter-bar select:focus,
@@ -564,7 +891,7 @@
     }
 
     .clickable-row:hover td {
-      background: rgba(0, 217, 126, .03) !important;
+      background: rgba(0,217,126,.025) !important;
     }
 
     /* ═══════════════════════════════════════════════════════════
@@ -580,12 +907,13 @@
       justify-content: space-between;
       align-items: center;
       margin-bottom: 4px;
-      transition: background .15s;
+      transition: background var(--t), border-color var(--t);
       min-height: 44px;
     }
 
     .accordion-header:hover {
       background: var(--bg4);
+      border-color: var(--border2);
     }
 
     .accordion-header h3 {
@@ -627,10 +955,13 @@
       background: transparent;
       font-family: inherit;
       border-bottom: 2px solid transparent;
-      transition: color .15s;
+      transition: color var(--t), border-color var(--t);
       white-space: nowrap;
       min-height: 36px;
+      letter-spacing: .03em;
     }
+
+    .tab-btn:hover { color: var(--text2); }
 
     .tab-btn.active {
       color: var(--green);
@@ -643,6 +974,7 @@
 
     .tab-pane.active {
       display: block;
+      animation: fadein .2s ease;
     }
 
     /* ═══════════════════════════════════════════════════════════
@@ -656,38 +988,39 @@
 
     .conf-bar {
       flex: 1;
-      height: 6px;
-      background: var(--border);
-      border-radius: 3px;
+      height: 4px;
+      background: var(--border2);
+      border-radius: 2px;
       overflow: hidden;
     }
 
     .conf-bar-fill {
       height: 100%;
-      border-radius: 3px;
-      background: var(--green);
-      transition: width .3s;
+      border-radius: 2px;
+      background: hsl(var(--mstate-hue), 80%, 48%);
+      transform-origin: left center;
+      transform: scaleX(var(--fill));
+      transition: transform .75s cubic-bezier(.16,1,.3,1),
+                  background 2s cubic-bezier(.4,0,.2,1);
+    }
+    @starting-style {
+      .conf-bar-fill { transform: scaleX(0); }
     }
 
     .lesson-card {
-      background: var(--bg3);
+      background: var(--bg2);
       border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 14px;
+      border-radius: var(--radius);
+      padding: 16px;
       margin-bottom: 10px;
+      box-shadow: var(--elev-1);
+      transition: border-color var(--t);
     }
+    .lesson-card:hover { border-color: var(--border2); }
 
-    .lesson-card.conf-high {
-      border-left: 3px solid var(--green);
-    }
-
-    .lesson-card.conf-medium {
-      border-left: 3px solid var(--amber);
-    }
-
-    .lesson-card.conf-low {
-      border-left: 3px solid var(--muted);
-    }
+    .lesson-card.conf-high   { border-left: 2px solid var(--green); }
+    .lesson-card.conf-medium { border-left: 2px solid var(--amber); }
+    .lesson-card.conf-low    { border-left: 2px solid var(--muted); }
 
     .split-badge {
       display: inline-flex;
@@ -716,23 +1049,10 @@
     /* ═══════════════════════════════════════════════════════════
    SCROLLBAR
 ═══════════════════════════════════════════════════════════ */
-    ::-webkit-scrollbar {
-      width: 5px;
-      height: 5px;
-    }
-
-    ::-webkit-scrollbar-track {
-      background: var(--bg2);
-    }
-
-    ::-webkit-scrollbar-thumb {
-      background: var(--border);
-      border-radius: 3px;
-    }
-
-    ::-webkit-scrollbar-thumb:hover {
-      background: #3a3a3a;
-    }
+    ::-webkit-scrollbar { width: 4px; height: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
 
     /* ═══════════════════════════════════════════════════════════
    NRB ENTRY STYLES  (dark-themed, matches dashboard)
@@ -746,10 +1066,11 @@
     .nrb-panel {
       background: var(--bg2);
       border: 1px solid var(--border);
-      border-radius: 6px;
+      border-radius: var(--radius);
       display: flex;
       flex-direction: column;
       overflow: hidden;
+      box-shadow: var(--elev-1);
     }
 
     .nrb-panel-hdr {
@@ -1148,8 +1469,8 @@
     }
 
     .api-dot {
-      width: 8px;
-      height: 8px;
+      width: 7px;
+      height: 7px;
       border-radius: 50%;
       background: var(--muted);
       display: inline-block;
@@ -1158,7 +1479,7 @@
 
     .api-dot.online {
       background: var(--green);
-      box-shadow: 0 0 6px var(--green);
+      animation: pulsedot 2.4s ease infinite;
     }
 
     .api-dot.offline {
@@ -1175,12 +1496,24 @@
 
       #bottom-nav {
         display: flex;
+        /* safe-area: iPhone home indicator + notch */
+        padding-bottom: env(safe-area-inset-bottom, 0px);
+        height: calc(var(--bnav-h) + env(safe-area-inset-bottom, 0px));
       }
 
       #main {
         margin-left: 0;
-        padding: 14px 12px calc(var(--bnav-h) + 20px);
+        height: calc(100dvh - var(--bnav-h) - env(safe-area-inset-bottom, 0px));
       }
+
+      .section.active-view.std-view {
+        padding: 14px 12px calc(28px + env(safe-area-inset-bottom, 0px));
+      }
+
+      .dash-panels { grid-template-columns: 1fr; }
+      .dash-panel-side { border-top: 1px solid var(--border); }
+      .dash-panel-main { border-right: none; }
+      #s-dashboard.active-view { grid-template-rows: auto 1fr; }
 
       body {
         font-size: 12px;
@@ -1256,6 +1589,105 @@
       .nrb-fields-wrap {
         max-height: 360px;
       }
+
+      /* ── Dashboard KPI bar ── */
+      .dash-kpi-item {
+        padding: 10px 14px;
+        min-width: 100px;
+      }
+      .dash-kpi-val { font-size: 15px; }
+      .dash-kpi-sub { font-size: 9px; }
+      .dash-kpi-label { font-size: 8px; }
+      .dash-kpi-pills { padding: 0 10px; }
+
+      /* ── Dashboard signal feed ── */
+      .feed-row {
+        grid-template-columns: 60px 1fr auto;
+        gap: 6px;
+        font-size: 11px;
+      }
+      .feed-symbol { font-size: 12px; }
+
+      /* ── Settings: stack rows vertically ── */
+      .set-row {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 6px;
+        padding: 12px 14px;
+      }
+      .set-label {
+        min-width: 0;
+        width: 100%;
+        font-size: 11px;
+        color: var(--text2);
+        padding-bottom: 2px;
+      }
+      .set-hint {
+        flex: none;
+        width: 100%;
+        line-height: 1.5;
+        padding-top: 2px;
+      }
+      .set-input {
+        width: 100%;
+        max-width: 100%;
+        box-sizing: border-box;
+      }
+      .set-input-sm { width: 80px; }
+      .set-select { width: auto; max-width: 100%; }
+      .set-status { align-self: flex-start; }
+
+      /* Stats row: 2-up instead of 4 across */
+      .set-stats-row {
+        flex-wrap: wrap;
+      }
+      .set-stat {
+        flex: 1 1 calc(50% - 1px);
+        min-width: 0;
+      }
+      .set-stat:nth-child(even) { border-right: none; }
+      .set-stat:nth-child(1),
+      .set-stat:nth-child(2) { border-bottom: 1px solid var(--border); }
+      .set-stat-val { font-size: 18px; }
+
+      /* Trading mode panel: stack label + badge + button */
+      .set-panel[style*="border:2px solid"] .set-row {
+        gap: 8px;
+      }
+
+      /* ── Touch targets: enlarge to 44px min ── */
+      #theme-toggle {
+        width: 44px;
+        height: 44px;
+        top: 8px;
+        right: 8px;
+        font-size: 15px;
+      }
+      /* Register link hidden on mobile (dev-only action) */
+      #register-link {
+        display: none;
+      }
+
+      /* ── Smooth scrollable feedback on touch ── */
+      .tbl-wrap, .feed-body, .ml-scroll-host {
+        -webkit-overflow-scrolling: touch;
+      }
+
+      /* ── Section header: smaller tag badge ── */
+      .section-header .tag {
+        font-size: 9px;
+        padding: 2px 6px;
+      }
+
+      /* ── Lesson cards: reduce padding ── */
+      .lesson-card {
+        padding: 12px;
+      }
+
+      /* ── Chart boxes: reduce padding ── */
+      .chart-box {
+        padding: 12px;
+      }
     }
 
     /* ═══════════════════════════════════════════════════════════
@@ -1263,21 +1695,24 @@
 ═══════════════════════════════════════════════════════════ */
     @media (min-width: 768px) and (max-width: 1023px) {
       :root {
-        --sidebar-w: 190px;
+        --sidebar-w: 180px;
       }
 
-      #main {
-        padding: 20px 20px 50px;
+      /* Narrower side panel so main chart area has room */
+      .dash-panels {
+        grid-template-columns: 1fr 260px;
+      }
+
+      .section.active-view.std-view {
+        padding: 18px 20px 40px;
       }
     }
 
     /* ═══════════════════════════════════════════════════════════
    SAFE NO-OVERFLOW GUARD
 ═══════════════════════════════════════════════════════════ */
-    #main,
-    .section {
+    .std-view {
       max-width: 100%;
-      overflow-x: hidden;
     }
 
     .card,
@@ -1299,8 +1734,9 @@
     .rpt-panel {
       background: var(--bg2);
       border: 1px solid var(--border);
-      border-radius: 6px;
+      border-radius: var(--radius);
       overflow: hidden;
+      box-shadow: var(--elev-1);
     }
 
     .rpt-panel-hdr {
@@ -1503,15 +1939,63 @@
       margin-bottom: 8px;
     }
 
+    /* ── Utility: missing btn-sm ─────────────────────────────────────── */
+    .btn-sm {
+      font-family: inherit;
+      font-size: 11px;
+      letter-spacing: .05em;
+      text-transform: uppercase;
+      padding: 5px 11px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      background: var(--bg4);
+      color: var(--text);
+      cursor: pointer;
+      min-height: 30px;
+    }
+    .btn-sm:hover { border-color: var(--muted); }
+
+    /* ── Run Logs ─────────────────────────────────────────────────────── */
+    .logs-select {
+      background: var(--bg3);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 7px 10px;
+      font-family: inherit;
+      font-size: 12px;
+      outline: none;
+      cursor: pointer;
+      min-height: 34px;
+      margin-left: auto;
+    }
+    .logs-select:focus { border-color: var(--green); }
+    .logs-select option { background: var(--bg3); }
+    .logs-content {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 12px;
+      font-family: inherit;
+      font-size: 12px;
+      line-height: 1.6;
+      overflow-y: auto;
+      max-height: 500px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
     /* ── Light mode overrides ──────────────────────────────────────────── */
     body.light-mode {
-      --bg: #f0f0f0;
-      --bg2: #e8e8e8;
-      --bg3: #dcdcdc;
-      --bg4: #d0d0d0;
-      --border: #c0c0c0;
-      --text: #1a1a1a;
-      --muted: #555555;
+      --bg:      #f2f2f2;
+      --bg2:     #e9e9e9;
+      --bg3:     #dedede;
+      --bg4:     #d2d2d2;
+      --border:  #cacaca;
+      --border2: #b8b8b8;
+      --text:    #1a1a1a;
+      --text2:   #444444;
+      --muted:   #666666;
     }
 
     body.light-mode #sidebar {
@@ -1532,18 +2016,18 @@
       top: 12px;
       right: 16px;
       z-index: 9999;
-      width: 34px;
-      height: 34px;
+      width: 30px;
+      height: 30px;
       border-radius: 50%;
       background: var(--bg3);
-      border: 1px solid var(--border);
-      color: var(--text);
-      font-size: 15px;
+      border: 1px solid var(--border2);
+      color: var(--text2);
+      font-size: 13px;
       cursor: pointer;
       display: flex;
       align-items: center;
       justify-content: center;
-      transition: background .15s, border-color .15s;
+      transition: background var(--t), border-color var(--t), color var(--t);
       line-height: 1;
       padding: 0;
     }
@@ -1555,17 +2039,18 @@
     }
 
     /* ── Register link button ─────────────────────────────────────────── */
+    /* Register + toggle live in a fixed cluster, no overlap with content */
     #register-link {
       position: fixed;
       top: 12px;
-      right: 60px;
+      right: 52px;
       z-index: 9999;
-      height: 34px;
+      height: 30px;
       padding: 0 12px;
-      border-radius: 6px;
+      border-radius: 5px;
       background: var(--bg3);
-      border: 1px solid var(--border);
-      color: var(--text);
+      border: 1px solid var(--border2);
+      color: var(--text2);
       font-size: 11px;
       font-family: 'JetBrains Mono', monospace;
       cursor: pointer;
@@ -1573,14 +2058,14 @@
       align-items: center;
       justify-content: center;
       text-decoration: none;
-      letter-spacing: 0.05em;
-      transition: background .15s, border-color .15s, color .15s;
+      letter-spacing: .05em;
+      transition: background var(--t), border-color var(--t), color var(--t);
     }
+    #register-link:hover { background: var(--green); border-color: var(--green); color: #000; }
 
-    #register-link:hover {
-      background: var(--green);
-      border-color: var(--green);
-      color: #000;
+    /* Push KPI pills clear of fixed Register+toggle (≈145px from right) — desktop only */
+    @media (min-width: 768px) {
+      .dash-kpi-pills { padding-right: 150px; }
     }
 
     /* ── Stealth tab styles ───────────────────────────────────────────── */
@@ -1600,22 +2085,27 @@
     .st-stat {
       background: var(--bg2);
       border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 12px 14px;
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      box-shadow: var(--elev-1);
+      transition: border-color var(--t);
     }
+    .st-stat:hover { border-color: var(--border2); }
 
     .st-stat-label {
       font-size: 10px;
       color: var(--muted);
       text-transform: uppercase;
-      letter-spacing: .06em;
-      margin-bottom: 5px;
+      letter-spacing: .08em;
+      margin-bottom: 7px;
     }
 
     .st-stat-val {
-      font-size: 22px;
+      font-size: 26px;
       font-weight: 700;
       color: var(--text);
+      letter-spacing: -.02em;
+      line-height: 1;
     }
 
     .st-section {
@@ -1768,21 +2258,23 @@
    SETTINGS PANEL
 ═══════════════════════════════════════════════════════════ */
     .set-panel {
-      background: var(--bg3);
+      background: var(--bg2);
       border: 1px solid var(--border);
-      border-radius: 6px;
+      border-radius: var(--radius);
       margin-bottom: 16px;
       overflow: hidden;
+      box-shadow: var(--elev-1);
+      flex-shrink: 0;
     }
     .set-panel-hdr {
-      font-size: 11px;
-      font-weight: 600;
+      font-size: 10px;
+      font-weight: 700;
       text-transform: uppercase;
-      letter-spacing: .08em;
-      color: var(--green);
+      letter-spacing: .12em;
+      color: var(--text2);
       padding: 10px 16px;
       border-bottom: 1px solid var(--border);
-      background: var(--bg4);
+      background: var(--bg3);
     }
     .set-stats-row {
       display: flex;
@@ -1818,9 +2310,9 @@
       cursor: pointer;
       inset: 0;
       background: var(--bg4);
-      border: 1px solid var(--border);
+      border: 1px solid var(--border2);
       border-radius: 22px;
-      transition: .2s;
+      transition: background var(--t), border-color var(--t);
     }
     .set-slider:before {
       position: absolute;
@@ -1829,19 +2321,20 @@
       left: 2px; bottom: 2px;
       background: var(--muted);
       border-radius: 50%;
-      transition: .2s;
+      transition: transform var(--t), background var(--t);
     }
     .set-toggle input:checked + .set-slider { background: rgba(0,217,126,.15); border-color: var(--green); }
     .set-toggle input:checked + .set-slider:before { transform: translateX(18px); background: var(--green); }
     .set-select, .set-input, .set-input-sm {
       background: var(--bg4);
       color: var(--text);
-      border: 1px solid var(--border);
+      border: 1px solid var(--border2);
       border-radius: 4px;
       padding: 5px 8px;
       font-family: inherit;
       font-size: 12px;
       outline: none;
+      transition: border-color var(--t);
     }
     .set-select:focus, .set-input:focus, .set-input-sm:focus { border-color: var(--green); }
     .set-input { width: 220px; }
@@ -1851,18 +2344,19 @@
     .set-status.err { color: var(--red); }
     .set-btn {
       background: var(--bg4);
-      border: 1px solid var(--border);
+      border: 1px solid var(--border2);
       color: var(--green);
       padding: 5px 12px;
       border-radius: 4px;
       font-family: inherit;
       font-size: 12px;
       cursor: pointer;
+      transition: border-color var(--t), background var(--t);
     }
-    .set-btn:hover { border-color: var(--green); }
+    .set-btn:hover { border-color: var(--green); background: rgba(0,217,126,.06); }
     .set-btn-danger { color: var(--red); }
-    .set-btn-danger:hover { border-color: var(--red); }
-    .set-hint { font-size: 10px; color: var(--muted); }
+    .set-btn-danger:hover { border-color: var(--red); background: rgba(239,68,68,.06); }
+    .set-hint { font-size: 10px; color: var(--muted); flex: 1; min-width: 0; line-height: 1.5; }
     .set-hint-block { padding: 8px 16px; font-size: 10px; color: var(--muted); border-bottom: 1px solid var(--border); }
 
     @media (max-width: 767px) {
@@ -1888,21 +2382,23 @@
       <p>Engine Dashboard</p>
     </div>
     <nav>
-      <a href="#s-dashboard" class="active">&#9632; Dashboard</a>
+      <a href="#s-dashboard" class="active">Dashboard</a>
 
-      <a href="#s-marketlog">&#9632; Market Log</a>
-      <a href="#s-learning">&#9632; Learning Hub</a>
-      <a href="#s-audit">&#9632; Weekly Audit</a>
-      <a href="#s-council">&#9632; Monthly Council</a>
-      <a href="#s-trades">&#9632; Trade Journal</a>
-      <a href="#s-portfolio">&#9632; Portfolio</a>
+      <a href="#s-marketlog">Market Log</a>
+      <a href="#s-accumulation" style="padding-left:28px;font-size:10px">▲ Accumulation</a>
+      <a href="#s-distribution" style="padding-left:28px;font-size:10px">▼ Distribution</a>
+      <a href="#s-learning">Learning Hub</a>
+      <a href="#s-audit">Weekly Audit</a>
+      <a href="#s-council">Monthly Council</a>
+      <a href="#s-trades">Trade Journal</a>
+      <a href="#s-portfolio">Portfolio</a>
       <div class="divider"></div>
-      <a href="#s-logs">&#9632; Run Logs</a>
-      <a href="#s-nrb">&#9632; NRB Entry</a>
-      <a href="#s-reporter">&#9632; Query</a>
-      <a href="#s-stealth">&#9632; Stealth</a>
-      <a href="#s-gate-tracker">&#9632; Gate Tracker</a>
-      <a href="#s-settings">&#9632; Settings</a>
+      <a href="#s-logs">Run Logs</a>
+      <a href="#s-nrb">NRB Entry</a>
+      <a href="#s-reporter">Query</a>
+      <a href="#s-stealth">Stealth</a>
+      <a href="#s-gate-tracker">Gate Tracker</a>
+      <a href="#s-settings">Settings</a>
     </nav>
     <div class="refresh-info">
       Auto-refresh: <span>5 min</span><br />
@@ -1914,17 +2410,14 @@
   <div id="main">
 
     <!-- 1. Dashboard -->
-    <div class="section" id="s-dashboard">
-      <div class="section-header">
-        <h2>Dashboard</h2><span class="tag">LIVE</span>
-      </div>
-      <div id="dash-content">
-        <div class="spinner">Loading summary…</div>
+    <div class="section active-view" id="s-dashboard">
+      <div id="dash-content" style="display:contents">
+        <div class="spinner" style="padding:40px 28px">Loading summary…</div>
       </div>
     </div>
 
     <!-- 2. Market Log -->
-    <div class="section" id="s-marketlog">
+    <div class="section std-view" id="s-marketlog">
       <div class="section-header">
         <h2>Market Log</h2><span id="ml-count" class="tag">—</span>
       </div>
@@ -1954,8 +2447,26 @@
       </div>
     </div>
 
+    <!-- Accumulation standalone -->
+    <div class="section std-view" id="s-accumulation">
+      <div class="section-header">
+        <h2>Accumulation</h2><span class="tag">SMART MONEY</span>
+        <span id="acc-date" style="font-size:10px;color:var(--muted);margin-left:auto"></span>
+      </div>
+      <div id="acc-content"><div class="spinner">Loading…</div></div>
+    </div>
+
+    <!-- Distribution standalone -->
+    <div class="section std-view" id="s-distribution">
+      <div class="section-header">
+        <h2>Distribution</h2><span class="tag">SMART MONEY</span>
+        <span id="dist-date" style="font-size:10px;color:var(--muted);margin-left:auto"></span>
+      </div>
+      <div id="dist-content"><div class="spinner">Loading…</div></div>
+    </div>
+
     <!-- 3. Learning Hub -->
-    <div class="section" id="s-learning">
+    <div class="section std-view" id="s-learning">
       <div class="section-header">
         <h2>Learning Hub</h2>
       </div>
@@ -1965,7 +2476,7 @@
     </div>
 
     <!-- 4. Weekly Audit -->
-    <div class="section" id="s-audit">
+    <div class="section std-view" id="s-audit">
       <div class="section-header">
         <h2>Weekly Audit</h2>
       </div>
@@ -1975,7 +2486,7 @@
     </div>
 
     <!-- 5. Monthly Council -->
-    <div class="section" id="s-council">
+    <div class="section std-view" id="s-council">
       <div class="section-header">
         <h2>Monthly Council</h2><span class="tag">DRAMA</span>
       </div>
@@ -1985,7 +2496,7 @@
     </div>
 
     <!-- 6. Trade Journal -->
-    <div class="section" id="s-trades">
+    <div class="section std-view" id="s-trades">
       <div class="section-header">
         <h2>Trade Journal</h2>
       </div>
@@ -1995,7 +2506,7 @@
     </div>
 
     <!-- 7. Portfolio -->
-    <div class="section" id="s-portfolio">
+    <div class="section std-view" id="s-portfolio">
       <div class="section-header">
         <h2>Portfolio</h2><span class="tag">PAPER</span>
       </div>
@@ -2005,7 +2516,7 @@
     </div>
 
     <!-- 8. NRB Entry -->
-    <div class="section" id="s-nrb">
+    <div class="section std-view" id="s-nrb">
       <div class="section-header">
         <h2>NRB Entry</h2>
         <div style="display:flex;align-items:center;gap:6px;margin-left:auto">
@@ -2105,7 +2616,7 @@
     </div><!-- /s-nrb -->
 
     <!-- 9. Query Reporter -->
-    <div class="section" id="s-reporter">
+    <div class="section std-view" id="s-reporter">
       <div class="section-header">
         <h2>Query Reporter</h2><span class="tag">SQL</span>
       </div>
@@ -2184,45 +2695,39 @@
     </div><!-- /s-reporter -->
 
     <!-- Logs Section -->
-    <div class="section" id="s-logs" style="background:#1e1e1e;border-radius:8px;padding:16px;">
-      <div class="section-header" style="border-bottom-color:#2c2c2c;">
-        <h2
-          style="font-family:'Roboto',sans-serif;color:#e0e0e0;font-size:14px;font-weight:500;letter-spacing:0.1em;text-transform:uppercase;">
-          📋 Run Logs</h2>
-        <select id="logs-dropdown"
-          style="background:#2c2c2c;color:#e0e0e0;border:1px solid #424242;border-radius:4px;padding:8px 32px 8px 12px;font-family:'Roboto',sans-serif;font-size:13px;appearance:none;-webkit-appearance:none;background-image:url('data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2212%22 height=%228%22 viewBox=%220 0 12 8%22><path fill=%22%2300d97e%22 d=%22M0 0l6 8 6-8z%22/></svg>');background-repeat:no-repeat;background-position:right 10px center;outline:none;cursor:pointer;"
-          onfocus="this.style.borderColor='#00d97e';this.style.boxShadow='0 0 0 2px rgba(0,217,126,0.2)';"
-          onblur="this.style.borderColor='#424242';this.style.boxShadow='none';">
+    <div class="section std-view" id="s-logs">
+      <div class="section-header">
+        <h2>Run Logs</h2>
+        <select id="logs-dropdown" class="logs-select">
           <option value="">Loading logs…</option>
         </select>
       </div>
-      <div id="logs-content"
-        style="background:#121212;border:1px solid #2c2c2c;border-radius:4px;padding:12px;font-family:'Roboto Mono',monospace;font-size:12px;line-height:1.6;overflow-y:auto;max-height:500px;white-space:pre-wrap;word-break:break-word;">
+      <div id="logs-content" class="logs-content">
         <div class="spinner">Loading logs…</div>
       </div>
     </div><!-- /s-logs -->
 
-    <div class="section" id="s-stealth">
+    <div class="section std-view" id="s-stealth">
       <div class="section-header">
-        <h2>🔍 Stealth Signals</h2><span class="tag">ACCUMULATION</span>
+        <h2>Stealth Signals</h2><span class="tag">ACCUMULATION</span>
       </div>
 
       <!-- Stats row -->
       <div class="st-stats-row">
         <div class="st-stat">
-          <div class="st-stat-label">👁 Watching</div>
+          <div class="st-stat-label">Watching</div>
           <div class="st-stat-val" id="st-watching">—</div>
         </div>
         <div class="st-stat" style="border-left:3px solid var(--amber)">
-          <div class="st-stat-label">🔔 Triggered</div>
+          <div class="st-stat-label">Triggered</div>
           <div class="st-stat-val" id="st-triggered">—</div>
         </div>
         <div class="st-stat">
-          <div class="st-stat-label">🎯 Hit Rate</div>
+          <div class="st-stat-label">Hit Rate</div>
           <div class="st-stat-val" id="st-hitrate">—</div>
         </div>
         <div class="st-stat">
-          <div class="st-stat-label">📈 Avg Return</div>
+          <div class="st-stat-label">Avg Return</div>
           <div class="st-stat-val" id="st-avgret">—</div>
         </div>
       </div>
@@ -2277,7 +2782,7 @@
       <!-- Watching -->
       <div class="st-section">
         <div class="st-section-hdr">
-          🟡 Currently Watching
+          Currently Watching
           <span class="st-note">auto-refresh 5min</span>
         </div>
         <div class="tbl-wrap">
@@ -2305,7 +2810,7 @@
 
       <!-- Triggered -->
       <div class="st-section">
-        <div class="st-section-hdr">🔥 Triggered — Entry Candidates</div>
+        <div class="st-section-hdr">Triggered — Entry Candidates</div>
         <div class="tbl-wrap">
           <table class="st-tbl">
             <thead>
@@ -2332,7 +2837,7 @@
 
       <!-- History -->
       <div class="st-section">
-        <div class="st-section-hdr">✅ Closed History</div>
+        <div class="st-section-hdr">Closed History</div>
         <div class="tbl-wrap">
           <table class="st-tbl">
             <thead>
@@ -2359,27 +2864,27 @@
     </div><!-- /s-stealth -->
 
     <!-- ═══════════════════════ GATE TRACKER ═════════════════════════════ -->
-    <div class="section" id="s-gate-tracker">
+    <div class="section std-view" id="s-gate-tracker">
       <div class="section-header">
-        <h2>&#128300; Gate Tracker</h2><span class="tag">FORENSIC</span>
+        <h2>Gate Tracker</h2><span class="tag">FORENSIC</span>
       </div>
 
       <!-- Stats row: 4 cards -->
       <div class="st-stats-row">
         <div class="st-stat">
-          <div class="st-stat-label">&#128202; Total Tracked</div>
+          <div class="st-stat-label">Total Tracked</div>
           <div class="st-stat-val" id="gt-total">&#8212;</div>
         </div>
         <div class="st-stat" style="border-left:3px solid var(--amber)">
-          <div class="st-stat-label">&#9203; Pending</div>
+          <div class="st-stat-label">Pending</div>
           <div class="st-stat-val" id="gt-pending">&#8212;</div>
         </div>
         <div class="st-stat">
-          <div class="st-stat-label">&#9888; False Block Rate</div>
+          <div class="st-stat-label">False Block Rate</div>
           <div class="st-stat-val" id="gt-fb-rate">&#8212;</div>
         </div>
         <div class="st-stat">
-          <div class="st-stat-label">&#127919; Would've Caught</div>
+          <div class="st-stat-label">Would've Caught</div>
           <div class="st-stat-val" id="gt-wc-rate">&#8212;</div>
         </div>
       </div>
@@ -2436,7 +2941,7 @@
     </div><!-- /s-gate-tracker -->
 
     <!-- 13. Settings -->
-    <div class="section" id="s-settings">
+    <div class="section std-view" id="s-settings">
       <div class="section-header">
         <h2>Settings</h2><span class="tag">CONTROL</span>
       </div>
@@ -2446,8 +2951,12 @@
         <div class="set-panel-hdr" style="color:var(--red)">⚡ Trading Mode</div>
         <div class="set-row">
           <div class="set-label">Current Mode</div>
+          <label class="set-toggle" title="Click to switch trading mode">
+            <input type="checkbox" id="set-TRADING_MODE"
+              onclick="event.preventDefault(); openTradingModeModal()">
+            <span class="set-slider"></span>
+          </label>
           <span id="badge-trading-mode" class="badge badge-green">…</span>
-          <button class="btn-sm" style="margin-left:16px" onclick="openTradingModeModal()">Switch Mode</button>
           <span class="set-hint">Requires exact confirmation phrase — restarts execution monitor automatically.</span>
         </div>
       </div>
@@ -2758,20 +3267,20 @@
 
   <!-- ═══ Trading Mode Modal ═══════════════════════════════════════════ -->
   <div id="modal-trading-mode" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:9999;align-items:center;justify-content:center;">
-    <div style="background:var(--surface,#1e1e1e);border:1px solid #444;border-radius:10px;padding:32px;max-width:420px;width:90%;box-shadow:0 8px 40px rgba(0,0,0,.6)">
-      <h3 id="modal-tm-title" style="margin:0 0 10px;font-size:1.1rem"></h3>
-      <p id="modal-tm-warning" style="color:#aaa;font-size:.9rem;margin:0 0 18px"></p>
-      <p style="margin:0 0 8px;font-size:.9rem">Type exactly to confirm:</p>
-      <code id="modal-tm-phrase" style="display:block;background:#111;padding:8px 12px;border-radius:4px;letter-spacing:.05em;margin-bottom:14px;color:#ffa726"></code>
+    <div style="background:var(--bg4);border:1px solid var(--border);border-radius:8px;padding:28px;max-width:420px;width:90%;box-shadow:0 8px 40px rgba(0,0,0,.6)">
+      <h3 id="modal-tm-title" style="margin:0 0 10px;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text)"></h3>
+      <p id="modal-tm-warning" style="color:var(--muted);font-size:12px;margin:0 0 16px;line-height:1.6"></p>
+      <p style="margin:0 0 6px;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Type exactly to confirm:</p>
+      <code id="modal-tm-phrase" style="display:block;background:var(--bg2);padding:8px 12px;border-radius:4px;letter-spacing:.05em;margin-bottom:14px;color:var(--amber);font-family:inherit;font-size:13px"></code>
       <input id="modal-tm-input" type="text" autocomplete="off" spellcheck="false"
-        style="width:100%;box-sizing:border-box;padding:10px;background:#111;border:1px solid #555;border-radius:4px;color:#eee;font-size:.95rem;margin-bottom:14px"
+        style="width:100%;box-sizing:border-box;padding:9px 10px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px;font-family:inherit;margin-bottom:14px;outline:none"
         placeholder="Type the phrase above…"
         onkeydown="if(event.key==='Enter') confirmTradingModeSwitch()">
       <div style="display:flex;gap:10px;justify-content:flex-end">
-        <button onclick="closeTradingModeModal()" style="padding:8px 18px;border-radius:4px;border:1px solid #555;background:transparent;color:#ccc;cursor:pointer">Cancel</button>
-        <button onclick="confirmTradingModeSwitch()" style="padding:8px 18px;border-radius:4px;border:none;background:var(--red,#ef5350);color:#fff;font-weight:600;cursor:pointer">Confirm Switch</button>
+        <button onclick="closeTradingModeModal()" style="padding:7px 16px;border-radius:4px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;font-family:inherit;font-size:12px">Cancel</button>
+        <button onclick="confirmTradingModeSwitch()" style="padding:7px 16px;border-radius:4px;border:1px solid var(--red);background:transparent;color:var(--red);font-weight:600;cursor:pointer;font-family:inherit;font-size:12px">Confirm Switch</button>
       </div>
-      <div id="modal-tm-status" style="margin-top:12px;font-size:.85rem;min-height:18px"></div>
+      <div id="modal-tm-status" style="margin-top:12px;font-size:11px;min-height:18px;color:var(--muted)"></div>
     </div>
   </div>
 
@@ -2785,11 +3294,11 @@
       <a href="#s-council"><span class="bico">⚡</span>Cncl</a>
       <a href="#s-trades"><span class="bico">◉</span>Trades</a>
       <a href="#s-portfolio"><span class="bico">◎</span>Port</a>
-      <a href="#s-logs"><span class="bico">📋</span>Logs</a>
+      <a href="#s-logs"><span class="bico">▤</span>Logs</a>
       <a href="#s-nrb"><span class="bico">⊞</span>NRB</a>
       <a href="#s-reporter"><span class="bico">⊟</span>Query</a>
       <a href="#s-stealth"><span class="bico">◈</span>Stealth</a>
-      <a href="#s-gate-tracker"><span class="bico">&#128300;</span>Gates</a>
+      <a href="#s-gate-tracker"><span class="bico">&#9671;</span>Gates</a>
       <a href="#s-settings"><span class="bico">&#9881;</span>Settings</a>
     </div>
   </nav>
@@ -2806,6 +3315,36 @@
       return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
     function v(s) { return (s == null || s === '') ? '—' : s; }
+
+    /* ── countUp: GPU-scheduled numeric animation ───────────────────── */
+    function countUp(el, to, opts) {
+      if (!el || isNaN(to)) return;
+      var dur = (opts && opts.duration) || 680;
+      var pre = (opts && opts.prefix) || '';
+      var suf = (opts && opts.suffix) || '';
+      var dec = (opts && opts.decimals != null) ? opts.decimals : 0;
+      var fmt = (opts && opts.format) || null; // custom formatter
+      var start = null;
+      (function tick(ts) {
+        if (!start) start = ts;
+        var p = Math.min((ts - start) / dur, 1);
+        var e = 1 - Math.pow(1 - p, 3); // cubic ease-out
+        var cur = to * e;
+        el.textContent = pre + (fmt ? fmt(cur) : (dec ? cur.toFixed(dec) : Math.round(cur).toLocaleString())) + suf;
+        if (p < 1) requestAnimationFrame(tick);
+      })(performance.now());
+    }
+
+    /* ── setMarketHue: smooth hue transition via @property ─────────── */
+    function setMarketHue(ms) {
+      var hues = {
+        FULL_BULL: 152, BULL: 152, CAUTIOUS_BULL: 130,
+        SIDEWAYS: 45, RANGING: 45,
+        CAUTIOUS_BEAR: 16, BEAR: 4
+      };
+      var h = hues[String(ms || '').toUpperCase()];
+      if (h != null) document.documentElement.style.setProperty('--mstate-hue', h);
+    }
     function pnlClass(val) { const n = parseFloat(val); if (isNaN(n)) return ''; return n >= 0 ? 'pnl-pos' : 'pnl-neg'; }
     function badge(text, color) {
       if (!text || text === '—') return '<span style="color:var(--muted)">—</span>';
@@ -2845,7 +3384,11 @@
     async function loadSummary() {
       try {
         const d = await fetchJSON('/dashboard/summary');
-        renderSummary(d);
+        if (document.startViewTransition && document.getElementById('dash-content').children.length) {
+          document.startViewTransition(() => renderSummary(d));
+        } else {
+          renderSummary(d);
+        }
       } catch (e) { setError('dash-content', 'Summary API error: ' + e.message); }
     }
 
@@ -2855,77 +3398,133 @@
       const unr = d.unrealized_pnl || 0;
       const ms = d.market_state || 'UNKNOWN';
       const msC = { BULL: 'green', BEAR: 'red', SIDEWAYS: 'amber', RANGING: 'amber' }[String(ms).toUpperCase()] || 'grey';
+      const wr = parseFloat(tj.win_rate) || 0;
+      const avgRet = parseFloat(tj.avg_return) || 0;
 
-      const cards = `
-  <div class="g4" style="margin-bottom:16px">
-    <div class="card stat-card">
-      <div class="label">Cash Balance</div>
-      <div class="value" style="font-size:16px">NPR ${cap.toLocaleString()}</div>
-      <div class="sub">paper capital</div>
-    </div>
-    <div class="card stat-card">
-      <div class="label">Open Positions</div>
-      <div class="value">${d.open_positions || 0}</div>
-      <div class="sub">unreal: <span class="${pnlClass(unr)}">${unr >= 0 ? '+' : ''}${unr.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span></div>
-    </div>
-    <div class="card stat-card">
-      <div class="label">Win Rate</div>
-      <div class="value" style="color:${tj.win_rate >= 60 ? 'var(--green)' : tj.win_rate >= 45 ? 'var(--amber)' : 'var(--red)'}">
-        ${tj.win_rate || 0}%
-      </div>
-      <div class="sub">${tj.wins || 0}W / ${tj.losses || 0}L of ${tj.total_trades || 0}</div>
-    </div>
-    <div class="card stat-card">
-      <div class="label">Avg Return</div>
-      <div class="value" style="color:${(tj.avg_return || 0) >= 0 ? 'var(--green)' : 'var(--red)'}">
-        ${(tj.avg_return || 0) >= 0 ? '+' : ''}${tj.avg_return || 0}%
-      </div>
-      <div class="sub">per trade</div>
-    </div>
-  </div>`;
+      setMarketHue(ms);
 
-      const badges = `
-  <div class="card" style="padding:10px 14px;display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:16px">
-    <span style="font-size:10px;color:var(--muted);text-transform:uppercase">State</span>${badge(ms, msC)}
-    <span style="font-size:10px;color:var(--muted);text-transform:uppercase;margin-left:4px">Nepal</span>${badge(d.nepal_score, scoreColor(d.nepal_score))}
-    <span style="font-size:10px;color:var(--muted);text-transform:uppercase;margin-left:4px">Geo</span>${badge(d.geo_score, scoreColor(d.geo_score))}
-  </div>`;
-
-      const charts = `
-  <div class="chart-box" style="margin-bottom:16px">
-    <div class="chart-title">NEPSE Index — Last 30 Days</div>
-    <canvas id="chart-nepse" height="75"></canvas>
-  </div>`;
-
+      /* ── Signal feed rows for side panel ── */
       const signals = (d.recent_signals || []);
-      const sigRows = signals.map(s => {
-        const oc = { WIN: 'green', LOSS: 'red', PENDING: 'amber', CORRECT: 'blue', WRONG: 'red' }[String(s.outcome || '').toUpperCase()] || 'grey';
-        return `<tr>
-      <td>${v(s.date)}</td>
-      <td style="color:var(--green);font-weight:600">${v(s.symbol)}</td>
-      <td>${actionBadge(s.action)}</td>
-      <td>${v(s.confidence)}</td>
-      <td style="color:var(--muted)">${v(s.primary_signal)}</td>
-      <td>${badge(s.outcome, oc)}</td>
-      <td><span class="${pnlClass(s.actual_pnl)}">${v(s.actual_pnl)}</span></td>
-    </tr>`;
-      }).join('');
+      /* Claude signals only: BUY / WAIT / AVOID — strip Gemini pre-screen rows */
+      const claudeSignals = signals.filter(s => {
+        const a = String(s.action || '').toUpperCase();
+        return a === 'BUY' || a === 'WAIT' || a === 'AVOID';
+      });
+      const feedRows = claudeSignals.slice(0, 12).map((s, i) => {
+        const delay = Math.min(i * 35, 350) + 'ms';
+        const confNum = parseFloat(s.confidence) || 0;
+        const confPct = Math.min(100, confNum > 1 ? confNum : confNum * 100);
+        return `<div class="feed-row" style="--row-d:${delay}">
+          <span class="feed-symbol">${esc(s.symbol)}</span>
+          ${actionBadge(s.action)}
+          <span class="feed-conf" style="color:var(--text2)">${confNum > 0 ? confNum : '—'}</span>
+          <span class="${pnlClass(s.actual_pnl)}" style="font-size:11px">${v(s.actual_pnl)}</span>
+        </div>`;
+      }).join('') || '<div class="feed-empty" style="padding:16px 0;color:var(--muted);font-size:11px">No Claude signals yet</div>';
 
-      const recent = `
-  <div class="card">
-    <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Recent Signals</div>
-    <div class="tbl-wrap"><table>
-      <thead><tr><th>Date</th><th>Symbol</th><th>Action</th><th>Conf</th><th>Signal</th><th>Outcome</th><th>PnL</th></tr></thead>
-      <tbody>${sigRows || '<tr><td colspan="7" style="color:var(--muted)">No signals yet</td></tr>'}</tbody>
-    </table></div>
-  </div>`;
-
+      /* ── Build the command grid ── */
+      document.getElementById('dash-content').style.display = 'contents';
       document.getElementById('dash-content').innerHTML = `
-        <div id="broker-flow-section" style="margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid var(--border)">
-          <div class="spinner" style="font-size:11px">Loading smart money flow…</div>
-        </div>` + cards + badges + charts + recent;
+        <!-- KPI BAR: each item navigates to its section on click -->
+        <div class="dash-kpi-bar">
+          <div class="dash-kpi-item" style="cursor:pointer" onclick="switchView('s-portfolio')" title="Portfolio">
+            <div class="dash-kpi-label">Cash Balance</div>
+            <div class="dash-kpi-val" style="color:var(--green)" data-count="${cap}" data-prefix="NPR ">NPR ${cap.toLocaleString()}</div>
+            <div class="dash-kpi-sub">paper capital &#8599;</div>
+          </div>
+          <div class="dash-kpi-item" style="cursor:pointer" onclick="switchView('s-portfolio')" title="Portfolio">
+            <div class="dash-kpi-label">Open Positions</div>
+            <div class="dash-kpi-val" data-count="${d.open_positions || 0}">${d.open_positions || 0}</div>
+            <div class="dash-kpi-sub"><span class="${pnlClass(unr)}">${unr >= 0 ? '+' : ''}${unr.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span> unreal &#8599;</div>
+          </div>
+          <div class="dash-kpi-item" style="cursor:pointer" onclick="switchView('s-trades')" title="Trade Journal">
+            <div class="dash-kpi-label">Win Rate</div>
+            <div class="dash-kpi-val" data-count="${wr}" data-suffix="%" style="color:${wr >= 55 ? 'var(--green)' : wr >= 40 ? 'var(--amber)' : 'var(--red)'}">${wr}%</div>
+            <div class="dash-kpi-sub">${tj.wins || 0}W &middot; ${tj.losses || 0}L &middot; ${tj.total_trades || 0} total &#8599;</div>
+          </div>
+          <div class="dash-kpi-item" style="cursor:pointer" onclick="switchView('s-trades')" title="Trade Journal">
+            <div class="dash-kpi-label">Avg Return</div>
+            <div class="dash-kpi-val" data-count="${Math.abs(avgRet)}" data-prefix="${avgRet >= 0 ? '+' : '-'}" data-suffix="%" data-decimals="1" style="color:${avgRet >= 0 ? 'var(--green)' : 'var(--red)'}">
+              ${avgRet >= 0 ? '+' : ''}${avgRet}%
+            </div>
+            <div class="dash-kpi-sub">per trade &#8599;</div>
+          </div>
+          <div class="dash-kpi-item" style="cursor:pointer" onclick="switchView('s-audit')" title="Weekly Audit">
+            <div class="dash-kpi-label">Market State</div>
+            <div style="margin-top:4px">${badge(ms, msC)}</div>
+            <div class="dash-kpi-sub" style="margin-top:4px">Nepal ${badge(d.nepal_score, scoreColor(d.nepal_score))} Geo ${badge(d.geo_score, scoreColor(d.geo_score))} &#8599;</div>
+          </div>
+          <div class="dash-kpi-pills">
+            <div class="dash-live-dot"></div>
+            <span class="dash-kpi-lbl">PAPER</span>
+          </div>
+        </div>
+
+        <!-- TWO-COLUMN PANELS -->
+        <div class="dash-panels">
+          <!-- LEFT: 3 charts (broker flow moved to own nav) -->
+          <div class="dash-panel-main">
+            <div class="chart-box">
+              <div class="chart-title">NEPSE Index &#8212; Last 30 Days</div>
+              <canvas id="chart-nepse" height="90"></canvas>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+              <div class="chart-box" style="cursor:pointer" onclick="switchView('s-trades')" title="Trade Journal">
+                <div class="chart-title">Portfolio Cumulative Return %</div>
+                <canvas id="chart-dash-cumret" height="110"></canvas>
+              </div>
+              <div class="chart-box" style="cursor:pointer" onclick="switchView('s-audit')" title="Weekly Audit">
+                <div class="chart-title">Buy Win Rate &#8212; Weekly</div>
+                <canvas id="chart-dash-winrate" height="110"></canvas>
+              </div>
+            </div>
+          </div>
+
+          <!-- RIGHT: stat grid + signal feed -->
+          <div class="dash-panel-side">
+            <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;padding-bottom:8px;border-bottom:1px solid var(--border)">Portfolio Summary</div>
+            <div class="dash-stat-grid">
+              <div class="dash-stat-card" style="cursor:pointer" onclick="switchView('s-portfolio')">
+                <div class="label">Cash &#8599;</div>
+                <div class="value" style="font-size:16px">NPR ${(cap / 1000).toFixed(0)}K</div>
+                <div class="sub">available</div>
+              </div>
+              <div class="dash-stat-card" style="cursor:pointer" onclick="switchView('s-portfolio')">
+                <div class="label">Positions &#8599;</div>
+                <div class="value" style="font-size:24px;color:var(--blue)">${d.open_positions || 0}</div>
+                <div class="sub">open</div>
+              </div>
+              <div class="dash-stat-card" style="cursor:pointer" onclick="switchView('s-trades')">
+                <div class="label">Win Rate &#8599;</div>
+                <div class="value" style="font-size:24px;color:${wr >= 55 ? 'var(--green)' : wr >= 40 ? 'var(--amber)' : 'var(--red)'}">${wr}%</div>
+                <div class="sub">${tj.wins || 0}W / ${tj.losses || 0}L</div>
+              </div>
+              <div class="dash-stat-card" style="cursor:pointer" onclick="switchView('s-trades')">
+                <div class="label">Avg Return &#8599;</div>
+                <div class="value" style="font-size:22px;color:${avgRet >= 0 ? 'var(--green)' : 'var(--red)'}">${avgRet >= 0 ? '+' : ''}${avgRet}%</div>
+                <div class="sub">per trade</div>
+              </div>
+            </div>
+            <div class="dash-signal-feed">
+              <div class="feed-hdr">Recent Signals</div>
+              <div class="feed-body">${feedRows}</div>
+            </div>
+          </div>
+        </div>`;
+
+      /* ── countUp on KPI bar values ── */
+      document.querySelectorAll('#dash-content [data-count]').forEach(function(el) {
+        var to = parseFloat(el.dataset.count) || 0;
+        countUp(el, to, {
+          prefix:   el.dataset.prefix  || '',
+          suffix:   el.dataset.suffix  || '',
+          decimals: parseInt(el.dataset.decimals) || 0,
+          format: (el.dataset.prefix === 'NPR ') ? function(n) { return Math.round(n).toLocaleString(); } : null
+        });
+      });
 
       loadBrokerFlow();
+      loadPortfolioCharts();
 
       destroyChart('chart-nepse');
       const nepse = d.nepse_30d || [];
@@ -2935,10 +3534,97 @@
           type: 'line',
           data: {
             labels: nepse.map(r => r.date),
-            datasets: [{ data: nepse.map(r => parseFloat(r.current_value) || null), borderColor: '#00d97e', backgroundColor: 'rgba(0,217,126,.06)', borderWidth: 2, pointRadius: 2, tension: .3, fill: true }]
+            datasets: [{ data: nepse.map(r => parseFloat(r.current_value) || null), borderColor: `hsl(${getComputedStyle(document.documentElement).getPropertyValue('--mstate-hue')},82%,48%)`, backgroundColor: `hsla(${getComputedStyle(document.documentElement).getPropertyValue('--mstate-hue')},82%,48%,.07)`, borderWidth: 2, pointRadius: 2, tension: .3, fill: true }]
           },
           options: { ...CHART_OPTS_BASE, plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ' ' + String(ctx.parsed.y || '') } } } }
         });
+      }
+    }
+
+    /* ── Portfolio Performance Charts (Dashboard) ───────────────────────────── */
+    async function loadPortfolioCharts() {
+      try {
+        const [tradeData, auditData] = await Promise.all([
+          fetchJSON('/dashboard/trades'),
+          fetchJSON('/dashboard/audit')
+        ]);
+
+        /* Chart 2: Cumulative Return % */
+        const trades = (tradeData.trade_journal || []).filter(r => r.return_pct && r.return_pct !== '');
+        const cumLabels = trades.map(r => r.symbol || '');
+        let cumRet = 0;
+        const cumData = trades.map(r => { cumRet += parseFloat(r.return_pct) || 0; return parseFloat(cumRet.toFixed(2)); });
+
+        destroyChart('chart-dash-cumret');
+        const c2 = document.getElementById('chart-dash-cumret');
+        if (c2 && cumData.length) {
+          const hue = getComputedStyle(document.documentElement).getPropertyValue('--mstate-hue').trim();
+          chartInstances['chart-dash-cumret'] = new Chart(c2.getContext('2d'), {
+            type: 'line',
+            data: {
+              labels: cumLabels,
+              datasets: [{
+                data: cumData,
+                borderColor: function(ctx) {
+                  if (!ctx.chart.chartArea) return 'rgba(239,68,68,.9)';
+                  var v = ctx.dataset.data[ctx.dataIndex] || 0;
+                  return v >= 0 ? 'rgba(0,217,126,.9)' : 'rgba(239,68,68,.9)';
+                },
+                segment: {
+                  borderColor: ctx => (ctx.p0.parsed.y >= 0 && ctx.p1.parsed.y >= 0) ? 'rgba(0,217,126,.9)' : 'rgba(239,68,68,.9)',
+                  backgroundColor: ctx => (ctx.p0.parsed.y >= 0 && ctx.p1.parsed.y >= 0) ? 'rgba(0,217,126,.07)' : 'rgba(239,68,68,.07)'
+                },
+                borderWidth: 2, pointRadius: 3, tension: .3, fill: true,
+                backgroundColor: 'rgba(239,68,68,.07)'
+
+              }]
+            },
+            options: {
+              ...CHART_OPTS_BASE,
+              plugins: { legend: { display: false } },
+              scales: {
+                ...CHART_OPTS_BASE.scales,
+                y: { ...CHART_OPTS_BASE.scales.y, ticks: { ...CHART_OPTS_BASE.scales.y.ticks, callback: v => v + '%' } }
+              }
+            }
+          });
+        } else if (c2) {
+          c2.parentElement.querySelector('.chart-title').textContent = 'Portfolio Cumulative Return % — No closed trades yet';
+        }
+
+        /* Chart 3: Weekly Win Rate */
+        const auditRows = (auditData.rows || []).slice(-12);
+        const wrLabels = auditRows.map(r => r.review_week || '');
+        const wrData = auditRows.map(r => r.buy_win_rate != null && r.buy_win_rate !== "" ? parseFloat(r.buy_win_rate) * 100 : null);
+
+        destroyChart('chart-dash-winrate');
+        const c3 = document.getElementById('chart-dash-winrate');
+        if (c3 && auditRows.length > 0) {
+          chartInstances['chart-dash-winrate'] = new Chart(c3.getContext('2d'), {
+            type: 'bar',
+            data: {
+              labels: wrLabels,
+              datasets: [{
+                data: wrData,
+                backgroundColor: wrData.map(v => v >= 55 ? 'rgba(0,217,126,.55)' : v >= 40 ? 'rgba(245,158,11,.55)' : 'rgba(239,68,68,.55)'),
+                borderColor:     wrData.map(v => v >= 55 ? 'rgba(0,217,126,.9)' : v >= 40 ? 'rgba(245,158,11,.9)' : 'rgba(239,68,68,.9)'),
+                borderWidth: 1, borderRadius: 3
+              }]
+            },
+            options: {
+              ...CHART_OPTS_BASE,
+              plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ' ' + (ctx.parsed.y || '') + '%' } } },
+              scales: {
+                ...CHART_OPTS_BASE.scales,
+                y: { ...CHART_OPTS_BASE.scales.y, min: 0, max: 100, ticks: { ...CHART_OPTS_BASE.scales.y.ticks, callback: v => v + '%' } }
+              }
+            }
+          });
+        } else if (c3) {
+          c3.parentElement.querySelector('.chart-title').textContent = 'Buy Win Rate — No weekly audit data yet';
+        }
+      } catch (e) {
+        console.warn('Portfolio charts:', e.message);
       }
     }
 
@@ -2967,71 +3653,63 @@
         return n.toLocaleString();
       };
 
-      const accRows = (d.accumulation || []).map(r => `
-        <tr>
-          <td style="color:var(--green);font-weight:600">${esc(r.symbol)}</td>
-          <td style="color:var(--muted);font-size:11px">${esc(r.name || '').substring(0, 18)}</td>
+      const thStyle = `font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;padding:6px 8px;border-bottom:1px solid var(--border);text-align:left;background:var(--bg3)`;
+
+      const accRows = (d.accumulation || []).map((r, i) => `
+        <tr style="--row-d:${i * 22}ms">
+          <td style="font-weight:700;color:var(--green)">${esc(r.symbol)}</td>
+          <td style="color:var(--muted);font-size:11px">${esc(r.name || '').substring(0, 22)}</td>
           <td style="text-align:right">${v(r.acc_broker_count_1d)}</td>
           <td style="text-align:right;color:var(--green)">${fmt(r.acc_qty_1d)}</td>
           <td style="text-align:right;font-size:11px;color:var(--muted)">${fmt(r.acc_amount_1d)}</td>
           <td style="font-size:10px;color:var(--muted)">${esc(r.acc_top_broker_1d || '—')}</td>
         </tr>`).join('');
 
-      const distRows = (d.distribution || []).map(r => `
-        <tr>
-          <td style="color:var(--red);font-weight:600">${esc(r.symbol)}</td>
-          <td style="color:var(--muted);font-size:11px">${esc(r.name || '').substring(0, 18)}</td>
+      const distRows = (d.distribution || []).map((r, i) => `
+        <tr style="--row-d:${i * 22}ms">
+          <td style="font-weight:700;color:var(--red)">${esc(r.symbol)}</td>
+          <td style="color:var(--muted);font-size:11px">${esc(r.name || '').substring(0, 22)}</td>
           <td style="text-align:right">${v(r.dist_broker_count_1d)}</td>
           <td style="text-align:right;color:var(--red)">${fmt(r.dist_qty_1d)}</td>
           <td style="text-align:right;font-size:11px;color:var(--muted)">${fmt(r.dist_amount_1d)}</td>
           <td style="font-size:10px;color:var(--muted)">${esc(r.dist_top_broker_1d || '—')}</td>
         </tr>`).join('');
 
-      const tableStyle = `width:100%;border-collapse:collapse;font-size:12px`;
-      const thStyle = `font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;padding:4px 6px;border-bottom:1px solid var(--border);text-align:left`;
+      const tableHtml = (rows, empty) => `
+        <div class="tbl-wrap">
+          <table style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead><tr>
+              <th style="${thStyle}">Symbol</th>
+              <th style="${thStyle}">Name</th>
+              <th style="${thStyle};text-align:right">Brokers</th>
+              <th style="${thStyle};text-align:right">Qty</th>
+              <th style="${thStyle};text-align:right">Amount</th>
+              <th style="${thStyle}">Top Broker</th>
+            </tr></thead>
+            <tbody>${rows || `<tr><td colspan="6" style="color:var(--muted);padding:12px 8px">${empty}</td></tr>`}</tbody>
+          </table>
+        </div>`;
+
+      const accN = (d.accumulation || []).length;
+      const distN = (d.distribution || []).length;
 
       el.innerHTML = `
-        <div style="font-size:10px;color:var(--muted);margin-bottom:10px;letter-spacing:.06em">
-          SMART MONEY FLOW — ${esc(d.date || '—')}
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <span style="font-size:9px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase">Smart Money Flow — ${esc(d.date || '—')}</span>
         </div>
-        <div class="g2s">
-          <div class="card" style="padding:12px;border-left:3px solid var(--green)">
-            <div style="font-size:10px;font-weight:700;color:var(--green);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">
-              ▲ Accumulation
-            </div>
-            <div class="tbl-wrap" style="overflow-x:auto">
-              <table style="${tableStyle}">
-                <thead><tr>
-                  <th style="${thStyle}">Symbol</th>
-                  <th style="${thStyle}">Name</th>
-                  <th style="${thStyle};text-align:right">Brokers</th>
-                  <th style="${thStyle};text-align:right">Qty</th>
-                  <th style="${thStyle};text-align:right">Amount</th>
-                  <th style="${thStyle}">Top Broker</th>
-                </tr></thead>
-                <tbody>${accRows || '<tr><td colspan="6" style="color:var(--muted);padding:8px">No data</td></tr>'}</tbody>
-              </table>
-            </div>
-          </div>
-          <div class="card" style="padding:12px;border-left:3px solid var(--red)">
-            <div style="font-size:10px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">
-              ▼ Distribution
-            </div>
-            <div class="tbl-wrap" style="overflow-x:auto">
-              <table style="${tableStyle}">
-                <thead><tr>
-                  <th style="${thStyle}">Symbol</th>
-                  <th style="${thStyle}">Name</th>
-                  <th style="${thStyle};text-align:right">Brokers</th>
-                  <th style="${thStyle};text-align:right">Qty</th>
-                  <th style="${thStyle};text-align:right">Amount</th>
-                  <th style="${thStyle}">Top Broker</th>
-                </tr></thead>
-                <tbody>${distRows || '<tr><td colspan="6" style="color:var(--muted);padding:8px">No data</td></tr>'}</tbody>
-              </table>
-            </div>
-          </div>
-        </div>`;
+        <div class="tab-bar" id="broker-tab-bar">
+          <button class="tab-btn active" onclick="switchBrokerTab('acc',this)">▲ Accumulation <span style="color:var(--muted)">(${accN})</span></button>
+          <button class="tab-btn"        onclick="switchBrokerTab('dist',this)">▼ Distribution <span style="color:var(--muted)">(${distN})</span></button>
+        </div>
+        <div id="broker-pane-acc" class="broker-pane">${tableHtml(accRows, 'No accumulation data')}</div>
+        <div id="broker-pane-dist" class="broker-pane" style="display:none">${tableHtml(distRows, 'No distribution data')}</div>`;
+    }
+
+    function switchBrokerTab(id, btn) {
+      document.querySelectorAll('.broker-pane').forEach(p => p.style.display = 'none');
+      document.querySelectorAll('#broker-tab-bar .tab-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById('broker-pane-' + id).style.display = 'block';
+      btn.classList.add('active');
     }
 
     /* ── 2. Market Log ───────────────────────────────────────────────── */
@@ -3073,8 +3751,9 @@
         let rc = '';
         if (act === 'BUY' && oc === 'WIN') rc = 'row-win'; else if (act === 'BUY' && oc === 'LOSS') rc = 'row-loss';
         else if (act === 'WAIT' && (oc === 'CORRECT' || oc === 'WIN')) rc = 'row-wait'; else if (oc === 'PENDING') rc = 'row-pending';
+        const delay = Math.min(i * 22, 420) + 'ms';
         return `
-    <tr class="clickable-row ${rc}" onclick="toggleMlExpand(this,${i})">
+    <tr class="clickable-row ${rc}" style="--row-d:${delay}" onclick="toggleMlExpand(this,${i})">
       <td>${v(r.date)}</td>
       <td style="color:var(--green);font-weight:600">${v(r.symbol)}</td>
       <td>${v(r.sector)}</td>
@@ -3109,10 +3788,11 @@
       }).join('');
 
       document.getElementById('ml-content').innerHTML = `
-    <div class="tbl-wrap"><table>
-      <thead><tr><th>Date</th><th>Symbol</th><th>Sector</th><th>Action</th><th>Conf</th><th>Primary Signal</th><th>Outcome</th><th>PnL</th></tr></thead>
+    <div class="tbl-wrap ml-scroll-host"><table>
+      <thead style="position:sticky;top:0;z-index:2"><tr><th>Date</th><th>Symbol</th><th>Sector</th><th>Action</th><th>Conf</th><th>Primary Signal</th><th>Outcome</th><th>PnL</th></tr></thead>
       <tbody>${trs}</tbody>
-    </table></div>`;
+    </table></div>
+    <div class="ml-footer-bar">${rows.length.toLocaleString()} ROWS</div>`;
     }
 
     function toggleMlExpand(row, i) {
@@ -3198,8 +3878,8 @@
     </tr>`).join('');
 
       const labels = rows.map(r => r.review_week || '');
-      const winRates = rows.map(r => parseFloat(r.buy_win_rate) || null);
-      const waitAcc = rows.map(r => parseFloat(r.wait_accuracy) || null);
+      const winRates = rows.map(r => parseFloat(r.buy_win_rate) * 100 || null);
+      const waitAcc = rows.map(r => parseFloat(r.wait_accuracy) * 100 || null);
 
       document.getElementById('audit-content').innerHTML = `
     <div class="g2" style="margin-bottom:18px">
@@ -3281,7 +3961,7 @@
         <div style="margin-bottom:8px">
           <div class="conf-bar-wrap">
             <span style="font-size:10px;color:var(--muted);width:60px;flex-shrink:0">Conf</span>
-            <div class="conf-bar"><div class="conf-bar-fill" style="width:${confPct}%"></div></div>
+            <div class="conf-bar"><div class="conf-bar-fill" style="--fill:${(confPct/100).toFixed(3)}"></div></div>
             <span style="font-size:11px">${r.confidence || '—'}</span>
           </div>
         </div>
@@ -3496,7 +4176,52 @@
       ]);
     }
 
+    /* ── App-shell section switcher with View Transitions ─────── */
+    function switchView(id) {
+      var prev = document.querySelector('.section.active-view');
+      if (prev && prev.id === id) return; // already active
+
+      function _apply() {
+        document.querySelectorAll('.section').forEach(function(s) {
+          s.classList.remove('active-view');
+          s.style.viewTransitionName = '';
+        });
+        document.querySelectorAll('#sidebar nav a, #bottom-nav a').forEach(function(a) {
+          a.classList.remove('active');
+        });
+        var el = document.getElementById(id);
+        if (el) {
+          el.classList.add('active-view');
+          el.style.viewTransitionName = 'section-content';
+        }
+        document.querySelectorAll('[href="#' + id + '"]').forEach(function(a) {
+          a.classList.add('active');
+        });
+        sessionStorage.setItem('nepse_view', id);
+      }
+
+      if (prev) prev.style.viewTransitionName = 'section-content';
+
+      if (document.startViewTransition && prev) {
+        document.startViewTransition(_apply);
+      } else {
+        _apply();
+      }
+    }
+
     document.addEventListener('DOMContentLoaded', () => {
+      /* Wire all nav links to switchView */
+      document.querySelectorAll('#sidebar nav a[href^="#s-"], #bottom-nav a[href^="#s-"]').forEach(a => {
+        a.addEventListener('click', e => {
+          e.preventDefault();
+          switchView(a.getAttribute('href').slice(1));
+        });
+      });
+
+      /* Restore last section or default to dashboard */
+      var saved = sessionStorage.getItem('nepse_view') || 's-dashboard';
+      switchView(saved);
+
       refreshAll();
       nrbCheckAPI();
       loadReporter();
@@ -4412,12 +5137,14 @@
     async function loadTradingMode() {
       try {
         const d = await fetchJSON('/settings/trading-mode');
+        const live = !d.paper_mode;
         const badge = document.getElementById('badge-trading-mode');
         if (badge) {
-          const live = !d.paper_mode;
           badge.textContent = live ? '🔴 LIVE' : '📄 PAPER';
           badge.className   = 'badge ' + (live ? 'badge-red' : 'badge-green');
         }
+        const tog = document.getElementById('set-TRADING_MODE');
+        if (tog) tog.checked = live;
         _tmPhrase = d.confirm_phrase;
         _tmTarget = d.paper_mode ? 'LIVE' : 'PAPER';
       } catch(e) {}
@@ -4461,6 +5188,8 @@
         const restartNote = d.monitor_restarted ? '✓ Monitor restarted.' : '⚠ Monitor restart failed: ' + d.restart_msg;
         st.textContent = `✓ Switched to ${d.new_mode}. ${restartNote}`;
         st.style.color = 'var(--green,#66bb6a)';
+        const tog = document.getElementById('set-TRADING_MODE');
+        if (tog) tog.checked = (d.new_mode === 'LIVE');
         setTimeout(() => { closeTradingModeModal(); loadTradingMode(); }, 3000);
       } catch(e) {
         st.textContent = '✗ ' + e.message;
@@ -4688,6 +5417,58 @@
       }
     }
 
+  </script>
+
+  <!--
+    THESIS: A precision operator console that reads like a live trading terminal —
+    dense, structured, and in motion. Refuses the padded card-grid typical of dark dashboards.
+    OWN-WORLD: Near-black surfaces (#070707 → #1c1c1c), green signal accent (#00d97e),
+    JetBrains Mono at strict weight hierarchy, 2-pt colored borders as semantic indicators,
+    box-shadow elevation, no decorative chrome.
+    STORY: Hembro opens the dashboard during the NEPSE session; system state and today's signals
+    are legible within two seconds; he navigates to Market Log for deeper inspection.
+    FIRST VIEWPORT: Section stack animated on scroll via IntersectionObserver, stat cards with
+    28px weighted numbers, green dot accent on section headers, pulsing API status indicator.
+    FORM: Dark fintech upgrade of the existing operator console — visual system replacement,
+    full JS behavior preserved.
+    FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review,
+    the verdict, DESIGN.md, and every shipping raster carrying its provenance.
+  -->
+
+  <script>
+    /* ── Section entrance via IntersectionObserver ──────────────────── */
+    (function () {
+      const io = new IntersectionObserver(function (entries) {
+        entries.forEach(function (e) {
+          if (e.isIntersecting) {
+            e.target.classList.add('visible');
+            io.unobserve(e.target);
+          }
+        });
+      }, { threshold: 0.04 });
+
+      document.querySelectorAll('.section').forEach(function (s) {
+        io.observe(s);
+      });
+
+      /* ── Sidebar active-link highlight on scroll ─────────────────── */
+      var navLinks = Array.from(document.querySelectorAll('#sidebar nav a[href^="#"]'));
+      var sectionEls = navLinks.map(function (a) {
+        return document.querySelector(a.getAttribute('href'));
+      });
+
+      var scrollIO = new IntersectionObserver(function (entries) {
+        entries.forEach(function (e) {
+          if (e.isIntersecting) {
+            navLinks.forEach(function (a) { a.classList.remove('active'); });
+            var idx = sectionEls.indexOf(e.target);
+            if (idx !== -1) navLinks[idx].classList.add('active');
+          }
+        });
+      }, { threshold: 0.2 });
+
+      sectionEls.forEach(function (s) { if (s) scrollIO.observe(s); });
+    })();
   </script>
 </body>
 
