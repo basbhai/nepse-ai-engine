@@ -37,7 +37,7 @@ Architecture:
   - No AI calls — pure math only
   - Reads open positions from paper_portfolio (PAPER_MODE) or portfolio (LIVE)
   - LTP from atrad_market_watch DB (no API call for price)
-  - getOrderBook + getTradesOfDay called per open position (max 3 symbols)
+  - getOrderBook + getTradesOfDay called per open position (all open positions)
   - Telegram alert on state change only (never spam)
   - Paper mode → alert only; Live mode → ATrad placeOrder (NOT wired until 55% WR)
 
@@ -166,7 +166,11 @@ def _market_phase() -> str:
 
 def _load_open_positions(paper_mode: bool) -> list[dict]:
     """
-    Load all open positions. Max 3 (enforced upstream by gemini_filter).
+    Load all open positions — every OPEN row is monitored, no cap. (Previously
+    capped at LIMIT 3 on the assumption that positions never exceeded 3 slots;
+    that assumption no longer holds now that up to 100 simultaneous positions
+    are allowed, and the cap was silently starving newer positions of any
+    hard-stop/trailing-stop coverage at all.)
     Paper mode: paper_portfolio. Live mode: portfolio.
     Returns list of dicts with keys: symbol, entry_price, shares, stop_loss, target,
     peak_price, trail_active, telegram_id (paper only).
@@ -183,7 +187,6 @@ def _load_open_positions(paper_mode: bool) -> list[dict]:
                 FROM paper_portfolio pp
                 WHERE pp.status = 'OPEN'
                 ORDER BY pp.first_buy_date ASC
-                LIMIT 3
             """)
             # Enrich with stop/target from latest market_log BUY signal
             for row in rows:
@@ -196,7 +199,6 @@ def _load_open_positions(paper_mode: bool) -> list[dict]:
                 FROM portfolio
                 WHERE status = 'OPEN'
                 ORDER BY entry_date ASC
-                LIMIT 3
             """)
             return rows or []
     except Exception as e:
@@ -887,6 +889,10 @@ def run_monitor(paper_mode: bool = True, once: bool = False) -> None:
     tir_cache:       dict[str, tuple]        = {}   # (tir, v_total, computed_at)
     fragility_flags: dict[str, bool]         = {}   # loaded once at startup
     fragility_loaded: bool                   = False
+    # peak_price/trail_active per symbol, carried across cycles. _load_open_positions
+    # reloads fresh rows from the DB every cycle (entry_price, not peak), so without
+    # this the trailing stop would forget any peak gain 30s after it happened.
+    trail_state:     dict[str, dict]         = {}
 
     last_intel_time: float = 0.0
 
@@ -916,6 +922,14 @@ def run_monitor(paper_mode: bool = True, once: bool = False) -> None:
 
         symbols = [p.get("symbol", "") for p in positions]
 
+        # ── Restore carried-over peak/trail state (fresh rows reset both to entry) ─
+        for pos in positions:
+            saved = trail_state.get(pos.get("symbol", ""))
+            if saved:
+                pos["peak_price"]   = saved["peak_price"]
+                pos["trail_active"] = saved["trail_active"]
+        trail_state = {s: trail_state[s] for s in trail_state if s in symbols}
+
         # ── Load fragility flags once at startup or when positions change ─────
         if not fragility_loaded or set(symbols) != set(fragility_flags.keys()):
             fragility_flags  = _load_fragility_flags(symbols)
@@ -933,11 +947,19 @@ def run_monitor(paper_mode: bool = True, once: bool = False) -> None:
             if not symbol:
                 continue
 
-            # ── 1. Get LTP from DB (no API call) ─────────────────────────────
+            # ── 1. Get LTP — live getQuickWatch API, fall back to atrad_market_watch
+            #      DB row if the live call is down or comes back empty/zero, so the
+            #      guard doesn't go completely blind on a live-API hiccup.
             mw = get_ltp_live(symbol)
-            if not mw:
-                log.warning("%s: no market watch data — skipping", symbol)
-                continue
+            if not mw or float(mw.get("ltp") or 0) <= 0:
+                db_mw = _get_ltp_from_db(symbol)
+                if db_mw and float(db_mw.get("ltp") or 0) > 0:
+                    log.warning("%s: live LTP unavailable — using DB fallback (time=%s)",
+                                symbol, db_mw.get("time", "?"))
+                    mw = db_mw
+                else:
+                    log.warning("%s: no live or DB market watch data — skipping", symbol)
+                    continue
 
             ltp      = mw["ltp"]
             vwap     = mw["vwap"]
@@ -946,7 +968,7 @@ def run_monitor(paper_mode: bool = True, once: bool = False) -> None:
             entry    = float(pos.get("entry_price") or pos.get("wacc") or 0)
 
             if ltp <= 0:
-                log.warning("%s: LTP=0 in DB — skipping", symbol)
+                log.warning("%s: LTP=0 — skipping", symbol)
                 continue
 
             # ── 2. GUARD — hard stop / trailing (every cycle) ─────────────────
@@ -956,9 +978,15 @@ def run_monitor(paper_mode: bool = True, once: bool = False) -> None:
                 log.warning(alert.replace("*", "").replace("_", " "))
                 _send_telegram(alert)
                 _execute_guard_close(pos, symbol, ltp, guard_reason, paper_mode)
+                trail_state.pop(symbol, None)
                 # Don't skip intelligence after guard — still want GIS info
                 if once:
                     return
+            else:
+                trail_state[symbol] = {
+                    "peak_price":   pos.get("peak_price"),
+                    "trail_active": pos.get("trail_active", False),
+                }
 
             # ── 3. INTELLIGENCE — GIS score ───────────────────────────────────
             if run_intelligence:
@@ -983,6 +1011,17 @@ def run_monitor(paper_mode: bool = True, once: bool = False) -> None:
                 asks  = book.get("asks", [])
                 cached = tir_cache.get(symbol, (0.0, 0.0, 0))
                 tir, v_total = cached[0], cached[1]
+
+            # A failed/empty order-book fetch (session hiccup, non-"0" API code, network
+            # blip) must NOT be treated as real zero depth — that previously computed as
+            # a ~100% "liquidity shock" and force-escalated the state to EXIT_EARLY on a
+            # fetch failure, not a real market event. Skip intelligence for this symbol
+            # this cycle instead; the guard (hard stop/trailing) above already ran.
+            if not book:
+                log.warning("%s: order book fetch failed — skipping intelligence this cycle", symbol)
+                if once:
+                    return
+                continue
 
             # Depth for liquidity shock check
             total_depth = book.get("total_bid_qty", 0) + book.get("total_ask_qty", 0)
