@@ -215,7 +215,7 @@ TABLE_DDL: dict[str, str] = {
         last_reviewed_date TEXT,
         herding_note TEXT,
         lesson_applied TEXT,
-        lessons_applied JSONB DEFAULT NULL,
+        lessons_applied JSONB,
         outcome TEXT DEFAULT 'PENDING',
         actual_pnl TEXT,
         exit_price TEXT,
