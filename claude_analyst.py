@@ -1098,6 +1098,22 @@ Use this to inform conviction:
 """
 
     _hold_signal_str = f" for {flag.primary_signal}" if flag.primary_signal not in ("LAGGARD_PLAY", "") else ""
+
+    # ── Risk/reward gate — dashboard-toggleable for A/B testing its effect ────
+    from sheets import get_setting as _get_setting
+    _rr_gate_enabled = _get_setting("RISK_REWARD_GATE_ENABLED", "true").lower() == "true"
+    if _rr_gate_enabled:
+        _risk_reward_rule = (
+            "- Risk/reward: compute risk_reward honestly as (target - entry) / (entry - stop_loss). Prefer setups with\n"
+            "  risk_reward >= 1.2. If risk_reward < 1.0, default to WAIT or AVOID unless a high-conviction validated\n"
+            "  edge (BB_LOWER_TOUCH + OBV rising, or confirmed broker accumulation) justifies the entry."
+        )
+    else:
+        _risk_reward_rule = (
+            "- Risk/reward: compute risk_reward honestly as (target - entry) / (entry - stop_loss) and report it in\n"
+            "  the JSON. [RISK_REWARD_GATE_ENABLED=false — no preferred threshold or WAIT/AVOID default applies;\n"
+            "  weigh it as one input among technicals/fundamentals/lessons, not a gate.]"
+        )
     
     
     # ── News catalyst block ───────────────────────────────────────────────────
@@ -1265,9 +1281,7 @@ Produce a precise BUY / WAIT / AVOID recommendation.
 - Target: reference the resistance level; it must exceed breakeven by >1%. If LTP has already broken
   above that resistance level, it is stale -- use the pivot ladder instead: pick the lowest of R1/R2/R3
   that sits above LTP. Target must always be > entry_price; never set a target below the current price.
-- Risk/reward: compute risk_reward honestly as (target - entry) / (entry - stop_loss). Prefer setups with
-  risk_reward >= 1.2. If risk_reward < 1.0, default to WAIT or AVOID unless a high-conviction validated
-  edge (BB_LOWER_TOUCH + OBV rising, or confirmed broker accumulation) justifies the entry.
+{_risk_reward_rule}
 - Hold: use suggested hold from research ({hold_days} days{_hold_signal_str}).
 - Use max 10% of total capital per position.
 - Max {portfolio.get('max_positions', 3)} simultaneous positions -- slots remaining: {portfolio.get('slots_remaining', 0)}.

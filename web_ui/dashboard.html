@@ -2604,6 +2604,16 @@
           <span class="set-hint">Hard cap on distinct Claude analyst calls per day, across all cycles</span>
           <span class="set-status" id="status-CLAUDE_MAX_CALLS_PER_DAY"></span>
         </div>
+        <div class="set-row">
+          <div class="set-label">Risk/Reward Gate</div>
+          <label class="set-toggle">
+            <input type="checkbox" id="set-RISK_REWARD_GATE_ENABLED"
+              onchange="applySetting('RISK_REWARD_GATE_ENABLED', this.checked ? 'true' : 'false')">
+            <span class="set-slider"></span>
+          </label>
+          <span class="set-hint">ON (default) = prompt tells Claude to prefer risk_reward >= 1.2 and default to WAIT/AVOID below 1.0. OFF = Claude still reports risk_reward honestly but it's just one input, not a gating threshold. Takes effect on the next Claude call, no redeploy needed.</span>
+          <span class="set-status" id="status-RISK_REWARD_GATE_ENABLED"></span>
+        </div>
       </div>
 
       <!-- Monthly Council -->
@@ -4484,6 +4494,7 @@
         _setToggle('UPTREND_PULLBACK_ENABLED',  d.UPTREND_PULLBACK_ENABLED);
         _setInput('EMA_PULLBACK_WEIGHT',        d.EMA_PULLBACK_WEIGHT);
         _setInput('UPTREND_PULLBACK_WEIGHT',    d.UPTREND_PULLBACK_WEIGHT);
+        _setToggle('RISK_REWARD_GATE_ENABLED',  d.RISK_REWARD_GATE_ENABLED);
 
         _setInput('FILTER_V2_TOP_N',    d.FILTER_V2_TOP_N);
         _setInput('LOAD_SHEDDING_HRS',  d.LOAD_SHEDDING_HRS);
