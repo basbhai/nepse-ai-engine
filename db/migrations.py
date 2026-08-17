@@ -226,18 +226,31 @@ def create_table(table: str) -> bool:
         return False
 
 
+def _infer_column_type(table: str, column: str) -> str:
+    """
+    Parse the actual SQL type for a column from TABLE_DDL.
+    Falls back to TEXT so existing behaviour is unchanged for all current columns.
+    """
+    import re
+    ddl = TABLE_DDL.get(table, "")
+    m = re.search(rf'"{column}"\s+(\w+)', ddl)
+    return m.group(1) if m else "TEXT"
+
+
 def add_column(table: str, column: str) -> bool:
     """
-    ALTER TABLE to add a missing column as TEXT (nullable).
+    ALTER TABLE to add a missing column.
+    Infers the SQL type from TABLE_DDL (e.g. JSONB, INTEGER); defaults to TEXT.
     Uses IF NOT EXISTS — safe to run multiple times.
     """
+    col_type = _infer_column_type(table, column)
     try:
         with _db() as cur:
             cur.execute(f"""
                 ALTER TABLE "{table}"
-                ADD COLUMN IF NOT EXISTS "{column}" TEXT
+                ADD COLUMN IF NOT EXISTS "{column}" {col_type}
             """)
-        log.info("  ✅ Added column: %s.%s", table, column)
+        log.info("  ✅ Added column: %s.%s (%s)", table, column, col_type)
         return True
     except Exception as e:
         log.error("  ❌ Failed to add column %s.%s: %s", table, column, e)
@@ -331,6 +344,60 @@ def apply_drift(drift: dict) -> dict:
 
 
 # ─────────────────────────────────────────
+# TRIGGERS
+# ─────────────────────────────────────────
+
+_TRIGGER_FUNCTION_SQL = """
+CREATE OR REPLACE FUNCTION _validate_lessons_applied()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE
+    entry jsonb;
+    lid   integer;
+BEGIN
+    IF NEW.lessons_applied IS NOT NULL THEN
+        FOR entry IN SELECT jsonb_array_elements(NEW.lessons_applied) LOOP
+            lid := (entry->>'lesson_id')::integer;
+            IF NOT EXISTS (SELECT 1 FROM learning_hub WHERE id = lid) THEN
+                RAISE EXCEPTION 'lessons_applied: lesson_id % not found in learning_hub', lid;
+            END IF;
+        END LOOP;
+    END IF;
+    RETURN NEW;
+END;
+$$
+"""
+
+_TRIGGER_DROP_SQL = "DROP TRIGGER IF EXISTS trg_validate_lessons_applied ON market_log"
+
+_TRIGGER_CREATE_SQL = """
+CREATE TRIGGER trg_validate_lessons_applied
+BEFORE INSERT OR UPDATE ON market_log
+FOR EACH ROW EXECUTE FUNCTION _validate_lessons_applied()
+"""
+
+
+def _apply_triggers() -> None:
+    """
+    Install (or replace) the lessons_applied FK-validation trigger.
+    Idempotent: safe to call on every migration run.
+    """
+    try:
+        with _db() as cur:
+            cur.execute(_TRIGGER_FUNCTION_SQL)
+        with _db() as cur:
+            cur.execute(_TRIGGER_DROP_SQL)
+            cur.execute(_TRIGGER_CREATE_SQL)
+        log.info("  ✅ Trigger trg_validate_lessons_applied installed")
+        _record(
+            "trigger_validate_lessons_applied_v1",
+            "install lessons_applied FK trigger",
+            notes="validates lesson_id values against learning_hub.id",
+        )
+    except Exception as e:
+        log.error("  ❌ Failed to apply triggers: %s", e)
+
+
+# ─────────────────────────────────────────
 # SEED — default data
 # ─────────────────────────────────────────
 
@@ -408,6 +475,7 @@ def run_migrations() -> dict:
 
     if not needs_work:
         log.info("Schema is up to date — no changes needed")
+        _apply_triggers()
         seed_settings()
         return {"status": "up_to_date", "tables_created": 0, "columns_added": 0}
 
@@ -419,6 +487,7 @@ def run_migrations() -> dict:
     )
 
     stats = apply_drift(drift)
+    _apply_triggers()
     seed_settings()
 
     stats["status"] = "migrated"

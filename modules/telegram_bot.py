@@ -114,9 +114,15 @@ from modules.trading_core import (
 )
 
 # Conversation states
-CONFIRM_BUY   = 1
-CONFIRM_SELL  = 2
-CONFIRM_RESET = 3
+CONFIRM_BUY         = 1
+CONFIRM_SELL        = 2
+CONFIRM_RESET       = 3
+CONFIRM_MODE_SWITCH = 4
+
+_SWITCH_PHRASES = {
+    "live":  "SWITCH TO LIVE",
+    "paper": "SWITCH TO PAPER",
+}
 
 # ─── ENV ─────────────────────────────────────────────────────────────────────
 TOKEN          = os.environ["TELEGRAM_BOT_TOKEN"]
@@ -1085,6 +1091,81 @@ async def cmd_mode(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"{mode_label()} | {circuit_label(uid)}")
 
 
+async def cmd_switchmode(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """Start mode switch — admin only, requires typed confirmation phrase."""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("🚫 Admin only.")
+        return ConversationHandler.END
+
+    current_paper = get_setting("PAPER_MODE", "true").lower() == "true"
+    if current_paper:
+        target_label = "🔴 LIVE (real money)"
+        phrase = _SWITCH_PHRASES["live"]
+        warning = (
+            "⚠️ *You are about to switch to LIVE trading.*\n"
+            "Real money will be at risk. Auto-trading hooks will fire on real positions.\n\n"
+        )
+    else:
+        target_label = "📄 PAPER (simulation)"
+        phrase = _SWITCH_PHRASES["paper"]
+        warning = (
+            "ℹ️ *You are about to switch to PAPER trading.*\n"
+            "All order execution will be simulated.\n\n"
+        )
+
+    ctx.user_data["switch_target_paper"] = current_paper  # flip on confirm
+    await update.message.reply_text(
+        f"{warning}"
+        f"Current mode: *{('📄 PAPER' if current_paper else '🔴 LIVE')}*\n"
+        f"Switch to: *{target_label}*\n\n"
+        f"To confirm, type exactly:\n`{phrase}`\n\n"
+        f"Type /cancel to abort.",
+        parse_mode="Markdown"
+    )
+    return CONFIRM_MODE_SWITCH
+
+
+async def confirm_switchmode(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    current_paper = ctx.user_data.get("switch_target_paper")
+    if current_paper is None:
+        await update.message.reply_text("No pending mode switch.")
+        return ConversationHandler.END
+
+    going_live  = current_paper          # was paper → switching to live
+    phrase      = _SWITCH_PHRASES["live"] if going_live else _SWITCH_PHRASES["paper"]
+    typed       = (update.message.text or "").strip()
+
+    if typed != phrase:
+        await update.message.reply_text(
+            f"❌ Phrase mismatch. Type exactly `{phrase}` or /cancel.",
+            parse_mode="Markdown"
+        )
+        return CONFIRM_MODE_SWITCH
+
+    new_val = "false" if going_live else "true"
+    try:
+        update_setting("PAPER_MODE", new_val, set_by="switchmode_cmd")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Failed to update setting: {e}")
+        return ConversationHandler.END
+
+    ctx.user_data.pop("switch_target_paper", None)
+    label = "🔴 LIVE" if going_live else "📄 PAPER"
+    note  = " Live auto-close is NOT WIRED until you build the ATrad hook." if going_live else ""
+    await update.message.reply_text(
+        f"✅ Mode switched to *{label}*.\n"
+        f"Restart the execution monitor for the change to take effect.{note}",
+        parse_mode="Markdown"
+    )
+    return ConversationHandler.END
+
+
+async def cancel_switchmode(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    ctx.user_data.pop("switch_target_paper", None)
+    await update.message.reply_text("Mode switch cancelled. Nothing changed.")
+    return ConversationHandler.END
+
+
 async def cmd_pause(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await guard(update):
         return
@@ -1779,9 +1860,18 @@ def main():
         fallbacks=[CommandHandler("cancel", cmd_cancel)],
     )
 
+    switchmode_conv = ConversationHandler(
+        entry_points=[CommandHandler("switchmode", cmd_switchmode)],
+        states={CONFIRM_MODE_SWITCH: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_switchmode),
+        ]},
+        fallbacks=[CommandHandler("cancel", cancel_switchmode)],
+    )
+
     app.add_handler(buy_conv)
     app.add_handler(sell_conv)
     app.add_handler(reset_conv)
+    app.add_handler(switchmode_conv)
 
     app.add_handler(CommandHandler("register", cmd_register))
     app.add_handler(CommandHandler("approve",  cmd_approve))

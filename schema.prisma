@@ -183,7 +183,11 @@ model market_log {
   wait_condition_parsed Text   // JSON blob, null until parsed by condition_parser.py
   last_reviewed_date    Text   // YYYY-MM-DD (NST) — set after each Claude re-evaluation
   herding_note     Text   // one sentence on herding/bubble risk or NONE
-  lesson_applied   Text   // which lesson from Learning Hub was most relevant, or NONE
+  lesson_applied   Text   // which lesson from Learning Hub was most relevant, or NONE (free-text, human-readable)
+  // lessons_applied is the structured source of truth for automated review.
+  // Pre-migration rows (before 2026-08-15) have lessons_applied = null and must be
+  // interpreted via the legacy lesson_applied text field above.
+  lessons_applied  Json?  // [{lesson_id: int, action: str, was_decisive: bool}, ...]
   outcome          Text  @default("PENDING")
   actual_pnl       Text
   exit_price       Text
@@ -1233,6 +1237,7 @@ model paper_trade_log {
   note           Text
   created_at     Text
   test_mode      Text  @default("false")
+  close_type     Text  @default("MANUAL")
 
   @@index([telegram_id])
   @@index([symbol])

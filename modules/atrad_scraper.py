@@ -6,6 +6,8 @@ Fully fixed numeric conversion + safe column handling.
 import os
 import ast
 import time
+import random
+import string
 import logging
 import requests
 import numpy as np
@@ -24,8 +26,12 @@ log = logging.getLogger("atrad_scraper")
 BASE_URL    = "https://tms.roadshowsecurities.com.np/atsweb"
 USERNAME    = os.getenv("TMS_ROADSHOW_USER")
 PASSWORD    = os.getenv("TMS_ROADSHOW_PASS")
-WATCH_ID    = os.getenv("TMS_ROADSHOW_WATCH_ID", "8643")
+WATCH_ID    = os.getenv("TMS_ROADSHOW_WATCH_ID", "11120")
 BOOK_DEF_ID = "1"
+ACNT_ID     = os.getenv("TMS_ROADSHOW_ACNT_ID", "")
+
+ORDER_BUY  = 1
+ORDER_SELL = 2
 
 _session      = None
 _last_login   = None
@@ -423,6 +429,84 @@ def get_ltp_live(symbol: str) -> Optional[dict]:
     except Exception as e:
         log.error("get_ltp_live(%s): %s", symbol, e)
         return None
+
+# ═══════════════════════════════════════════════════════════════════════════
+# LIVE ORDER PLACEMENT  (PAPER_MODE=false only)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _gen_order_id(length: int = 10) -> str:
+    return "".join(random.choices(string.ascii_letters + string.digits, k=length))
+
+
+def place_order(
+    symbol:     str,
+    action:     int,        # ORDER_BUY=1  ORDER_SELL=2
+    qty:        int,
+    price:      float,
+    tif:        int = 16,   # 16 = Day order
+    tif_days:   int = 1,
+    order_type: int = 1,    # 1 = confirmed working via live test
+    board:      int = 1,
+) -> dict:
+    """
+    Submit a BUY or SELL to ATrad via submitOrder (POST form-data).
+    Returns parsed ATrad response. code='0' means accepted.
+    Raises RuntimeError if no session.
+    """
+    if not _ensure_session():
+        raise RuntimeError("ATrad session unavailable — cannot place order")
+
+    order_id     = _gen_order_id()
+    action_label = "BUY" if action == ORDER_BUY else "SELL"
+
+    form = {
+        "action":            "submitOrder",
+        "format":            "json",
+        "brokerClient":      "1",
+        "acntid":            ACNT_ID,
+        "txtsenttoapproval": "no",
+        "duplicateOrderId":  order_id,
+        "product":           "web",
+        "clientAcc":         USERNAME,
+        "actionSelect":      str(action),
+        "txtSecurity":       symbol,
+        "spnQuantity":       str(qty),
+        "spnPrice":          str(price),
+        "cmbTif":            str(tif),
+        "cmbTifDays":        str(tif_days),
+        "cmbBoard":          str(board),
+        "hiddenSpnCseFee":   "0.02",
+        "brokerClientVal":   "1",
+        "spnStopPrice":      "",
+        "cmbTypeOfOrder":    str(order_type),
+        "txtContraBroker_":  "",
+        "counterBrokerVal":  "",
+    }
+
+    log.info("[LIVE ORDER] %s %s × %d @ %.2f | localID=%s",
+             action_label, symbol, qty, price, order_id)
+
+    try:
+        r    = _session.post(f"{BASE_URL}/order", data=form, timeout=20)
+        data = _parse(r)
+    except Exception as e:
+        log.error("[LIVE ORDER] POST failed %s %s: %s", action_label, symbol, e)
+        raise
+
+    if data.get("code") == "0":
+        log.info("[LIVE ORDER] ACCEPTED %s %s @ %.2f | %s",
+                 action_label, symbol, price, data.get("description", "ok"))
+    else:
+        log.error("[LIVE ORDER] REJECTED %s %s: code=%s desc=%s",
+                  action_label, symbol, data.get("code"), data.get("description"))
+
+    return data
+
+
+def place_sell_order(symbol: str, qty: int, price: float) -> dict:
+    """Sell qty shares at price (day limit order). Used by execution_monitor auto-close."""
+    return place_order(symbol, action=ORDER_SELL, qty=qty, price=price)
+
 
 def run():
     if not login():

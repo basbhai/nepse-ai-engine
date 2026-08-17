@@ -6,7 +6,7 @@ Real-time intraday position intelligence. Runs as a separate process during
 market hours (10:45 AM – 3:00 PM NST, Mon–Fri).
 
 Two responsibilities in one loop:
-  1. GUARD     (every 30s)  — hard stop -5%, trailing stop (activates +6%, floor peak-3%)
+  1. GUARD     (every 30s)  — hard stop -5%, trailing stop (activates +2%, floor peak-2%)
   2. INTELLIGENCE (every 60s) — GIS score: OBI + TIR + VWAP + Microprice → HOLD/CAUTION/EXIT
 
 Mathematical framework (validated across Gemini, ChatGPT, DeepSeek):
@@ -75,8 +75,8 @@ MARKET_CLOSE_H, MARKET_CLOSE_M = 15,  0
 
 # Stop / trail parameters (from backtester & design doc)
 HARD_STOP_PCT      = -5.0   # % from entry → immediate exit
-TRAIL_ACTIVATE_PCT =  6.0   # % profit → trailing activates
-TRAIL_FLOOR_PCT    =  3.0   # trailing floor = peak − 3%
+TRAIL_ACTIVATE_PCT =  2.0   # % profit → trailing activates (backtest-validated: 2%/2% >> 6%/3%)
+TRAIL_FLOOR_PCT    =  2.0   # trailing floor = peak − 2%
 
 # GIS weights
 W_OBI   = 0.30
@@ -731,7 +731,141 @@ def _check_liquidity_shock(symbol: str, current_depth: float,
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# SECTION 15 — MAIN MONITOR LOOP
+# SECTION 15 — AUTO-CLOSE HANDLERS
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _auto_close_paper(pos: dict, symbol: str, ltp: float, reason: str) -> None:
+    """
+    Auto-close a paper position when a guard fires.
+    Fetches live order book; if no bids exist the position stays open and
+    the user is alerted — never falls back to LTP, because in a real market
+    no bid means no fill.
+    close_type written to paper_trade_log: AUTO_HARD_STOP / AUTO_STOP_LOSS / AUTO_TRAILING_STOP
+    """
+    from modules.trading_core import execute_sell
+    from decimal import Decimal
+
+    telegram_id = pos.get("telegram_id")
+    shares = Decimal(str(pos.get("total_shares") or pos.get("shares") or 0))
+
+    if not telegram_id or shares <= 0:
+        log.error("Auto-close %s: missing telegram_id or shares — skipping", symbol)
+        _send_telegram(f"⚠️ Auto-close FAILED for *{symbol}* ({reason}) — no telegram\\_id or shares. Close manually.")
+        return
+
+    try:
+        from modules.atrad_scraper import fetch_order_book
+        book = fetch_order_book(symbol)
+        bids = book.get("bids", [])
+    except Exception as e:
+        log.error("Auto-close %s: order book fetch failed: %s", symbol, e)
+        _send_telegram(
+            f"⚠️ *{reason}* triggered for *{symbol}* — order book unavailable.\n"
+            f"Position stays open. Close manually."
+        )
+        return
+
+    if not bids:
+        log.warning("Auto-close %s (%s): no bids — position stays open", symbol, reason)
+        _send_telegram(
+            f"⚠️ *{reason}* triggered for *{symbol}* — NO BIDS in market.\n"
+            f"Position stays open. Close manually when liquidity returns."
+        )
+        return
+
+    exit_price = Decimal(str(bids[0]["price"]))
+    close_type = f"AUTO_{reason}"
+
+    try:
+        r = execute_sell(int(telegram_id), symbol, shares, exit_price, close_type=close_type)
+        em = "🟢" if r["result"] == "WIN" else ("🔴" if r["result"] == "LOSS" else "⚪")
+        _send_telegram(
+            f"🤖 *AUTO-CLOSE* — {reason}\n\n"
+            f"✅ *SELL recorded*\n"
+            f"{em} *{symbol}* — {r['result']}\n"
+            f"Exit: {float(exit_price):.2f} (best bid) | Shares: {int(shares)}\n"
+            f"Net P&L:    NPR {float(r['fees']['net_pnl']):+,.2f}\n"
+            f"CGT paid:   NPR {float(r['fees']['cgt']):,.2f}\n"
+            f"Capital now: NPR {float(r['cap_after']):,.2f}"
+        )
+        log.info("Auto-closed %s | reason=%s | price=%s | pnl=%s",
+                 symbol, reason, exit_price, r["fees"]["net_pnl"])
+    except Exception as e:
+        log.error("Auto-close execute_sell failed for %s: %s", symbol, e)
+        _send_telegram(f"⚠️ Auto-close FAILED for *{symbol}* ({reason}): {e}. Close manually.")
+
+
+def _auto_close_live(pos: dict, symbol: str, ltp: float, reason: str) -> None:
+    """Submit ATrad SELL at best bid. No bids → alert only, position stays open."""
+    from modules.atrad_scraper import fetch_order_book, place_sell_order
+
+    shares = int(float(pos.get("total_shares") or pos.get("shares") or 0))
+    if shares <= 0:
+        log.error("[LIVE] Auto-close %s: no shares — skipping", symbol)
+        _send_telegram(
+            f"🚨 *[LIVE] {reason}* — *{symbol}*\n"
+            f"No shares found in position. Close manually immediately!"
+        )
+        return
+
+    try:
+        book = fetch_order_book(symbol)
+        bids = book.get("bids", [])
+    except Exception as e:
+        log.error("[LIVE] Auto-close %s: order book failed: %s", symbol, e)
+        _send_telegram(
+            f"🚨 *[LIVE] {reason}* — *{symbol}*\n"
+            f"Order book unavailable. Close manually immediately!"
+        )
+        return
+
+    if not bids:
+        log.warning("[LIVE] Auto-close %s (%s): no bids — stays open", symbol, reason)
+        _send_telegram(
+            f"🚨 *[LIVE] {reason}* — *{symbol}*\n"
+            f"NO BIDS in market. Position stays open. Close manually when liquidity returns."
+        )
+        return
+
+    exit_price = float(bids[0]["price"])
+
+    try:
+        result = place_sell_order(symbol, shares, exit_price)
+        if result.get("code") == "0":
+            _send_telegram(
+                f"🤖 *[LIVE] AUTO-CLOSE* — {reason}\n\n"
+                f"✅ *SELL submitted to ATrad*\n"
+                f"*{symbol}* — {shares} shares @ {exit_price:.2f} (best bid)\n"
+                f"Status: {result.get('description', 'accepted')}"
+            )
+            log.info("[LIVE] Auto-closed %s | reason=%s | price=%.2f | shares=%d",
+                     symbol, reason, exit_price, shares)
+        else:
+            log.error("[LIVE] Auto-close %s rejected: code=%s desc=%s",
+                      symbol, result.get("code"), result.get("description"))
+            _send_telegram(
+                f"🚨 *[LIVE] AUTO-CLOSE FAILED* — {reason}\n"
+                f"*{symbol}* rejected by ATrad: {result.get('description', str(result))}\n"
+                f"Close manually immediately!"
+            )
+    except Exception as e:
+        log.error("[LIVE] Auto-close %s error: %s", symbol, e)
+        _send_telegram(
+            f"🚨 *[LIVE] AUTO-CLOSE ERROR* — {reason}\n"
+            f"*{symbol}*: {e}\nClose manually immediately!"
+        )
+
+
+def _execute_guard_close(pos: dict, symbol: str, ltp: float, reason: str, paper_mode: bool) -> None:
+    """Route a guard-triggered close to paper or live handler."""
+    if paper_mode:
+        _auto_close_paper(pos, symbol, ltp, reason)
+    else:
+        _auto_close_live(pos, symbol, ltp, reason)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SECTION 16 — MAIN MONITOR LOOP
 # ═══════════════════════════════════════════════════════════════════════════
 
 def run_monitor(paper_mode: bool = True, once: bool = False) -> None:
@@ -821,8 +955,7 @@ def run_monitor(paper_mode: bool = True, once: bool = False) -> None:
                 alert = _format_guard_alert(symbol, guard_reason, ltp, entry, paper_mode)
                 log.warning(alert.replace("*", "").replace("_", " "))
                 _send_telegram(alert)
-                if not paper_mode:
-                    log.warning("[LIVE] Would placeOrder SELL %s @ market — NOT WIRED YET", symbol)
+                _execute_guard_close(pos, symbol, ltp, guard_reason, paper_mode)
                 # Don't skip intelligence after guard — still want GIS info
                 if once:
                     return
@@ -973,7 +1106,7 @@ def run_monitor(paper_mode: bool = True, once: bool = False) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# SECTION 16 — FETCH TRADES (wrapper — uses atrad_scraper)
+# SECTION 17 — FETCH TRADES (wrapper — uses atrad_scraper)
 # ═══════════════════════════════════════════════════════════════════════════
 
 def fetch_trades(symbol: str) -> list:

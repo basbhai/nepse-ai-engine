@@ -51,6 +51,9 @@ def _sql_type(field_type: str, attrs: str) -> str:
     if base == 'Int':
         return 'INTEGER'
 
+    if base == 'Json':
+        return 'JSONB'
+
     if base == 'DateTime':
         if db_kind == 'Date':
             return 'DATE'

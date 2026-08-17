@@ -9,6 +9,7 @@ Run:
 import logging
 import sys
 import os
+import subprocess
 import datetime
 import decimal
 from datetime import date
@@ -1467,6 +1468,68 @@ def settings_reset_circuit_breaker():
     except Exception as e:
         log.exception("reset_circuit_breaker failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Trading Mode Switch ───────────────────────────────────────────────────
+
+class TradingModeSwitchPayload(BaseModel):
+    confirm: str
+
+
+@app.get("/settings/trading-mode")
+def get_trading_mode():
+    from sheets import get_setting as _gs
+    paper = _gs("PAPER_MODE", "true").lower() == "true"
+    return {
+        "paper_mode":     paper,
+        "mode":           "PAPER" if paper else "LIVE",
+        "confirm_phrase": "SWITCH TO LIVE" if paper else "SWITCH TO PAPER",
+    }
+
+
+@app.post("/settings/trading-mode/switch")
+def switch_trading_mode(body: TradingModeSwitchPayload):
+    from sheets import get_setting as _gs, update_setting as _us
+
+    current_paper   = _gs("PAPER_MODE", "true").lower() == "true"
+    required_phrase = "SWITCH TO LIVE" if current_paper else "SWITCH TO PAPER"
+
+    if body.confirm.strip() != required_phrase:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Phrase mismatch. Expected: '{required_phrase}'"
+        )
+
+    new_val = "false" if current_paper else "true"
+    ok = _us("PAPER_MODE", new_val, set_by="dashboard")
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to update PAPER_MODE")
+
+    # Restart execution monitor so it picks up the new mode immediately
+    restart_ok  = False
+    restart_msg = "not attempted"
+    try:
+        uid = os.getuid()
+        env = {**os.environ, "XDG_RUNTIME_DIR": f"/run/user/{uid}"}
+        env.setdefault("DBUS_SESSION_BUS_ADDRESS", f"unix:path=/run/user/{uid}/bus")
+        result = subprocess.run(
+            ["systemctl", "--user", "restart", "nepse-monitor.service"],
+            env=env, capture_output=True, text=True, timeout=15,
+        )
+        restart_ok  = result.returncode == 0
+        restart_msg = (result.stderr.strip() or result.stdout.strip() or "OK") if not restart_ok else "OK"
+    except Exception as e:
+        restart_msg = str(e)
+
+    log.info("Trading mode switched to %s | monitor_restart=%s %s",
+             "PAPER" if not current_paper else "LIVE", restart_ok, restart_msg)
+
+    return {
+        "switched":          True,
+        "new_mode":          "LIVE" if current_paper else "PAPER",
+        "monitor_restarted": restart_ok,
+        "restart_msg":       restart_msg,
+    }
 
 
 # ── Engine Version Toggle ─────────────────────────────────────────────────

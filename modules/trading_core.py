@@ -489,7 +489,8 @@ def execute_buy(telegram_id: int, symbol: str, shares: Decimal, price: Decimal) 
 # ATOMIC SELL TRANSACTION
 # ═══════════════════════════════════════════════════════════════════════════
 
-def execute_sell(telegram_id: int, symbol: str, shares: Decimal, price: Decimal) -> dict:
+def execute_sell(telegram_id: int, symbol: str, shares: Decimal, price: Decimal,
+                 close_type: str = "MANUAL") -> dict:
     pos = get_paper_position(telegram_id, symbol)
     if not pos:
         raise ValueError(f"No open position for {symbol}.")
@@ -567,15 +568,15 @@ def execute_sell(telegram_id: int, symbol: str, shares: Decimal, price: Decimal)
                 (telegram_id, symbol, action, shares, price, gross_amount,
                  brokerage, sebon, dp_fee, cgt, total_fees, net_amount,
                  capital_before, capital_after, wacc_before, wacc_after,
-                 note, created_at, test_mode)
-            VALUES (%s,%s,'SELL',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                 note, created_at, test_mode, close_type)
+            VALUES (%s,%s,'SELL',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         """, (str(telegram_id), symbol, str(shares), str(price), str(fees["gross"]),
               str(fees["brokerage"]), str(fees["sebon"]), str(DP_FEE),
               str(fees["cgt"]), str(fees["total_fees"]),
               str(fees["net_proceeds"]),
               str(available), str(new_capital),
               str(wacc), str(wacc),
-              f"SELL {shares:.0f} @ {price} | {result_str}", now, tmode))
+              f"SELL {shares:.0f} @ {price} | {result_str}", now, tmode, close_type))
 
     return {
         "symbol":    symbol,

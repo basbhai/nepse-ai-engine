@@ -169,6 +169,7 @@ def _load_wait_avoid_outcomes() -> list[dict]:
                    eval_price_change_pct, eval_nepse_change_pct, eval_alpha,
                    eval_key_news,
                    entry_price, stop_loss, target, primary_signal,
+                   lessons_applied,
                    momentum_status, rsi_slope_3d, macd_hist_slope,
                    bb_pct_b_slope, bounce_failed, reversal_days,
                    vwap_dev, bid_ask_ratio, dpr_proximity
@@ -238,6 +239,7 @@ def _load_buy_decisions() -> list[dict]:
                 ml.gemini_reason,
                 ml.gemini_risk,
                 ml.outcome,
+                ml.lessons_applied,
                 ml.momentum_status,
                 ml.rsi_slope_3d,
                 ml.macd_hist_slope,
@@ -270,6 +272,49 @@ def _load_buy_decisions() -> list[dict]:
         return rows
     except Exception as e:
         log.error("market_log BUY load failed: %s", e)
+        return []
+
+
+def _load_lesson_attribution_stats(window_days: int = 90) -> list[dict]:
+    """
+    Per-lesson decisive counts split by outcome, computed from the JSONB
+    lessons_applied column. Only covers rows written after the 2026-08-15
+    migration; older rows have lessons_applied = null and are excluded.
+    """
+    try:
+        from sheets import run_raw_sql
+        rows = run_raw_sql(
+            """
+            SELECT
+                (entry->>'lesson_id')::int                                            AS lesson_id,
+                lh.lesson_type,
+                lh.action,
+                lh.confidence_level,
+                COUNT(*)                                                              AS total_cited,
+                COUNT(*) FILTER (WHERE (entry->>'was_decisive')::bool)               AS decisive_count,
+                COUNT(*) FILTER (
+                    WHERE (entry->>'was_decisive')::bool
+                      AND ml.outcome IN ('CORRECT_AVOID','CORRECT_WAIT','WIN')
+                )                                                                     AS decisive_correct,
+                COUNT(*) FILTER (
+                    WHERE (entry->>'was_decisive')::bool
+                      AND ml.outcome IN ('FALSE_AVOID','MISSED_ENTRY','LOSS')
+                )                                                                     AS decisive_wrong
+            FROM market_log ml,
+                 jsonb_array_elements(ml.lessons_applied) AS entry
+            LEFT JOIN learning_hub lh
+                ON lh.id = (entry->>'lesson_id')::int
+            WHERE ml.lessons_applied IS NOT NULL
+              AND ml.date::date >= CURRENT_DATE - (%s * INTERVAL '1 day')
+            GROUP BY 1, 2, 3, 4
+            ORDER BY decisive_count DESC
+            """,
+            (window_days,),
+        ) or []
+        log.info("Loaded lesson attribution stats: %d lesson(s)", len(rows))
+        return rows
+    except Exception as e:
+        log.error("_load_lesson_attribution_stats failed: %s", e)
         return []
 
 
@@ -483,7 +528,7 @@ _WAIT_AVOID_KEYS = (
     "date", "symbol", "sector", "action", "confidence", "outcome",
     "eval_price_change_pct", "eval_nepse_change_pct", "eval_alpha",
     "geo_score", "macro_score", "eval_geo_delta", "eval_nepal_delta",
-    "eval_market_state", "eval_key_news", "reasoning",
+    "eval_market_state", "eval_key_news", "reasoning", "lessons_applied",
     "momentum_status", "rsi_slope_3d", "macd_hist_slope",
     "bb_pct_b_slope", "bounce_failed", "reversal_days",
     "vwap_dev", "bid_ask_ratio", "dpr_proximity",
@@ -537,7 +582,7 @@ _BUY_DECISION_KEYS = (
     "ema_20_50_cross", "conf_score", "geo_score", "macro_score",
     "fundamental_score", "pe_ratio", "eps", "roe", "npl_pct",
     "sector_mult", "cstar_signal", "candle_pattern", "market_state",
-    "gemini_reason", "gemini_risk", "outcome",
+    "gemini_reason", "gemini_risk", "outcome", "lessons_applied",
     "momentum_status", "rsi_slope_3d", "macd_hist_slope",
     "bb_pct_b_slope", "bounce_failed", "reversal_days",
     "vwap_dev", "bid_ask_ratio", "dpr_proximity",
@@ -952,6 +997,7 @@ def _build_user_prompt(
     pattern_accuracy: list[dict] | None = None,
     wait_stats: dict | None = None,
     v2_performance: dict | None = None,
+    lesson_attribution: list[dict] | None = None,
 ) -> str:
 
     nrb_str = json.dumps({k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in nrb.items() if v is not None}, ensure_ascii=False, default=str) if nrb else "No NRB data available"
@@ -1056,6 +1102,13 @@ Claude's full reasoning, confidence calibration, and whether signals matched out
 
 === EVALUATED WAIT/AVOID OUTCOMES (recommendation_tracker stamped) ===
 {_serialize_compact(wait_avoid, _WAIT_AVOID_KEYS)}
+
+=== LESSON ATTRIBUTION STATS (last 90 days, structured data) ===
+Rows with lessons_applied = null predate the 2026-08-15 migration and are excluded.
+decisive_correct = outcome was CORRECT_AVOID/CORRECT_WAIT/WIN when this lesson was decisive.
+decisive_wrong   = outcome was FALSE_AVOID/MISSED_ENTRY/LOSS when this lesson was decisive.
+Use these counts to identify lessons with high false-block or false-avoid rates.
+{_serialize_compact(lesson_attribution or [], ("lesson_id","lesson_type","action","confidence_level","total_cited","decisive_count","decisive_correct","decisive_wrong"))}
 
 === ACTIVE LESSONS (what Claude reads before every decision) ===
 Review each: still valid? needs strengthening/weakening? supersede?
@@ -1460,6 +1513,7 @@ def get_review_prompts() -> tuple[str, str]:
     claude_audit_history = _load_claude_audit_history()
     pattern_accuracy = _load_pattern_accuracy()
     v2_performance = _load_v2_engine_performance()
+    lesson_attribution = _load_lesson_attribution_stats()
 
     system_prompt = _build_system_prompt()
     user_prompt   = _build_user_prompt(
@@ -1469,6 +1523,7 @@ def get_review_prompts() -> tuple[str, str]:
         pattern_accuracy=pattern_accuracy,
         wait_stats=wait_stats,
         v2_performance=v2_performance,
+        lesson_attribution=lesson_attribution,
     )
 
     return system_prompt, user_prompt
@@ -1579,6 +1634,8 @@ def run(dry_run: bool = False):
     log.info("V2 engine performance: %d target_hit / %d stop_hit / %d still_open (total %d)",
               v2_performance.get("target_hit", 0), v2_performance.get("stop_hit", 0),
               v2_performance.get("still_open", 0), v2_performance.get("total", 0))
+    lesson_attribution = _load_lesson_attribution_stats()
+    log.info("Lesson attribution stats: %d lessons with data", len(lesson_attribution))
 
     # -- Build prompts
     system_prompt = _build_system_prompt()
@@ -1589,6 +1646,7 @@ def run(dry_run: bool = False):
         pattern_accuracy=pattern_accuracy,
         wait_stats=wait_stats,
         v2_performance=v2_performance,
+        lesson_attribution=lesson_attribution,
     )
 
     log.info("Calling GPT-5o for weekly review (prompt ~%d tokens)...",

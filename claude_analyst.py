@@ -63,6 +63,7 @@ class AnalystResult:
     suggested_hold:     int   = 17
     reasoning:          str   = ""
     lesson_applied:     str   = ""
+    lessons_applied:    list  = field(default_factory=list)
     wait_condition:     str   = ""
     herding_note:       str   = ""
     primary_signal:     str   = ""
@@ -268,7 +269,8 @@ def _load_macro_context() -> dict:
         }
 
 
-def _load_lessons(symbol: str, sector: str, limit: int = 10) -> list[str]:
+def _load_lessons(symbol: str, sector: str, limit: int = 10) -> tuple[list[str], set[int]]:
+    """Return (lesson_strings, valid_lesson_ids). IDs are used for FK validation."""
     try:
         from sheets import run_raw_sql, get_setting
 
@@ -292,7 +294,7 @@ def _load_lessons(symbol: str, sector: str, limit: int = 10) -> list[str]:
 
         rows = run_raw_sql(
             """
-            SELECT symbol, sector, lesson_type, condition, finding, action,
+            SELECT id, symbol, sector, lesson_type, condition, finding, action,
                    confidence_level, win_rate, trade_count, source, source_weight
             FROM learning_hub
             WHERE active = 'true'
@@ -362,20 +364,24 @@ def _load_lessons(symbol: str, sector: str, limit: int = 10) -> list[str]:
 
         lessons = []
         for r in sorted_rows:
-            sym   = r.get("symbol", "?")
-            ltype = r.get("lesson_type", "")
-            cond  = r.get("condition",   "")
-            find  = r.get("finding",     "")
-            act   = r.get("action",      "")
-            conf  = r.get("confidence_level", "LOW")
-            wr    = r.get("win_rate",    "")
-            n     = r.get("trade_count", "")
-            stat  = f" (win_rate={wr}, n={n})" if n else ""
-            lessons.append(f"[{sym}|{ltype}|{conf}] IF {cond} -> {act}: {find}{stat}")
-        return lessons
+            row_id = r.get("id", "?")
+            sym    = r.get("symbol", "?")
+            ltype  = r.get("lesson_type", "")
+            cond   = r.get("condition",   "")
+            find   = r.get("finding",     "")
+            act    = r.get("action",      "")
+            conf   = r.get("confidence_level", "LOW")
+            wr     = r.get("win_rate",    "")
+            n      = r.get("trade_count", "")
+            stat   = f" (win_rate={wr}, n={n})" if n else ""
+            # ID prefix lets Claude echo the numeric ID back in lessons_applied
+            lessons.append(f"[ID:{row_id}|{sym}|{ltype}|{conf}] IF {cond} -> {act}: {find}{stat}")
+
+        valid_ids = {r["id"] for r in sorted_rows if r.get("id") is not None}
+        return lessons, valid_ids
     except Exception as exc:
         logger.warning("_load_lessons failed: %s", exc)
-        return []
+        return [], set()
 
 
 def _load_monthly_override() -> None:
@@ -1284,6 +1290,9 @@ Respond ONLY with this JSON -- no markdown, no explanation outside JSON:
   "primary_signal": "MACD or BB or SMA or OBV_MOMENTUM or RSI or VOLUME_BREAKOUT",
   "reasoning": "5-6 sentences covering: why this signal (name the validated edge if any), the risk_reward and key risks, what the Learning Hub says, sector/regime context, and any fundamental quality flags",
   "lesson_applied": "which lesson from Learning Hub was most relevant, or NONE",
+  "lessons_applied": [
+    {{"lesson_id": <integer from ID:NNN tag>, "action": "<action code copied verbatim from the lesson -> token>", "was_decisive": <true if removing this lesson would have flipped or materially changed the final action, false otherwise>}}
+  ],
   "wait_condition": "if WAIT: max 2 stock-specific conditions only (e.g. price holds above X support, RSI rises above 45). NO tech_score thresholds, NO confidence thresholds, NO breadth conditions, NO nepal_score conditions. Keep it simple and triggerable.",
   "herding_note": "one sentence on herding/bubble risk or NONE"
 }}"""
@@ -1293,7 +1302,43 @@ Respond ONLY with this JSON -- no markdown, no explanation outside JSON:
 # SECTION 5- ASSEMBLE RESULT + WRITE TO DB
 # =============================================================================
 
-def _assemble_result(claude_json: dict, flag, geo: dict) -> AnalystResult:
+def _validate_lessons_applied(entries: list, valid_ids: set[int]) -> list[dict]:
+    """
+    Sanitise and FK-check lessons_applied entries from Claude's JSON response.
+
+    - Drops malformed entries (non-dict, non-integer lesson_id).
+    - Raises ValueError if valid_ids is non-empty and an entry's lesson_id is not
+      in it — guards against Claude hallucinating an ID that wasn't in the prompt.
+    - valid_ids being empty (lesson load failed) is treated as "skip check" so a
+      DB-fetch failure never silently drops the whole attribution list.
+    """
+    cleaned = []
+    for entry in entries if isinstance(entries, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            lid = int(entry["lesson_id"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if valid_ids and lid not in valid_ids:
+            raise ValueError(
+                f"lessons_applied: lesson_id {lid} was not in the active lessons "
+                f"fetched for this analysis run — possible hallucination"
+            )
+        cleaned.append({
+            "lesson_id":    lid,
+            "action":       str(entry.get("action", "")),
+            "was_decisive": bool(entry.get("was_decisive", False)),
+        })
+    return cleaned
+
+
+def _assemble_result(
+    claude_json: dict,
+    flag,
+    geo: dict,
+    valid_lesson_ids: set[int] | None = None,
+) -> AnalystResult:
     primary_signal = claude_json.get("primary_signal", "")
     # Sanitize — LAGGARD_PLAY is no longer a valid signal
     VALID_PRIMARY_SIGNALS = {"MACD", "BB", "SMA", "OBV_MOMENTUM", "RSI", "VOLUME_BREAKOUT"}
@@ -1345,6 +1390,10 @@ def _assemble_result(claude_json: dict, flag, geo: dict) -> AnalystResult:
         suggested_hold     = int(claude_json.get("suggested_hold_days", 17)),
         reasoning          = claude_json.get("reasoning",        ""),
         lesson_applied     = claude_json.get("lesson_applied",   "NONE"),
+        lessons_applied    = _validate_lessons_applied(
+            claude_json.get("lessons_applied", []),
+            valid_lesson_ids or set(),
+        ),
         wait_condition     = claude_json.get("wait_condition",   ""),
         herding_note       = claude_json.get("herding_note",     "NONE"),
         primary_signal     = primary_signal,
@@ -1471,6 +1520,7 @@ def _write_to_db(result: AnalystResult, flag=None) -> None:
             "wait_condition":    _s(result.wait_condition),
             "herding_note":      _s(result.herding_note),
             "lesson_applied":    _s(result.lesson_applied),
+            "lessons_applied":   json.dumps(result.lessons_applied) if result.lessons_applied else None,
             "primary_signal":    _s(result.primary_signal),
             "outcome":           "PENDING",
             "timestamp":         _s(result.timestamp),
@@ -1634,7 +1684,7 @@ def run_analysis(flags: list) -> list[AnalystResult]:
             logger.info("%s: portfolio full after earlier BUYs -- skipping", sym)
             continue
 
-        lessons     = _load_lessons(sym, getattr(flag, "sector", ""))
+        lessons, valid_lesson_ids = _load_lessons(sym, getattr(flag, "sector", ""))
         fund_ctx    = _load_fundamentals_context(sym, getattr(flag, "sector", ""))
         broker_ctx  = _load_broker_flow_context(sym)
 
@@ -1674,7 +1724,7 @@ def run_analysis(flags: list) -> list[AnalystResult]:
             logger.warning("%s: Claude returned no result -- skipping", sym)
             continue
 
-        result = _assemble_result(claude_json, flag, geo)
+        result = _assemble_result(claude_json, flag, geo, valid_lesson_ids=valid_lesson_ids)
 
         # 2b: monthly_override buy block
         if _BUY_BLOCKED and result.action == "BUY":
@@ -1776,7 +1826,7 @@ if __name__ == "__main__":
         loss_streak  = _load_loss_streak()
 
         for i, flag in enumerate(flags, 1):
-            lessons    = _load_lessons(flag.symbol, getattr(flag, "sector", ""))
+            lessons, _valid_ids = _load_lessons(flag.symbol, getattr(flag, "sector", ""))
             fund_ctx   = _load_fundamentals_context(flag.symbol, getattr(flag, "sector", ""))
             broker_ctx = _load_broker_flow_context(flag.symbol)
             try:
