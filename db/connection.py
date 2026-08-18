@@ -1,7 +1,7 @@
 """
 db/connection.py
 ─────────────────────────────────────────────────────────────────────────────
-NEPSE AI Engine — Neon PostgreSQL connection layer.
+NEPSE AI Engine — PostgreSQL connection layer.
 
 Responsibilities:
     - Load DATABASE_URL from .env
@@ -44,7 +44,7 @@ DATABASE_URL = (
 MAX_RETRIES  = 3
 RETRY_DELAY  = 5     # seconds base
 POOL_MIN     = 1
-POOL_MAX     = int(os.getenv("DB_POOL_MAX", "12"))  # Neon free allows 20
+POOL_MAX     = int(os.getenv("DB_POOL_MAX", "12"))
 
 # ─────────────────────────────────────────
 # CONNECTION POOL (lazy, thread-safe)
@@ -77,12 +77,11 @@ def _get_pool():
         if not DATABASE_URL:
             raise RuntimeError(
                 "DATABASE_URL not set in .env\n"
-                "Format: postgresql://user:pass@host/db?sslmode=require\n"
-                "Get it from: neon.tech → project → Connection Details"
+                "Format: postgresql://user:pass@host/db"
             )
 
         _pool = pg_pool.ThreadedConnectionPool(POOL_MIN, POOL_MAX, DATABASE_URL)
-        log.info("Neon connection pool ready (min=%d max=%d)", POOL_MIN, POOL_MAX)
+        log.info("DB connection pool ready (min=%d max=%d)", POOL_MIN, POOL_MAX)
         return _pool
 
 
@@ -91,9 +90,19 @@ def _db():
     """
     Context manager for all DB access. Yields a RealDictCursor.
 
-    - Pulls connection from pool, returns it on exit
+    - Pulls a connection from the pool, returns it on exit
     - Auto-commits on clean exit, rolls back on exception
-    - Retries MAX_RETRIES times with linear back-off on OperationalError
+    - Retries acquiring a connection up to MAX_RETRIES times. A pooled
+      connection that Postgres or the OS silently closed while idle looks
+      fine to the pool and only fails once used, so each acquired
+      connection gets a cheap SELECT 1 probe before being handed to the
+      caller; a dead one is discarded (not recycled) and retried
+      immediately — reconnecting is a ~20ms local operation, so only
+      later attempts (a real outage, not one stale connection) pay the
+      back-off sleep
+    - A failure *inside* the `with` block (i.e. during your own queries)
+      is not retried — your queries may have already partially run, so
+      it's raised as-is rather than silently rerun from a fresh connection
     - Rows returned as dicts: row["symbol"] not row[0]
 
     Usage:
@@ -111,53 +120,72 @@ def _db():
     import psycopg2.extras
 
     conn     = None
+    cur      = None
     last_exc = None
 
     for attempt in range(MAX_RETRIES):
         try:
             pool = _get_pool()
             conn = pool.getconn()
+
+            try:
+                probe = conn.cursor()
+                probe.execute("SELECT 1")
+                probe.fetchone()
+                probe.close()
+                conn.rollback()  # close the implicit transaction the probe opened
+            except psycopg2.OperationalError:
+                pool.putconn(conn, close=True)
+                conn = None
+                raise
+
             conn.autocommit = False
-            cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-
-            yield cur
-
-            conn.commit()
-            return
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            break
 
         except psycopg2.OperationalError as e:
             last_exc = e
-            if conn:
-                try: conn.rollback()
-                except Exception: pass
             if attempt < MAX_RETRIES - 1:
-                wait = RETRY_DELAY * (attempt + 1)
+                wait = RETRY_DELAY * attempt  # 0 on the first retry, 5s+ after
                 log.warning(
-                    "DB connection error (attempt %d/%d), retry in %ds: %s",
-                    attempt + 1, MAX_RETRIES, wait, e,
+                    "DB connection error (attempt %d/%d), retrying%s: %s",
+                    attempt + 1, MAX_RETRIES,
+                    f" in {wait}s" if wait else "", e,
                 )
-                time.sleep(wait)
+                if wait:
+                    time.sleep(wait)
+    else:
+        raise RuntimeError(f"DB failed after {MAX_RETRIES} attempts: {last_exc}")
 
-        except Exception as e:
-            if conn:
-                try: conn.rollback()
-                except Exception: pass
-            log.error("DB error: %s", e)
-            raise
-
-        finally:
-            if conn:
-                try:
-                    _get_pool().putconn(conn)
-                except Exception:
-                    pass
-                conn = None
-
-    raise RuntimeError(f"DB failed after {MAX_RETRIES} attempts: {last_exc}")
+    try:
+        yield cur
+        conn.commit()
+    except psycopg2.OperationalError:
+        # Connection died mid-query, not just at acquisition — discard it
+        # instead of recycling a broken connection back into the pool.
+        try: conn.rollback()
+        except Exception: pass
+        try:
+            _get_pool().putconn(conn, close=True)
+        except Exception:
+            pass
+        conn = None
+        raise
+    except Exception as e:
+        try: conn.rollback()
+        except Exception: pass
+        log.error("DB error: %s", e)
+        raise
+    finally:
+        if conn:
+            try:
+                _get_pool().putconn(conn)
+            except Exception:
+                pass
 
 
 def test_connection() -> bool:
-    """Quick health check — returns True if Neon is reachable."""
+    """Quick health check — returns True if the DB is reachable."""
     try:
         with _db() as cur:
             cur.execute("SELECT 1")

@@ -357,8 +357,14 @@ def _sync_table(local_conn, neon_conn, table: str) -> dict:
     # Upsert in batches of 500
     BATCH = 500
     for i in range(0, len(rows), BATCH):
-        batch    = rows[i:i + BATCH]
-        filtered = [{c: row.get(c) for c in all_cols} for row in batch]
+        batch = rows[i:i + BATCH]
+        filtered = [
+            {
+                c: psycopg2.extras.Json(row.get(c)) if isinstance(row.get(c), (dict, list)) else row.get(c)
+                for c in all_cols
+            }
+            for row in batch
+        ]
         try:
             with neon_conn.cursor() as cur:
                 psycopg2.extras.execute_batch(cur, sql, filtered, page_size=BATCH)

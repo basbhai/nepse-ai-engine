@@ -10,8 +10,8 @@
   <link
     href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap"
     rel="stylesheet" />
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.tailwindcss.com" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer></script>
   <style>
     /* ═══════════════════════════════════════════════════════════
    DESIGN TOKENS
@@ -3653,7 +3653,6 @@
         });
       });
 
-      loadBrokerFlow();
       loadPortfolioCharts();
 
       destroyChart('chart-nepse');
@@ -3758,88 +3757,64 @@
       }
     }
 
-    /* ── Smart Money Flow ─────────────────────────────────────────────────────── */
-    async function loadBrokerFlow() {
-      try {
-        const d = await fetchJSON('/dashboard/broker_flow');
-        renderBrokerFlow(d);
-      } catch (e) {
-        document.getElementById('broker-flow-section').innerHTML =
-          '<div style="color:var(--muted);font-size:11px">Smart money data unavailable.</div>';
-      }
+    /* Shared smart-money (accumulation/distribution) table renderers —
+       used by the standalone Accumulation/Distribution sections below. */
+    function smFmtAmt(val) {
+      const n = parseFloat(val) || 0;
+      if (n >= 1e7) return (n / 1e7).toFixed(1) + 'Cr';
+      if (n >= 1e5) return (n / 1e5).toFixed(1) + 'L';
+      return n.toLocaleString();
     }
-
-    function renderBrokerFlow(d) {
-      const el = document.getElementById('broker-flow-section');
-      if (!d || (!d.accumulation?.length && !d.distribution?.length)) {
-        el.innerHTML = '<div style="color:var(--muted);font-size:11px">No broker flow data for today.</div>';
-        return;
-      }
-
-      const fmt = (val) => {
-        const n = parseFloat(val) || 0;
-        if (n >= 1e7) return (n / 1e7).toFixed(1) + 'Cr';
-        if (n >= 1e5) return (n / 1e5).toFixed(1) + 'L';
-        return n.toLocaleString();
-      };
-
-      const thStyle = `font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;padding:6px 8px;border-bottom:1px solid var(--border);text-align:left;background:var(--bg3)`;
-
-      const accRows = (d.accumulation || []).map((r, i) => `
+    const SM_TH_STYLE = `font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;padding:6px 8px;border-bottom:1px solid var(--border);text-align:left;background:var(--bg3)`;
+    function smRows(rows, kind) {
+      const color = kind === 'acc' ? 'var(--green)' : 'var(--red)';
+      const p = kind === 'acc' ? 'acc' : 'dist';
+      return (rows || []).map((r, i) => `
         <tr style="--row-d:${i * 22}ms">
-          <td style="font-weight:700;color:var(--green)">${esc(r.symbol)}</td>
+          <td style="font-weight:700;color:${color}">${esc(r.symbol)}</td>
           <td style="color:var(--muted);font-size:11px">${esc(r.name || '').substring(0, 22)}</td>
-          <td style="text-align:right">${v(r.acc_broker_count_1d)}</td>
-          <td style="text-align:right;color:var(--green)">${fmt(r.acc_qty_1d)}</td>
-          <td style="text-align:right;font-size:11px;color:var(--muted)">${fmt(r.acc_amount_1d)}</td>
-          <td style="font-size:10px;color:var(--muted)">${esc(r.acc_top_broker_1d || '—')}</td>
+          <td style="text-align:right">${v(r[p + '_broker_count_1d'])}</td>
+          <td style="text-align:right;color:${color}">${smFmtAmt(r[p + '_qty_1d'])}</td>
+          <td style="text-align:right;font-size:11px;color:var(--muted)">${smFmtAmt(r[p + '_amount_1d'])}</td>
+          <td style="font-size:10px;color:var(--muted)">${esc(r[p + '_top_broker_1d'] || '—')}</td>
         </tr>`).join('');
-
-      const distRows = (d.distribution || []).map((r, i) => `
-        <tr style="--row-d:${i * 22}ms">
-          <td style="font-weight:700;color:var(--red)">${esc(r.symbol)}</td>
-          <td style="color:var(--muted);font-size:11px">${esc(r.name || '').substring(0, 22)}</td>
-          <td style="text-align:right">${v(r.dist_broker_count_1d)}</td>
-          <td style="text-align:right;color:var(--red)">${fmt(r.dist_qty_1d)}</td>
-          <td style="text-align:right;font-size:11px;color:var(--muted)">${fmt(r.dist_amount_1d)}</td>
-          <td style="font-size:10px;color:var(--muted)">${esc(r.dist_top_broker_1d || '—')}</td>
-        </tr>`).join('');
-
-      const tableHtml = (rows, empty) => `
+    }
+    function smTableHtml(rows, empty) {
+      return `
         <div class="tbl-wrap">
           <table style="width:100%;border-collapse:collapse;font-size:12px">
             <thead><tr>
-              <th style="${thStyle}">Symbol</th>
-              <th style="${thStyle}">Name</th>
-              <th style="${thStyle};text-align:right">Brokers</th>
-              <th style="${thStyle};text-align:right">Qty</th>
-              <th style="${thStyle};text-align:right">Amount</th>
-              <th style="${thStyle}">Top Broker</th>
+              <th style="${SM_TH_STYLE}">Symbol</th>
+              <th style="${SM_TH_STYLE}">Name</th>
+              <th style="${SM_TH_STYLE};text-align:right">Brokers</th>
+              <th style="${SM_TH_STYLE};text-align:right">Qty</th>
+              <th style="${SM_TH_STYLE};text-align:right">Amount</th>
+              <th style="${SM_TH_STYLE}">Top Broker</th>
             </tr></thead>
             <tbody>${rows || `<tr><td colspan="6" style="color:var(--muted);padding:12px 8px">${empty}</td></tr>`}</tbody>
           </table>
         </div>`;
-
-      const accN = (d.accumulation || []).length;
-      const distN = (d.distribution || []).length;
-
-      el.innerHTML = `
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-          <span style="font-size:9px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase">Smart Money Flow — ${esc(d.date || '—')}</span>
-        </div>
-        <div class="tab-bar" id="broker-tab-bar">
-          <button class="tab-btn active" onclick="switchBrokerTab('acc',this)">▲ Accumulation <span style="color:var(--muted)">(${accN})</span></button>
-          <button class="tab-btn"        onclick="switchBrokerTab('dist',this)">▼ Distribution <span style="color:var(--muted)">(${distN})</span></button>
-        </div>
-        <div id="broker-pane-acc" class="broker-pane">${tableHtml(accRows, 'No accumulation data')}</div>
-        <div id="broker-pane-dist" class="broker-pane" style="display:none">${tableHtml(distRows, 'No distribution data')}</div>`;
     }
 
-    function switchBrokerTab(id, btn) {
-      document.querySelectorAll('.broker-pane').forEach(p => p.style.display = 'none');
-      document.querySelectorAll('#broker-tab-bar .tab-btn').forEach(b => b.classList.remove('active'));
-      document.getElementById('broker-pane-' + id).style.display = 'block';
-      btn.classList.add('active');
+    /* ── Accumulation / Distribution (standalone sections) ──────────────
+       Both come from the same /dashboard/broker_flow payload, split into
+       two single, full-width tables. */
+    async function loadAccumulation() {
+      try {
+        const d = await fetchJSON('/dashboard/broker_flow');
+        document.getElementById('acc-date').textContent = d.date || '';
+        document.getElementById('acc-content').innerHTML =
+          smTableHtml(smRows(d.accumulation, 'acc'), 'No accumulation data');
+      } catch (e) { setError('acc-content', 'Broker flow API error: ' + e.message); }
+    }
+
+    async function loadDistribution() {
+      try {
+        const d = await fetchJSON('/dashboard/broker_flow');
+        document.getElementById('dist-date').textContent = d.date || '';
+        document.getElementById('dist-content').innerHTML =
+          smTableHtml(smRows(d.distribution, 'dist'), 'No distribution data');
+      } catch (e) { setError('dist-content', 'Broker flow API error: ' + e.message); }
     }
 
     /* ── 2. Market Log ───────────────────────────────────────────────── */
@@ -4296,20 +4271,68 @@
     }
     window.addEventListener('scroll', updateActiveNav, { passive: true });
 
-    /* ── Init & auto-refresh ─────────────────────────────────────────── */
-    async function refreshAll() {
+    /* ── Init & lazy per-section refresh ─────────────────────────────────
+       Each tab's data loads the first time it's opened (not all 15+ tabs
+       at once on page mount), and only the currently-open tab keeps
+       polling in the background — so switching away from Stealth stops
+       its 30s poll instead of leaving it running forever. */
+    const SECTION_LOADERS = {
+      's-dashboard':    loadSummary,
+      's-marketlog':    loadMarketLog,
+      's-accumulation': loadAccumulation,
+      's-distribution': loadDistribution,
+      's-learning':     loadLearningHub,
+      's-audit':        loadAudit,
+      's-council':      loadCouncil,
+      's-trades':       loadTrades,
+      's-portfolio':    loadPortfolio,
+      's-logs':         loadLogsList,
+      's-reporter':     loadReporter,
+      's-stealth':      loadStealth,
+      's-gate-tracker': loadGateTracker,
+      's-nrb':          nrbCheckAPI,
+      's-settings':     () => { loadSettings(); loadTradingMode(); },
+    };
+    const SECTION_REFRESH_MS = {
+      's-dashboard':    5 * 60 * 1000,
+      's-marketlog':    5 * 60 * 1000,
+      's-accumulation': 5 * 60 * 1000,
+      's-distribution': 5 * 60 * 1000,
+      's-learning':     5 * 60 * 1000,
+      's-audit':        5 * 60 * 1000,
+      's-council':      5 * 60 * 1000,
+      's-trades':       5 * 60 * 1000,
+      's-portfolio':    5 * 60 * 1000,
+      's-logs':         5 * 60 * 1000,
+      's-stealth':      30 * 1000,
+      's-gate-tracker': 5 * 60 * 1000,
+      's-nrb':          15 * 1000,
+      's-settings':     30 * 1000,
+    };
+    let _sectionRefreshTimer = null;
+    function loadSection(id) {
+      const loader = SECTION_LOADERS[id];
+      if (!loader) return;
+      loader();
       document.getElementById('last-refresh').textContent =
         new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      await Promise.allSettled([
-        loadSummary(), loadMarketLog(), loadLearningHub(),
-        loadAudit(), loadCouncil(), loadTrades(), loadPortfolio(), loadLogsList(),
-      ]);
+      if (_sectionRefreshTimer) clearInterval(_sectionRefreshTimer);
+      const ms = SECTION_REFRESH_MS[id];
+      if (ms) _sectionRefreshTimer = setInterval(loader, ms);
     }
 
     /* ── App-shell section switcher with View Transitions ─────── */
+    let _viewInitialized = false;
     function switchView(id) {
       var prev = document.querySelector('.section.active-view');
-      if (prev && prev.id === id) return; // already active
+      /* s-dashboard carries active-view in the static HTML as a no-JS-yet
+         fallback, so on a fresh session (saved === 's-dashboard') prev.id
+         already equals id before _apply() ever runs. Only treat that as
+         "already active, skip" after the first real switch — otherwise
+         the initial load silently never fires and the tab hangs on its
+         placeholder spinner forever. */
+      if (_viewInitialized && prev && prev.id === id) return;
+      _viewInitialized = true;
 
       /* Logs' landscape overlay is position:fixed + high z-index so it
          renders above every section, not just its own — exit it before
@@ -4331,6 +4354,7 @@
         if (el) {
           el.classList.add('active-view');
           el.style.viewTransitionName = 'section-content';
+          loadSection(id);
         }
         document.querySelectorAll('[href="#' + id + '"]').forEach(function(a) {
           a.classList.add('active');
@@ -4348,6 +4372,18 @@
     }
 
     document.addEventListener('DOMContentLoaded', () => {
+      /* Public (Tailscale Funnel) traffic: strip NRB Entry & Settings
+         entirely so they're neither reachable nor fetched. Their API
+         routes are also blocked server-side. */
+      if (window.__PUBLIC_MODE__) {
+        document.querySelectorAll('a[href="#s-nrb"], a[href="#s-settings"]').forEach(a => a.remove());
+        document.querySelectorAll('#s-nrb, #s-settings').forEach(el => el.remove());
+        var savedPublic = sessionStorage.getItem('nepse_view');
+        if (savedPublic === 's-nrb' || savedPublic === 's-settings') {
+          sessionStorage.setItem('nepse_view', 's-dashboard');
+        }
+      }
+
       /* Wire all nav links to switchView */
       document.querySelectorAll('#sidebar nav a[href^="#s-"], #bottom-nav a[href^="#s-"]').forEach(a => {
         a.addEventListener('click', e => {
@@ -4356,23 +4392,11 @@
         });
       });
 
-      /* Restore last section or default to dashboard */
+      /* Restore last section or default to dashboard. switchView() loads
+         that section's data and starts its refresh interval — every other
+         tab loads on first visit instead of all at once here. */
       var saved = sessionStorage.getItem('nepse_view') || 's-dashboard';
       switchView(saved);
-
-      refreshAll();
-      nrbCheckAPI();
-      loadReporter();
-      loadStealth();
-      loadGateTracker();
-      loadSettings();
-      loadTradingMode();
-      setInterval(refreshAll, 5 * 60 * 1000);
-      setInterval(nrbCheckAPI, 15000);
-      setInterval(loadStealth, 30000);
-      setInterval(loadGateTracker, 5 * 60 * 1000);
-      setInterval(loadTradingMode, 30000);
-      setInterval(loadSettings, 5 * 60 * 1000);
     });
 
 

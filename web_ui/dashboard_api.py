@@ -10,6 +10,7 @@ import logging
 import sys
 import os
 import subprocess
+import time
 import datetime
 import decimal
 from datetime import date
@@ -22,7 +23,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, StreamingResponse
+from starlette.responses import JSONResponse, Response
 from pydantic import BaseModel
 from typing import Optional
 
@@ -64,6 +66,87 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Tailscale Funnel exposes this app to the public internet using this
+# hostname. Requests arriving with this Host header are public; anything
+# else (localhost, LAN IP, tailnet 100.x IP) is local/trusted.
+PUBLIC_HOST = "shanvi-home.tail5acc61.ts.net"
+
+# Route prefixes hidden from public (funnel) traffic — NRB entry, settings.
+# NOTE: /register is intentionally NOT blocked — Discord/Telegram bots link
+# external users there to request access; it must stay public.
+_PUBLIC_BLOCKED_PREFIXES = ("/nrb", "/settings")
+
+
+def is_public(request: Request) -> bool:
+    host = request.headers.get("host", "")
+    return host.split(":")[0] == PUBLIC_HOST
+
+
+@app.middleware("http")
+async def block_sensitive_routes_from_public(request: Request, call_next):
+    if is_public(request) and request.url.path.startswith(_PUBLIC_BLOCKED_PREFIXES):
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    return await call_next(request)
+
+
+# The pipeline that produces this data runs every ~6 min, so a response is
+# never more than one cycle stale — caching it for 2 min cuts the
+# dashboard's tab-switch/auto-refresh traffic to near zero without ever
+# showing data older than the pipeline's own refresh cadence.
+#
+# Two layers:
+#   1. Client (Cache-Control: private, max-age=120) — the requesting
+#      browser skips the network entirely on repeat requests. `private`
+#      (not `public`) keeps it out of any shared/proxy cache — this app is
+#      reachable over Tailscale Funnel, and trade/portfolio data must only
+#      ever be cached in the operator's own browser, never a shared
+#      intermediary.
+#   2. Server (in-memory, process-local) — when a request *does* reach the
+#      backend (a different browser/device, or the client cache expired),
+#      it's served from memory instead of re-querying Postgres, so N
+#      viewers within the same 2-minute window cost one DB round trip
+#      total instead of N.
+_CACHEABLE_PREFIXES = (
+    "/dashboard/summary", "/dashboard/market_log", "/dashboard/broker_flow",
+    "/dashboard/learning_hub", "/dashboard/audit", "/dashboard/council",
+    "/dashboard/trades", "/dashboard/portfolio", "/dashboard/gate_tracker",
+    "/stealth/stats", "/stealth/watching", "/stealth/triggered", "/stealth/history",
+    "/nrb/periods", "/reporter/tables", "/engine-versions",
+)
+_CACHE_CONTROL     = "private, max-age=120"
+_SERVER_CACHE_TTL  = 120  # seconds — matches the client-side max-age above
+_server_cache: dict[str, tuple[float, int, bytes, str]] = {}  # path -> (expires_at, status, body, content_type)
+
+
+@app.middleware("http")
+async def cache_dashboard_reads(request: Request, call_next):
+    if request.method != "GET" or not request.url.path.startswith(_CACHEABLE_PREFIXES):
+        return await call_next(request)
+
+    cache_key = request.url.path
+    now = time.monotonic()
+
+    hit = _server_cache.get(cache_key)
+    if hit and hit[0] > now:
+        _, status_code, body, content_type = hit
+        return Response(
+            content=body, status_code=status_code, media_type=content_type,
+            headers={"Cache-Control": _CACHE_CONTROL, "X-Cache": "HIT"},
+        )
+
+    response = await call_next(request)
+    if response.status_code != 200:
+        return response
+
+    body = b"".join([chunk async for chunk in response.body_iterator])
+    _server_cache[cache_key] = (now + _SERVER_CACHE_TTL, response.status_code, body, response.media_type)
+
+    return Response(
+        content=body, status_code=response.status_code, media_type=response.media_type,
+        headers={"Cache-Control": _CACHE_CONTROL, "X-Cache": "MISS"},
+    )
+
 
 _HTML = os.path.join(os.path.dirname(__file__), "dashboard.html")
 
@@ -155,8 +238,14 @@ def robots():
 
 @app.get("/")
 @app.get("/dashboard")
-def serve_dashboard():
-    return FileResponse(_HTML)
+def serve_dashboard(request: Request):
+    with open(_HTML, "r", encoding="utf-8") as f:
+        html = f.read()
+    flag = "true" if is_public(request) else "false"
+    html = html.replace(
+        "<head>", f"<head>\n<script>window.__PUBLIC_MODE__ = {flag};</script>", 1
+    )
+    return HTMLResponse(html)
 
 
 @app.get("/nrb")
