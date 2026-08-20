@@ -242,8 +242,19 @@ def _enrich_from_market_log(row: dict) -> None:
         saved_trail = row.get("trail_active")
         true_peak   = float(saved_peak) if saved_peak else entry_price
         row["peak_price"]   = true_peak
-        row["trail_active"] = (str(saved_trail).lower() == "true" if saved_trail
-                               else (true_peak - entry_price) / entry_price * 100 >= TRAIL_ACTIVATE_PCT)
+        if saved_trail:
+            row["trail_active"] = str(saved_trail).lower() == "true"
+        else:
+            # Same net-of-cost criterion as _check_guard()/_catchup_peak_from_history()
+            # — must match or trail_active can get latched True here off a raw price
+            # move that never actually cleared 2% net profit (it's a one-way flag).
+            shares = float(row.get("shares") or row.get("total_shares") or 0)
+            if row.get("first_buy_date"):
+                from modules.trading_core import hold_days
+                hd = hold_days(row["first_buy_date"])
+            else:
+                hd = 0
+            row["trail_active"] = _net_profit_pct(entry_price, true_peak, shares, hd) >= TRAIL_ACTIVATE_PCT
     except Exception as e:
         log.warning("enrich_from_market_log(%s): %s", row.get("symbol"), e)
         row["stop_loss"] = None
@@ -281,6 +292,7 @@ def _catchup_peak_from_history(positions: list[dict]) -> None:
         entry_date = pos.get("first_buy_date") or ""
         entry_price = float(pos.get("entry_price") or pos.get("wacc") or 0)
         db_peak    = float(pos.get("peak_price") or entry_price)
+        shares     = float(pos.get("shares") or pos.get("total_shares") or 0)
         if not symbol or not entry_date:
             continue
         try:
@@ -293,7 +305,12 @@ def _catchup_peak_from_history(positions: list[dict]) -> None:
                 continue
             hist_peak = float(rows[0]["max_high"])
             if hist_peak > db_peak:
-                trail = (hist_peak - entry_price) / entry_price * 100 >= TRAIL_ACTIVATE_PCT
+                # Same net-of-cost criterion as _check_guard() — must match or this
+                # can latch trail_active True off a raw move that never actually
+                # cleared 2% net profit (it's a one-way flag, never reset to False).
+                from modules.trading_core import hold_days
+                hd    = hold_days(entry_date)
+                trail = _net_profit_pct(entry_price, hist_peak, shares, hd) >= TRAIL_ACTIVATE_PCT
                 _persist_trail_state(symbol, hist_peak, trail)
                 pos["peak_price"]   = hist_peak
                 pos["trail_active"] = trail
