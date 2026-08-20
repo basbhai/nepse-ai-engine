@@ -13,6 +13,8 @@ import subprocess
 import time
 import datetime
 import decimal
+import secrets
+import hmac
 from datetime import date
 
 import re as _re
@@ -23,7 +25,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from starlette.responses import JSONResponse, Response
 from pydantic import BaseModel
 from typing import Optional
@@ -60,17 +62,21 @@ async def lifespan(app):
 
 app = FastAPI(title="NEPSE AI — Dashboard API", version="1.0.0", lifespan=lifespan)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 # Tailscale Funnel exposes this app to the public internet using this
 # hostname. Requests arriving with this Host header are public; anything
 # else (localhost, LAN IP, tailnet 100.x IP) is local/trusted.
 PUBLIC_HOST = "shanvi-home.tail5acc61.ts.net"
+
+app.add_middleware(
+    CORSMiddleware,
+    # dashboard.html only ever fetch()es its own origin (API = window.location.origin),
+    # so the only legitimate cross-origin caller is the public Funnel host itself.
+    # Wildcard ("*") let ANY website script reads against this API from a visitor's
+    # browser — narrowed here as part of the dashboard auth fix.
+    allow_origins=[f"https://{PUBLIC_HOST}"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Route prefixes hidden from public (funnel) traffic — NRB entry, settings.
 # NOTE: /register is intentionally NOT blocked — Discord/Telegram bots link
@@ -88,6 +94,121 @@ async def block_sensitive_routes_from_public(request: Request, call_next):
     if is_public(request) and request.url.path.startswith(_PUBLIC_BLOCKED_PREFIXES):
         return JSONResponse({"detail": "Not Found"}, status_code=404)
     return await call_next(request)
+
+
+# ── Auth ──────────────────────────────────────────────────────────────────────
+# Local/LAN/tailnet traffic (is_public() == False) is trusted automatically, same
+# as the existing NRB/settings model above — no login needed on your own machine
+# or tailnet. Anything arriving on the public Funnel hostname must present either
+# a valid session cookie (obtained by typing DASHBOARD_AUTH_SECRET at /login) or
+# the secret itself as an "X-API-Key" header (for scripts/bots). Without
+# DASHBOARD_AUTH_SECRET configured, public access is refused entirely (fail closed)
+# rather than silently left open.
+DASHBOARD_AUTH_SECRET = os.getenv("DASHBOARD_AUTH_SECRET", "")
+if not DASHBOARD_AUTH_SECRET:
+    log.warning(
+        "DASHBOARD_AUTH_SECRET is not set — public (Funnel) access will be refused "
+        "entirely until it's configured in .env."
+    )
+
+SESSION_COOKIE = "nepse_session"
+SESSION_TTL_SECONDS = 30 * 24 * 60 * 60  # 30 days
+
+# In-process session store: session_id -> expires_at (monotonic-free, wall clock
+# is fine here since it only needs to survive within one running server process,
+# same pattern as _server_cache below).
+_sessions: dict[str, float] = {}
+
+_AUTH_EXEMPT_PATHS = {"/health", "/robots.txt", "/login", "/register"}
+
+
+def _valid_api_key(request: Request) -> bool:
+    key = request.headers.get("x-api-key", "")
+    return bool(DASHBOARD_AUTH_SECRET) and hmac.compare_digest(key, DASHBOARD_AUTH_SECRET)
+
+
+def _valid_session(request: Request) -> bool:
+    sid = request.cookies.get(SESSION_COOKIE, "")
+    if not sid:
+        return False
+    expires_at = _sessions.get(sid)
+    if expires_at is None or expires_at < time.time():
+        _sessions.pop(sid, None)
+        return False
+    return True
+
+
+_LOGIN_PAGE = """<!doctype html>
+<html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>NEPSE AI — Login</title>
+<style>
+  body{background:#0d1117;color:#e6edf3;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+       display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
+  form{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:32px;width:280px}
+  h1{font-size:16px;margin:0 0 20px}
+  input{width:100%;box-sizing:border-box;background:#0d1117;border:1px solid #30363d;color:#e6edf3;
+        border-radius:6px;padding:10px 12px;font-size:14px;margin-bottom:12px}
+  button{width:100%;background:#238636;border:none;color:#fff;border-radius:6px;padding:10px;
+         font-size:14px;cursor:pointer}
+  button:hover{background:#2ea043}
+  #err{color:#f85149;font-size:12px;min-height:16px;margin-bottom:8px}
+</style></head>
+<body>
+  <form id="f">
+    <h1>NEPSE AI Dashboard</h1>
+    <input type="password" id="pw" placeholder="Password" autofocus autocomplete="current-password"/>
+    <div id="err"></div>
+    <button type="submit">Log in</button>
+  </form>
+  <script>
+    document.getElementById('f').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const err = document.getElementById('err');
+      err.textContent = '';
+      try {
+        const r = await fetch('/login', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({password: document.getElementById('pw').value}),
+        });
+        if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.detail || 'Login failed'); }
+        window.location.href = '/dashboard';
+      } catch (ex) { err.textContent = ex.message; }
+    });
+  </script>
+</body></html>"""
+
+
+class _LoginBody(BaseModel):
+    password: str
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_page():
+    return HTMLResponse(_LOGIN_PAGE)
+
+
+@app.post("/login")
+def login_submit(body: _LoginBody):
+    if not DASHBOARD_AUTH_SECRET or not hmac.compare_digest(body.password, DASHBOARD_AUTH_SECRET):
+        raise HTTPException(status_code=401, detail="Incorrect password")
+    sid = secrets.token_urlsafe(32)
+    _sessions[sid] = time.time() + SESSION_TTL_SECONDS
+    resp = JSONResponse({"status": "ok"})
+    resp.set_cookie(
+        SESSION_COOKIE, sid, max_age=SESSION_TTL_SECONDS,
+        httponly=True, secure=True, samesite="lax",
+    )
+    return resp
+
+
+@app.post("/logout")
+def logout(request: Request):
+    sid = request.cookies.get(SESSION_COOKIE, "")
+    _sessions.pop(sid, None)
+    resp = JSONResponse({"status": "ok"})
+    resp.delete_cookie(SESSION_COOKIE)
+    return resp
 
 
 # The pipeline that produces this data runs every ~6 min, so a response is
@@ -146,6 +267,23 @@ async def cache_dashboard_reads(request: Request, call_next):
         content=body, status_code=response.status_code, media_type=response.media_type,
         headers={"Cache-Control": _CACHE_CONTROL, "X-Cache": "MISS"},
     )
+
+
+# Registered last (=> outermost / runs first, per Starlette's middleware stack
+# build order) so an unauthenticated public request is rejected before it can
+# ever reach cache_dashboard_reads above — otherwise a cached response body
+# populated by a legitimate authenticated request could be served straight
+# back to an unauthenticated caller for the same path.
+@app.middleware("http")
+async def require_auth_for_public(request: Request, call_next):
+    path = request.url.path
+    if path in _AUTH_EXEMPT_PATHS or not is_public(request):
+        return await call_next(request)
+    if _valid_session(request) or _valid_api_key(request):
+        return await call_next(request)
+    if path in ("/", "/dashboard"):
+        return RedirectResponse(url="/login", status_code=302)
+    return JSONResponse({"detail": "Unauthorized"}, status_code=401)
 
 
 _HTML = os.path.join(os.path.dirname(__file__), "dashboard.html")
@@ -805,7 +943,12 @@ def get_portfolio():
 
 # ── Reporter ───────────────────────────────────────────────────────────────────
 
-_SQL_DANGER = _re.compile(r'\b(INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER)\b', _re.IGNORECASE)
+_SQL_DANGER = _re.compile(
+    r'\b(INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER|COPY|GRANT|REVOKE|CREATE|CALL|'
+    r'EXECUTE|PREPARE|DEALLOCATE|DO|VACUUM|REINDEX|LOCK|ATTACH|DETACH|MERGE|'
+    r'REFRESH|LISTEN|NOTIFY|SET|RESET|SECURITY|ROLE|EXTENSION|PROGRAM)\b',
+    _re.IGNORECASE,
+)
 _PARAM_RE   = _re.compile(r':([a-zA-Z_][a-zA-Z0-9_]*)')
 
 
