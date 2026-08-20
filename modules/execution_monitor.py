@@ -76,7 +76,16 @@ MARKET_CLOSE_H, MARKET_CLOSE_M = 15,  0
 # Stop / trail parameters (from backtester & design doc)
 HARD_STOP_PCT      = -5.0   # % from entry → immediate exit
 TRAIL_ACTIVATE_PCT =  2.0   # % profit → trailing activates (backtest-validated: 2%/2% >> 6%/3%)
-TRAIL_FLOOR_PCT    =  2.0   # trailing floor = peak − 2%
+TRAIL_FLOOR_PCT    =  2.0   # trailing floor = max(2% activation floor, peak − 2%)
+
+# Anomalous-tick guard: a single odd-lot/fat-finger print (e.g. LTP=115 when
+# the real price is ~101) must not be trusted for peak-tracking or stop
+# checks. A tick counts as "suspect" only when it deviates sharply from BOTH
+# VWAP (volume-weighted, so one small bad trade can't move it) AND the last
+# confirmed LTP. A suspect tick is held for one cycle awaiting confirmation.
+SPIKE_VWAP_DEV_MAX =  8.0   # % — |ltp-vwap|/vwap beyond this is suspect
+SPIKE_JUMP_MAX_PCT =  6.0   # % — jump vs last confirmed LTP beyond this is suspect
+SPIKE_CONFIRM_PCT  =  1.0   # % — how close the next tick must be to the pending spike to confirm it
 
 # GIS weights
 W_OBI   = 0.30
@@ -674,6 +683,40 @@ def _next_state(current: str, S: float) -> str:
 # SECTION 12 — GUARD: Hard Stop + Trailing Stop
 # ═══════════════════════════════════════════════════════════════════════════
 
+def _sanitize_ltp(symbol: str, ltp: float, vwap: float, vwap_dev: float, state: dict) -> float:
+    """
+    Filter a single anomalous tick out of the price used for peak-tracking /
+    guard checks. Mutates state["last_confirmed_ltp"] / state["pending_spike"]
+    in place (state is the symbol's entry in the caller's trail_state dict).
+    Returns the LTP to actually use this cycle.
+    """
+    last_confirmed = state.get("last_confirmed_ltp") or ltp
+    jump_pct = abs(ltp - last_confirmed) / last_confirmed * 100 if last_confirmed > 0 else 0.0
+    suspect = abs(vwap_dev) * 100 > SPIKE_VWAP_DEV_MAX and jump_pct > SPIKE_JUMP_MAX_PCT
+
+    if not suspect:
+        state["last_confirmed_ltp"] = ltp
+        state["pending_spike"] = None
+        return ltp
+
+    pending = state.get("pending_spike")
+    if pending is not None:
+        if abs(ltp - pending) / pending * 100 <= SPIKE_CONFIRM_PCT:
+            log.warning("%s: spike %.2f confirmed on follow-up tick — accepting", symbol, ltp)
+            state["last_confirmed_ltp"] = ltp
+            state["pending_spike"] = None
+            return ltp
+        log.warning("%s: anomalous tick %.2f did not confirm (pending was %.2f) — "
+                     "using last confirmed %.2f", symbol, ltp, pending, last_confirmed)
+        state["pending_spike"] = None
+        return last_confirmed
+
+    log.warning("%s: suspect tick %.2f (vwap_dev=%.1f%%, jump=%.1f%% vs last confirmed %.2f) "
+                 "— holding for confirmation", symbol, ltp, vwap_dev * 100, jump_pct, last_confirmed)
+    state["pending_spike"] = ltp
+    return last_confirmed
+
+
 def _check_guard(pos: dict, ltp: float, state_store: dict) -> Optional[str]:
     """
     Pure math guard. Checks hard stop and trailing stop.
@@ -711,8 +754,12 @@ def _check_guard(pos: dict, ltp: float, state_store: dict) -> Optional[str]:
         pos["trail_active"] = True
 
     if pos.get("trail_active"):
-        trail_distance = entry * TRAIL_FLOOR_PCT / 100
-        floor = peak - trail_distance
+        # Floor never drops below the activation level once trailing is
+        # active — e.g. peak +3% must still floor at +2%, not peak-2%=+1%.
+        # Peak must clear ACTIVATE+FLOOR (4% by default) before the floor
+        # starts trailing above the activation minimum.
+        floor_profit_pct = max(TRAIL_ACTIVATE_PCT, peak_profit_pct - TRAIL_FLOOR_PCT)
+        floor = entry * (1 + floor_profit_pct / 100)
         if ltp <= floor:
             return "TRAILING_STOP"
 
@@ -1025,6 +1072,7 @@ def run_monitor(paper_mode: bool = True, once: bool = False) -> None:
 
             ltp      = mw["ltp"]
             vwap     = mw["vwap"]
+            vwap_dev = mw.get("vwap_dev", 0.0)
             low_dpr  = mw["low_dpr"]
             high_dpr = mw["high_dpr"]
             entry    = float(pos.get("entry_price") or pos.get("wacc") or 0)
@@ -1034,21 +1082,25 @@ def run_monitor(paper_mode: bool = True, once: bool = False) -> None:
                 continue
 
             # ── 2. GUARD — hard stop / trailing (every cycle) ─────────────────
-            guard_reason = _check_guard(pos, ltp, {})
+            # Sanitize the tick first so a single anomalous print (fat-finger
+            # odd-lot trade) can't be trusted for peak-tracking or stop checks.
+            trail_state.setdefault(symbol, {})
+            guard_ltp = _sanitize_ltp(symbol, ltp, vwap, vwap_dev, trail_state[symbol])
+            guard_reason = _check_guard(pos, guard_ltp, {})
             if guard_reason:
-                alert = _format_guard_alert(symbol, guard_reason, ltp, entry, paper_mode)
+                alert = _format_guard_alert(symbol, guard_reason, guard_ltp, entry, paper_mode)
                 log.warning(alert.replace("*", "").replace("_", " "))
                 _send_telegram(alert)
-                _execute_guard_close(pos, symbol, ltp, guard_reason, paper_mode)
+                _execute_guard_close(pos, symbol, guard_ltp, guard_reason, paper_mode)
                 trail_state.pop(symbol, None)
                 # Don't skip intelligence after guard — still want GIS info
                 if once:
                     return
             else:
-                trail_state[symbol] = {
+                trail_state[symbol].update({
                     "peak_price":   pos.get("peak_price"),
                     "trail_active": pos.get("trail_active", False),
-                }
+                })
                 if paper_mode:
                     _persist_trail_state(
                         symbol,
