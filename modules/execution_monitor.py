@@ -717,6 +717,30 @@ def _sanitize_ltp(symbol: str, ltp: float, vwap: float, vwap_dev: float, state: 
     return last_confirmed
 
 
+def _net_profit_pct(entry: float, price: float, shares: float, hold_days_count: int = 0) -> float:
+    """
+    Real profit % net of brokerage/SEBON/DP fees and CGT (default: 10%
+    short-term rate — positions this bot holds are effectively always
+    <=365 days) if the position were closed at `price` right now.
+    Mirrors the same fee model trading_core.execute_sell() uses to book
+    net_pnl, so this stays consistent with the rest of the system's P&L.
+    Falls back to raw price % if shares aren't available (e.g. legacy
+    live positions with no shares recorded).
+    """
+    if entry <= 0 or shares <= 0:
+        return (price - entry) / entry * 100 if entry > 0 else 0.0
+    try:
+        from decimal import Decimal
+        from modules.trading_core import calc_sell_fees
+        d_entry, d_price, d_shares = Decimal(str(entry)), Decimal(str(price)), Decimal(str(shares))
+        fees       = calc_sell_fees(d_price, d_shares, d_entry, hold_days_count)
+        cost_basis = d_entry * d_shares
+        return float(fees["net_pnl"] / cost_basis * 100)
+    except Exception as e:
+        log.warning("_net_profit_pct fallback to raw %%: %s", e)
+        return (price - entry) / entry * 100
+
+
 def _check_guard(pos: dict, ltp: float, state_store: dict) -> Optional[str]:
     """
     Pure math guard. Checks hard stop and trailing stop.
@@ -743,24 +767,33 @@ def _check_guard(pos: dict, ltp: float, state_store: dict) -> Optional[str]:
     if target and ltp >= float(target):
         return "TARGET_HIT"
 
-    # Trailing stop
+    # Trailing stop — activation/floor are evaluated on NET profit (after
+    # brokerage, SEBON, DP fee and CGT), not raw price move, so "2%" means
+    # an actual 2% the trader keeps, not a 2% price tick that costs eat into.
+    shares = float(pos.get("shares") or pos.get("total_shares") or 0)
+    if pos.get("first_buy_date"):
+        from modules.trading_core import hold_days
+        hold_days_count = hold_days(pos["first_buy_date"])
+    else:
+        hold_days_count = 0
+
     peak = float(pos.get("peak_price") or entry)
     if ltp > peak:
         pos["peak_price"] = ltp
         peak = ltp
 
-    peak_profit_pct = (peak - entry) / entry * 100
-    if peak_profit_pct >= TRAIL_ACTIVATE_PCT:
+    peak_net_pct = _net_profit_pct(entry, peak, shares, hold_days_count)
+    if peak_net_pct >= TRAIL_ACTIVATE_PCT:
         pos["trail_active"] = True
 
     if pos.get("trail_active"):
         # Floor never drops below the activation level once trailing is
-        # active — e.g. peak +3% must still floor at +2%, not peak-2%=+1%.
-        # Peak must clear ACTIVATE+FLOOR (4% by default) before the floor
-        # starts trailing above the activation minimum.
-        floor_profit_pct = max(TRAIL_ACTIVATE_PCT, peak_profit_pct - TRAIL_FLOOR_PCT)
-        floor = entry * (1 + floor_profit_pct / 100)
-        if ltp <= floor:
+        # active — e.g. peak net +3% must still floor at net +2%, not
+        # peak-2%=+1%. Peak must clear ACTIVATE+FLOOR (net 4% by default)
+        # before the floor starts trailing above the activation minimum.
+        floor_net_pct = max(TRAIL_ACTIVATE_PCT, peak_net_pct - TRAIL_FLOOR_PCT)
+        ltp_net_pct   = _net_profit_pct(entry, ltp, shares, hold_days_count)
+        if ltp_net_pct <= floor_net_pct:
             return "TRAILING_STOP"
 
     return None
