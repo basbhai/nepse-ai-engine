@@ -139,7 +139,7 @@ LIQUIDITY_DROP_THRESH = -0.35
 # ─────────────────────────────────────────────────────────────────────────────
 
 from db.connection import _db
-from sheets import get_setting, run_raw_sql
+from sheets import get_setting, run_raw_sql, execute_dml
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -254,15 +254,20 @@ def _enrich_from_market_log(row: dict) -> None:
 
 def _persist_trail_state(symbol: str, peak_price: float, trail_active: bool) -> None:
     """Write peak_price and trail_active back to paper_portfolio so restarts don't reset them."""
-    try:
-        run_raw_sql("""
-            UPDATE paper_portfolio
-            SET peak_price   = %s,
-                trail_active = %s
-            WHERE symbol = %s AND status = 'OPEN'
-        """, (str(peak_price), str(trail_active).lower(), symbol))
-    except Exception as e:
-        log.warning("persist_trail_state(%s): %s", symbol, e)
+    # Was run_raw_sql(), which always calls cur.fetchall() after execute() —
+    # that raises "no results to fetch" on a bare UPDATE with no RETURNING,
+    # and _db()'s context manager rolls back on any exception inside the
+    # `with` block. So this write was never actually committing: silently
+    # failing (2500+/day in production logs) since the feature was written.
+    # execute_dml() is sheets.py's own documented fix for exactly this case.
+    ok = execute_dml("""
+        UPDATE paper_portfolio
+        SET peak_price   = %s,
+            trail_active = %s
+        WHERE symbol = %s AND status = 'OPEN'
+    """, (str(peak_price), str(trail_active).lower(), symbol))
+    if not ok:
+        log.warning("persist_trail_state(%s): execute_dml failed", symbol)
 
 
 def _catchup_peak_from_history(positions: list[dict]) -> None:
