@@ -6,7 +6,7 @@ Real-time intraday position intelligence. Runs as a separate process during
 market hours (10:45 AM – 3:00 PM NST, Mon–Fri).
 
 Two responsibilities in one loop:
-  1. GUARD     (every 30s)  — hard stop -5%, trailing stop (activates +2%, floor peak-2%)
+  1. GUARD     (every 30s)  — hard stop -6%, trailing stop (activates net +3%, floor peak-2%, min 3%)
   2. INTELLIGENCE (every 60s) — GIS score: OBI + TIR + VWAP + Microprice → HOLD/CAUTION/EXIT
 
 Mathematical framework (validated across Gemini, ChatGPT, DeepSeek):
@@ -74,9 +74,15 @@ MARKET_OPEN_H, MARKET_OPEN_M   = 10, 45
 MARKET_CLOSE_H, MARKET_CLOSE_M = 15,  0
 
 # Stop / trail parameters (from backtester & design doc)
-HARD_STOP_PCT      = -5.0   # % from entry → immediate exit
-TRAIL_ACTIVATE_PCT =  2.0   # % profit → trailing activates (backtest-validated: 2%/2% >> 6%/3%)
-TRAIL_FLOOR_PCT    =  2.0   # trailing floor = max(2% activation floor, peak − 2%)
+# 2026-08-20: re-tuned via 53,221-trade grid search since 2019-07-15 (376 symbols,
+# 252 combos, net-of-cost P&L incl. brokerage/SEBON/DP fee + 10% CGT, same exit
+# logic as _check_guard()). Old 2%/2%/-5% ranked 196th/252 by net PnL. New config
+# is the balanced recommendation: +55.1% PnL, PF 1.129, win rate ~unchanged (52.5%
+# vs old ~52.4%), better max drawdown too. Significant vs old config (paired
+# t-test p=0.0073). See artifact: https://claude.ai/code/artifact/e58777fe-e5c7-4f91-a81a-daef881112d2
+HARD_STOP_PCT      = -6.0   # % from entry → immediate exit
+TRAIL_ACTIVATE_PCT =  3.0   # % net profit → trailing activates
+TRAIL_FLOOR_PCT    =  2.0   # trailing floor = max(3% activation floor, peak − 2%)
 
 # Anomalous-tick guard: a single odd-lot/fat-finger print (e.g. LTP=115 when
 # the real price is ~101) must not be trusted for peak-tracking or stop
@@ -247,7 +253,8 @@ def _enrich_from_market_log(row: dict) -> None:
         else:
             # Same net-of-cost criterion as _check_guard()/_catchup_peak_from_history()
             # — must match or trail_active can get latched True here off a raw price
-            # move that never actually cleared 2% net profit (it's a one-way flag).
+            # move that never actually cleared TRAIL_ACTIVATE_PCT net profit (it's a
+            # one-way flag, never reset to False once set).
             shares = float(row.get("shares") or row.get("total_shares") or 0)
             if row.get("first_buy_date"):
                 from modules.trading_core import hold_days
@@ -307,7 +314,8 @@ def _catchup_peak_from_history(positions: list[dict]) -> None:
             if hist_peak > db_peak:
                 # Same net-of-cost criterion as _check_guard() — must match or this
                 # can latch trail_active True off a raw move that never actually
-                # cleared 2% net profit (it's a one-way flag, never reset to False).
+                # cleared TRAIL_ACTIVATE_PCT net profit (it's a one-way flag, never
+                # reset to False once set).
                 from modules.trading_core import hold_days
                 hd    = hold_days(entry_date)
                 trail = _net_profit_pct(entry_price, hist_peak, shares, hd) >= TRAIL_ACTIVATE_PCT
@@ -790,8 +798,9 @@ def _check_guard(pos: dict, ltp: float, state_store: dict) -> Optional[str]:
         return "TARGET_HIT"
 
     # Trailing stop — activation/floor are evaluated on NET profit (after
-    # brokerage, SEBON, DP fee and CGT), not raw price move, so "2%" means
-    # an actual 2% the trader keeps, not a 2% price tick that costs eat into.
+    # brokerage, SEBON, DP fee and CGT), not raw price move, so TRAIL_ACTIVATE_PCT
+    # means that much the trader actually keeps, not a same-size price tick that
+    # costs eat into.
     shares = float(pos.get("shares") or pos.get("total_shares") or 0)
     if pos.get("first_buy_date"):
         from modules.trading_core import hold_days
@@ -810,8 +819,9 @@ def _check_guard(pos: dict, ltp: float, state_store: dict) -> Optional[str]:
 
     if pos.get("trail_active"):
         # Floor never drops below the activation level once trailing is
-        # active — e.g. peak net +3% must still floor at net +2%, not
-        # peak-2%=+1%. Peak must clear ACTIVATE+FLOOR (net 4% by default)
+        # active — e.g. with TRAIL_ACTIVATE_PCT=3/TRAIL_FLOOR_PCT=2, peak net
+        # +4% must still floor at net +3% (activation minimum), not +2%
+        # (peak-floor). Peak must clear ACTIVATE+FLOOR (net 5% by default)
         # before the floor starts trailing above the activation minimum.
         floor_net_pct = max(TRAIL_ACTIVATE_PCT, peak_net_pct - TRAIL_FLOOR_PCT)
         ltp_net_pct   = _net_profit_pct(entry, ltp, shares, hold_days_count)
