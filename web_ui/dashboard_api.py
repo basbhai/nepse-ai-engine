@@ -476,19 +476,31 @@ def get_summary():
             cap = cur.fetchone()
             cap = dict(cap) if cap else {}
 
-            # open paper positions + ltp join
+            # open paper positions
             cur.execute("""
-                SELECT pp.symbol, pp.total_shares, pp.wacc,
-                       amw.ltp AS current_ltp
-                FROM paper_portfolio pp
-                LEFT JOIN (
-                    SELECT DISTINCT ON (symbol) symbol, ltp
-                    FROM atrad_market_watch
-                    ORDER BY symbol, date DESC, time DESC
-                ) amw ON amw.symbol = pp.symbol
-                WHERE pp.status = 'OPEN' AND pp.test_mode = 'false'
+                SELECT symbol, total_shares, wacc
+                FROM paper_portfolio
+                WHERE status = 'OPEN' AND test_mode = 'false'
             """)
             positions = _rows(cur)
+
+            # LTP for just those symbols — NOT an unfiltered DISTINCT ON over
+            # the whole atrad_market_watch table (450K+ rows growing daily),
+            # which took ~2.5s on its own and was ~100% of this endpoint's
+            # latency. Same WHERE symbol = ANY(...) pattern already used by
+            # /dashboard/portfolio below.
+            open_symbols = [p["symbol"] for p in positions if p.get("symbol")]
+            ltp_by_symbol: dict = {}
+            if open_symbols:
+                cur.execute("""
+                    SELECT DISTINCT ON (symbol) symbol, ltp
+                    FROM atrad_market_watch
+                    WHERE symbol = ANY(%s)
+                    ORDER BY symbol, date DESC, time DESC
+                """, (open_symbols,))
+                ltp_by_symbol = {r["symbol"]: r["ltp"] for r in _rows(cur)}
+            for p in positions:
+                p["current_ltp"] = ltp_by_symbol.get(p.get("symbol"))
 
             unrealized_pnl = 0.0
             for p in positions:

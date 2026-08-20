@@ -4371,6 +4371,94 @@
       }
     }
 
+    /* ── Scroll-to-turn-page ──────────────────────────────────────────
+       Each section is its own full-height scroll container (#main is a
+       fixed 100vh shell; sections switch by display, there's no page-level
+       scroll). Reaching the bottom and continuing to scroll down turns the
+       page to the next section; reaching the top and continuing up goes
+       back — reusing switchView()'s own View Transition, so it's the same
+       motion as clicking a sidebar link, not a second competing animation.
+       Order is read live from the sidebar nav so it stays correct if
+       sections are ever added/removed (e.g. NRB/Settings stripped in
+       public mode) instead of duplicating a second hardcoded list. */
+    let _pageTurning = false;   // hard lock while switchView()'s transition plays
+    let _gestureArmed = false;  // true once this gesture has already spent its one turn
+    let _wheelIdleTimer = null;
+    const PAGE_TURN_EDGE = 2;        // px slack for "at the boundary"
+    const PAGE_TURN_COOLDOWN = 650;  // ms hard lock — must clear switchView's own transition
+    const WHEEL_GESTURE_GAP = 220;   // ms of silence that means a wheel/trackpad gesture ended
+    const SWIPE_THRESHOLD = 60;      // px — deliberate swipe past the edge, not a stray touch
+
+    function _pageTurnOrder() {
+      return Array.from(document.querySelectorAll('#sidebar nav a[href^="#s-"]'))
+        .map(a => a.getAttribute('href').slice(1));
+    }
+    function _adjacentSection(id, dir) {
+      const order = _pageTurnOrder();
+      const i = order.indexOf(id);
+      return i === -1 ? null : (order[i + dir] || null);
+    }
+    function _turnPage(id) {
+      _pageTurning = true;
+      _gestureArmed = true;
+      switchView(id);
+      setTimeout(() => { _pageTurning = false; }, PAGE_TURN_COOLDOWN);
+    }
+    function _sectionEdge(el) {
+      return {
+        atBottom: el.scrollHeight - el.scrollTop - el.clientHeight <= PAGE_TURN_EDGE,
+        atTop: el.scrollTop <= PAGE_TURN_EDGE,
+      };
+    }
+    // Trackpad/mouse momentum sends many wheel ticks over 1-2s — far longer
+    // than any fixed cooldown. Without gesture tracking, one continuous
+    // scroll can cascade through several short sections (each already
+    // sitting at its own boundary) in a single swipe. Instead: once a turn
+    // fires, block further turns until the wheel goes quiet for
+    // WHEEL_GESTURE_GAP — i.e. until this physical gesture has actually
+    // ended — not just until a timer expires mid-gesture.
+    function _onPageTurnWheel(e) {
+      clearTimeout(_wheelIdleTimer);
+      _wheelIdleTimer = setTimeout(() => { _gestureArmed = false; }, WHEEL_GESTURE_GAP);
+
+      if (_pageTurning || _gestureArmed) return;
+      const active = document.querySelector('.section.active-view');
+      if (!active) return;
+      const { atBottom, atTop } = _sectionEdge(active);
+      if (e.deltaY > 0 && atBottom) {
+        const next = _adjacentSection(active.id, 1);
+        if (next) { e.preventDefault(); _turnPage(next); }
+      } else if (e.deltaY < 0 && atTop) {
+        const prev = _adjacentSection(active.id, -1);
+        if (prev) { e.preventDefault(); _turnPage(prev); }
+      }
+    }
+    let _touchStartY = null, _touchStartEdge = null;
+    function _onPageTurnTouchStart(e) {
+      if (_pageTurning || !e.touches.length) return;
+      const active = document.querySelector('.section.active-view');
+      if (!active) return;
+      _touchStartY = e.touches[0].clientY;
+      const { atBottom, atTop } = _sectionEdge(active);
+      _touchStartEdge = atBottom ? 'bottom' : (atTop ? 'top' : null);
+    }
+    function _onPageTurnTouchEnd(e) {
+      if (_pageTurning || _touchStartY == null || !_touchStartEdge) {
+        _touchStartY = null; _touchStartEdge = null; return;
+      }
+      const active = document.querySelector('.section.active-view');
+      const endY = e.changedTouches[0] ? e.changedTouches[0].clientY : _touchStartY;
+      const dy = _touchStartY - endY; // positive = finger swiped up (page should advance)
+      if (active && _touchStartEdge === 'bottom' && dy > SWIPE_THRESHOLD) {
+        const next = _adjacentSection(active.id, 1);
+        if (next) _turnPage(next);
+      } else if (active && _touchStartEdge === 'top' && dy < -SWIPE_THRESHOLD) {
+        const prev = _adjacentSection(active.id, -1);
+        if (prev) _turnPage(prev);
+      }
+      _touchStartY = null; _touchStartEdge = null;
+    }
+
     document.addEventListener('DOMContentLoaded', () => {
       /* Public (Tailscale Funnel) traffic: strip NRB Entry & Settings
          entirely so they're neither reachable nor fetched. Their API
@@ -4391,6 +4479,14 @@
           switchView(a.getAttribute('href').slice(1));
         });
       });
+
+      /* Scroll/swipe past a section's edge turns the page — see definitions above. */
+      const mainEl = document.getElementById('main');
+      if (mainEl) {
+        mainEl.addEventListener('wheel', _onPageTurnWheel, { passive: false });
+        mainEl.addEventListener('touchstart', _onPageTurnTouchStart, { passive: true });
+        mainEl.addEventListener('touchend', _onPageTurnTouchEnd, { passive: true });
+      }
 
       /* Restore last section or default to dashboard. switchView() loads
          that section's data and starts its refresh interval — every other

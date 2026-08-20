@@ -1418,6 +1418,13 @@ TABLE_DDL: dict[str, str] = {
         ON "atrad_market_watch" (symbol);
     CREATE INDEX IF NOT EXISTS ix_atrad_market_watch_date
         ON "atrad_market_watch" (date);
+    -- Covers "latest tick per symbol" (DISTINCT ON (symbol) ... ORDER BY
+    -- symbol, date DESC, time DESC) — the query shape used by dashboard_api.py
+    -- and execution_monitor.py's DB-fallback LTP lookup. Without this, that
+    -- pattern falls back to a full-table scan + sort as the table grows
+    -- (took ~2.5s unfiltered at 466K rows before this index existed).
+    CREATE INDEX IF NOT EXISTS ix_atrad_market_watch_symbol_date_time
+        ON "atrad_market_watch" (symbol, date DESC, time DESC);
     """,
 
     "monthly_council_agenda": """
