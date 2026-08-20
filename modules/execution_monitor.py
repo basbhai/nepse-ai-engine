@@ -891,18 +891,24 @@ def _auto_close_paper(pos: dict, symbol: str, ltp: float, reason: str) -> None:
         _send_telegram(f"⚠️ Auto-close FAILED for *{symbol}* ({reason}) — no telegram\\_id or shares. Close manually.")
         return
 
-    try:
-        from modules.atrad_scraper import fetch_order_book
-        book = fetch_order_book(symbol)
-        bids = book.get("bids", [])
-    except Exception as e:
-        log.error("Auto-close %s: order book fetch failed: %s", symbol, e)
+    from modules.atrad_scraper import fetch_order_book
+    book = fetch_order_book(symbol)
+    if not book:
+        # fetch_order_book() catches its own errors and returns {} on any
+        # failure (dead session, API error code, network exception) — that's
+        # indistinguishable from a real empty book unless we check for the
+        # dict being empty *before* reading "bids" out of it. Conflating the
+        # two here previously mislabeled every fetch failure as "NO BIDS in
+        # market" even when the real market book had live bids.
+        log.error("Auto-close %s: order book fetch failed — book empty", symbol)
         _send_telegram(
-            f"⚠️ *{reason}* triggered for *{symbol}* — order book unavailable.\n"
+            f"⚠️ *{reason}* triggered for *{symbol}* — order book unavailable "
+            f"(fetch failed, not confirmed empty).\n"
             f"Position stays open. Close manually."
         )
         return
 
+    bids = book.get("bids", [])
     if not bids:
         log.warning("Auto-close %s (%s): no bids — position stays open", symbol, reason)
         _send_telegram(
@@ -946,17 +952,19 @@ def _auto_close_live(pos: dict, symbol: str, ltp: float, reason: str) -> None:
         )
         return
 
-    try:
-        book = fetch_order_book(symbol)
-        bids = book.get("bids", [])
-    except Exception as e:
-        log.error("[LIVE] Auto-close %s: order book failed: %s", symbol, e)
+    book = fetch_order_book(symbol)
+    if not book:
+        # See _auto_close_paper: fetch_order_book() returns {} on ANY
+        # failure, not just a genuinely empty book — must check that before
+        # reading "bids" or a fetch failure gets mislabeled as "no bids".
+        log.error("[LIVE] Auto-close %s: order book fetch failed — book empty", symbol)
         _send_telegram(
             f"🚨 *[LIVE] {reason}* — *{symbol}*\n"
-            f"Order book unavailable. Close manually immediately!"
+            f"Order book unavailable (fetch failed, not confirmed empty). Close manually immediately!"
         )
         return
 
+    bids = book.get("bids", [])
     if not bids:
         log.warning("[LIVE] Auto-close %s (%s): no bids — stays open", symbol, reason)
         _send_telegram(
