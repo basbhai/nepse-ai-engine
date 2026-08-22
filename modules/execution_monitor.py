@@ -974,6 +974,7 @@ def _auto_close_paper(pos: dict, symbol: str, ltp: float, reason: str) -> None:
 def _auto_close_live(pos: dict, symbol: str, ltp: float, reason: str) -> None:
     """Submit ATrad SELL at best bid. No bids → alert only, position stays open."""
     from modules.atrad_scraper import fetch_order_book, place_sell_order
+    from modules.meroshare import verify_live_holding
 
     shares = int(float(pos.get("total_shares") or pos.get("shares") or 0))
     if shares <= 0:
@@ -981,6 +982,20 @@ def _auto_close_live(pos: dict, symbol: str, ltp: float, reason: str) -> None:
         _send_telegram(
             f"🚨 *[LIVE] {reason}* — *{symbol}*\n"
             f"No shares found in position. Close manually immediately!"
+        )
+        return
+
+    # Safety gate: the portfolio table can carry stale/foreign rows (e.g. an
+    # old import, or a symbol never bought through this app's own trading
+    # engine) with an entry_price that makes the guard fire wrongly. Never
+    # submit a sell unless Meroshare's real DEMAT balance confirms the
+    # shares are actually there — fails closed on any lookup error too.
+    if not verify_live_holding(symbol, shares):
+        log.error("[LIVE] Auto-close %s: NOT confirmed in Meroshare portfolio — refusing to sell", symbol)
+        _send_telegram(
+            f"🚨 *[LIVE] {reason}* — *{symbol}*\n"
+            f"Guard fired, but Meroshare's real portfolio does NOT confirm "
+            f"{shares} shares held. Refusing to auto-sell — verify manually."
         )
         return
 
@@ -1343,37 +1358,13 @@ def run_monitor(paper_mode: bool = True, once: bool = False) -> None:
 
 def fetch_trades(symbol: str) -> list:
     """
-    Fetch tick trades for symbol via ATrad getTradesOfDay.
+    Fetch tick trades for symbol via ATrad getTradesOfDay (DATA session).
     Returns list of dicts with price, qty, timestamp keys.
     Fails silently — returns [] on error.
     """
     try:
-        from modules.atrad_scraper import _session, BASE_URL, _parse
-        import time as _time
-        r = _session.get(
-            f"{BASE_URL}/marketdetails",
-            params={
-                "action": "getTradesOfDay", "format": "json",
-                "security": symbol, "board": "1",
-                "dojo.preventCache": str(int(_time.time() * 1000))
-            },
-            timeout=15,
-        )
-        data = _parse(r)
-        if data.get("code") != "0":
-            return []
-        trades_raw = data.get("data", {}).get("trade", [])
-        result = []
-        for t in trades_raw:
-            try:
-                result.append({
-                    "price":     float(t.get("price") or t.get("rate") or 0),
-                    "qty":       float(t.get("qty") or t.get("quantity") or 0),
-                    "timestamp": float(t.get("timestamp") or 0),
-                })
-            except (TypeError, ValueError):
-                continue
-        return result
+        from modules.atrad_scraper import fetch_trades_of_day
+        return fetch_trades_of_day(symbol)
     except Exception as e:
         log.error("fetch_trades(%s): %s", symbol, e)
         return []

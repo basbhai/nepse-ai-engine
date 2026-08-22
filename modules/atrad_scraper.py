@@ -24,17 +24,33 @@ load_dotenv()
 log = logging.getLogger("atrad_scraper")
 
 BASE_URL    = "https://tms.roadshowsecurities.com.np/atsweb"
-USERNAME    = os.getenv("TMS_ROADSHOW_USER")
-PASSWORD    = os.getenv("TMS_ROADSHOW_PASS")
 WATCH_ID    = os.getenv("TMS_ROADSHOW_WATCH_ID", "11120")
 BOOK_DEF_ID = "1"
-ACNT_ID     = os.getenv("TMS_ROADSHOW_ACNT_ID", "")
+
+# ORDER account — place_order/place_sell_order, order book, live portfolio sync.
+# Everything that touches or informs an actual order stays on this account.
+ORDER_USERNAME = os.getenv("TMS_ROADSHOW_USER")
+ORDER_PASSWORD = os.getenv("TMS_ROADSHOW_PASS")
+ACNT_ID        = os.getenv("TMS_ROADSHOW_ACNT_ID", "")
+
+# DATA account — market watch, trade stats, index, single-symbol quotes, tick
+# trades. Segregated so bulk data polling never shares a session with orders.
+# Falls back to the order creds if unset, so a missing .env entry degrades to
+# the old single-account behavior instead of crashing.
+DATA_USERNAME  = os.getenv("TMS_ROADSHOW_DATA_USER", ORDER_USERNAME)
+DATA_PASSWORD  = os.getenv("TMS_ROADSHOW_DATA_PASS", ORDER_PASSWORD)
+
+# Backwards-compatible aliases — some callers still import USERNAME/PASSWORD.
+USERNAME = ORDER_USERNAME
+PASSWORD = ORDER_PASSWORD
 
 ORDER_BUY  = 1
 ORDER_SELL = 2
 
-_session      = None
-_last_login   = None
+_order_session    = None
+_data_session      = None
+_order_last_login  = None
+_data_last_login   = None
 
 
 def _get_headers() -> dict:
@@ -66,8 +82,9 @@ def _safe_float(val: str, default: float = 0.0) -> float:
         return default
 
 
-def login() -> bool:
-    global _session, _last_login
+def _login(kind: str, username: str, password: str) -> bool:
+    """kind: 'order' or 'data' — sets the matching module-level session."""
+    global _order_session, _data_session, _order_last_login, _data_last_login
     s = requests.Session()
     s.headers.update(_get_headers())
 
@@ -77,8 +94,8 @@ def login() -> bool:
             params={
                 "action"           : "login",
                 "format"           : "json",
-                "txtUserName"      : USERNAME,
-                "txtPassword"      : PASSWORD,
+                "txtUserName"      : username,
+                "txtPassword"      : password,
                 "dojo.preventCache": str(int(time.time() * 1000)),
             },
             timeout=15,
@@ -86,30 +103,40 @@ def login() -> bool:
         data = _parse(r)
 
         if data.get("code") == "0":
-            _session    = s
-            _last_login = datetime.now(NST)
-            log.info(f"ATrad login success | watchID={data.get('watchID', WATCH_ID)} | broker={data.get('broker_code')}")
+            if kind == "order":
+                _order_session    = s
+                _order_last_login = datetime.now(NST)
+            else:
+                _data_session    = s
+                _data_last_login = datetime.now(NST)
+            log.info(f"ATrad {kind} login success | user={username} | watchID={data.get('watchID', WATCH_ID)} | broker={data.get('broker_code')}")
             return True
         else:
-            log.error(f"ATrad login failed: {data}")
+            log.error(f"ATrad {kind} login failed: {data}")
             return False
     except Exception as e:
-        log.error(f"ATrad login exception: {e}")
+        log.error(f"ATrad {kind} login exception: {e}")
         return False
 
 
-def keepalive() -> bool:
-    global _session
-    if _session is None:
-        return login()
+def _order_login() -> bool:
+    return _login("order", ORDER_USERNAME, ORDER_PASSWORD)
 
+
+def _data_login() -> bool:
+    return _login("data", DATA_USERNAME, DATA_PASSWORD)
+
+
+def _keepalive(kind: str, session, username: str) -> bool:
+    if session is None:
+        return _order_login() if kind == "order" else _data_login()
     try:
-        r = _session.get(
+        r = session.get(
             f"{BASE_URL}/login",
             params={
                 "action"           : "checkUserSession",
                 "format"           : "json",
-                "txtUserName"      : USERNAME,
+                "txtUserName"      : username,
                 "dojo.preventCache": str(int(time.time() * 1000)),
             },
             timeout=10,
@@ -117,30 +144,61 @@ def keepalive() -> bool:
         data = _parse(r)
         if data.get("code") == "0":
             return True
-        else:
-            log.warning("ATrad session expired — re-logging in")
-            return login()
+        log.warning(f"ATrad {kind} session expired — re-logging in")
+        return _order_login() if kind == "order" else _data_login()
     except Exception as e:
-        log.error(f"ATrad keepalive failed: {e} — attempting re-login")
-        return login()
+        log.error(f"ATrad {kind} keepalive failed: {e} — attempting re-login")
+        return _order_login() if kind == "order" else _data_login()
+
+
+def _ensure_order_session() -> bool:
+    if _order_session is None:
+        return _order_login()
+    return True
+
+
+def _ensure_data_session() -> bool:
+    if _data_session is None:
+        return _data_login()
+    return True
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# BACKWARDS-COMPATIBLE PUBLIC API — login()/keepalive()/_ensure_session()
+# ensure BOTH sessions, so existing callers (telegram_bot.py, execution_
+# monitor.py) that prime "the" session before use keep working unchanged.
+# Every individual fetch/order function below also self-ensures its own
+# specific session, so correctness never depends on these having been called.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def login() -> bool:
+    order_ok = _order_login()
+    data_ok  = _data_login()
+    return order_ok and data_ok
+
+
+def keepalive() -> bool:
+    order_ok = _keepalive("order", _order_session, ORDER_USERNAME)
+    data_ok  = _keepalive("data", _data_session, DATA_USERNAME)
+    return order_ok and data_ok
 
 
 def _ensure_session() -> bool:
-    if _session is None:
-        return login()
-    return True
+    order_ok = _ensure_order_session()
+    data_ok  = _ensure_data_session()
+    return order_ok and data_ok
 
 
 # ====================== FIXED MARKET WATCH ======================
 def fetch_market_watch(write_db: bool = True) -> pd.DataFrame:
-    if not _ensure_session():
+    if not _ensure_data_session():
         log.error("ATrad fetch_market_watch: no session")
         return pd.DataFrame()
 
     now_nst = datetime.now(NST)
 
     try:
-        r = _session.get(
+        r = _data_session.get(
             f"{BASE_URL}/watch",
             params={
                 "action"           : "fullWatch",
@@ -257,11 +315,11 @@ def fetch_trade_stats() -> dict:
     Fetch authoritative advancing/declining/unchanged counts from ATrad getTradeStats.
     Returns empty dict on any failure — never raises.
     """
-    if not _ensure_session():
+    if not _ensure_data_session():
         log.warning("fetch_trade_stats: no session")
         return {}
     try:
-        r = _session.get(
+        r = _data_session.get(
             f"{BASE_URL}/marketdetails",
             params={
                 "action":            "getTradeStats",
@@ -291,11 +349,11 @@ def fetch_nepse_index() -> dict:
     Fetch NEPSE composite index value and market totals from ATrad getSectorDataAll.
     Returns empty dict on any failure — never raises.
     """
-    if not _ensure_session():
+    if not _ensure_data_session():
         log.warning("fetch_nepse_index: no session")
         return {}
     try:
-        r = _session.get(
+        r = _data_session.get(
             f"{BASE_URL}/sector",
             params={
                 "action":            "getSectorDataAll",
@@ -335,13 +393,13 @@ def fetch_nepse_index() -> dict:
         return {}
 
 
-# Keep the rest of the functions (fetch_order_book, fetch_trades, get_ltp, run) unchanged
-# ... (they are already correct)
-
+# fetch_order_book runs on the ORDER session (BS92009) — it feeds order
+# placement / auto-close decisions, so it must not share a session with bulk
+# data polling.
 def fetch_order_book(symbol: str) -> dict:
-    if not _ensure_session(): return {}
+    if not _ensure_order_session(): return {}
     try:
-        r = _session.get(f"{BASE_URL}/marketdetails", params={
+        r = _order_session.get(f"{BASE_URL}/marketdetails", params={
             "action": "getOrderBook", "format": "json", "security": symbol,
             "board": "1", "dojo.preventCache": str(int(time.time() * 1000))
         }, timeout=15)
@@ -380,10 +438,10 @@ def get_ltp_live(symbol: str) -> Optional[dict]:
     Returns dict with ltp, vwap, bid_price, bid_qty, ask_price, ask_qty,
     low_dpr, high_dpr, volume, or None on failure.
     """
-    if not _ensure_session():
+    if not _ensure_data_session():
         return None
     try:
-        r = _session.get(
+        r = _data_session.get(
             f"{BASE_URL}/watch",
             params={
                 "action":                "getQuickWatch",
@@ -430,6 +488,108 @@ def get_ltp_live(symbol: str) -> Optional[dict]:
         log.error("get_ltp_live(%s): %s", symbol, e)
         return None
 
+
+def fetch_trades_of_day(symbol: str) -> list:
+    """
+    Fetch tick trades for symbol via ATrad getTradesOfDay (DATA session).
+    Returns list of dicts with price, qty, timestamp keys. Fails silently.
+    """
+    if not _ensure_data_session():
+        return []
+    try:
+        r = _data_session.get(
+            f"{BASE_URL}/marketdetails",
+            params={
+                "action": "getTradesOfDay", "format": "json",
+                "security": symbol, "board": "1",
+                "dojo.preventCache": str(int(time.time() * 1000)),
+            },
+            timeout=15,
+        )
+        data = _parse(r)
+        if data.get("code") != "0":
+            return []
+        trades_raw = data.get("data", {}).get("trade", [])
+        result = []
+        for t in trades_raw:
+            try:
+                result.append({
+                    "price":     float(t.get("price") or t.get("rate") or 0),
+                    "qty":       float(t.get("qty") or t.get("quantity") or 0),
+                    "timestamp": float(t.get("timestamp") or 0),
+                })
+            except (TypeError, ValueError):
+                continue
+        return result
+    except Exception as e:
+        log.error("fetch_trades_of_day(%s): %s", symbol, e)
+        return []
+
+
+def get_portfolio(portfolio_asset: str = "EQUITY") -> dict:
+    """
+    Fetch broker-side holdings via ATrad getPortfolio (ORDER session,
+    BS92009). This only reflects positions that were bought/sold *through
+    this broker's own TMS* — it silently misses anything held in the same
+    DEMAT that was traded via a different broker. NOT the live-portfolio
+    source (see modules/meroshare.py's myPortfolio instead, which is
+    CDSC-level and broker-agnostic). Useful for RSL-specific reconciliation
+    around actual order placement, not for "what do I own" queries.
+
+    Returns {"holdings": [...], "total_market_value": float, "total_quantity": int}.
+    Each holding dict has: symbol, quantity, available_qty, ltp, market_value,
+    pending_buy, pending_sell. Empty holdings list on any failure or when the
+    account genuinely has no positions traded through this broker.
+    """
+    if not _ensure_order_session():
+        log.warning("get_portfolio: no session")
+        return {"holdings": [], "total_market_value": 0.0, "total_quantity": 0}
+    try:
+        r = _order_session.get(
+            f"{BASE_URL}/client",
+            params={
+                "action":                  "getPortfolio",
+                "exchange":                "NEPSE",
+                "broker":                  "RSL",
+                "format":                  "json",
+                "portfolioAsset":          portfolio_asset,
+                "portfolioClientAccount":  ORDER_USERNAME,
+                "dojo.preventCache":       str(int(time.time() * 1000)),
+            },
+            timeout=20,
+        )
+        data = _parse(r)
+        if data.get("code") != "0":
+            log.warning("get_portfolio: non-zero code: %s", data.get("code"))
+            return {"holdings": [], "total_market_value": 0.0, "total_quantity": 0}
+
+        d          = data.get("data", {})
+        rows       = d.get("portfolios", []) or []
+        market_tot = d.get("markerValTot", [0.0])
+        qty_tot    = d.get("quantityTot", [0])
+
+        holdings = []
+        for row in rows:
+            holdings.append({
+                "symbol":         row.get("security", ""),
+                "quantity":       int(_safe_float(row.get("quantity", 0))),
+                "available_qty":  int(_safe_float(row.get("availableQty", 0))),
+                "ltp":            _safe_float(row.get("lastTraded", 0)),
+                "market_value":   _safe_float(row.get("marketValue", 0)),
+                "pending_buy":    int(_safe_float(row.get("pendBuy", 0))),
+                "pending_sell":   int(_safe_float(row.get("pendSell", 0))),
+            })
+
+        return {
+            "holdings":            holdings,
+            "total_market_value":  _safe_float(market_tot[0]) if market_tot else 0.0,
+            "total_quantity":      int(_safe_float(qty_tot[0])) if qty_tot else 0,
+        }
+    except Exception as e:
+        log.error("get_portfolio failed: %s", e)
+        return {"holdings": [], "total_market_value": 0.0, "total_quantity": 0}
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # LIVE ORDER PLACEMENT  (PAPER_MODE=false only)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -453,7 +613,7 @@ def place_order(
     Returns parsed ATrad response. code='0' means accepted.
     Raises RuntimeError if no session.
     """
-    if not _ensure_session():
+    if not _ensure_order_session():
         raise RuntimeError("ATrad session unavailable — cannot place order")
 
     order_id     = _gen_order_id()
@@ -467,7 +627,7 @@ def place_order(
         "txtsenttoapproval": "no",
         "duplicateOrderId":  order_id,
         "product":           "web",
-        "clientAcc":         USERNAME,
+        "clientAcc":         ORDER_USERNAME,
         "actionSelect":      str(action),
         "txtSecurity":       symbol,
         "spnQuantity":       str(qty),
@@ -487,7 +647,7 @@ def place_order(
              action_label, symbol, qty, price, order_id)
 
     try:
-        r    = _session.post(f"{BASE_URL}/order", data=form, timeout=20)
+        r    = _order_session.post(f"{BASE_URL}/order", data=form, timeout=20)
         data = _parse(r)
     except Exception as e:
         log.error("[LIVE ORDER] POST failed %s %s: %s", action_label, symbol, e)

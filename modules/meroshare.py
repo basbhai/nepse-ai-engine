@@ -3,12 +3,18 @@ meroshare.py
 ─────────────────────────────────────────────────────────────────────────────
 NEPSE AI Engine
 Purpose : Fetch live portfolio combining two working APIs:
-          1. Meroshare waccReport  → symbols, shares, WACC, total cost
-          2. TMS clientPortfolio   → live prices, daily change
+          1. Meroshare waccReport   → cost basis (WACC, total cost) per scrip
+          2. Meroshare myPortfolio  → real current DEMAT balance + live price
+
+myPortfolio is CDSC-level and broker-agnostic — it reflects the true DEMAT
+balance regardless of which broker executed the trade. ATrad's own
+getPortfolio (BS92009) was tried first but only reflects trades executed
+through that specific broker/TMS, so it silently misses anything bought
+elsewhere — confirmed empty even when 5 real positions existed. Don't use
+ATrad getPortfolio as the live-holdings source; myPortfolio is authoritative.
 
 Auth:
   - Meroshare: POST to auth URL → token in response header
-  - TMS: Gemini captcha login (tms_scraper.get_session)
 
 SOP:
   python meroshare.py         → full sync, write to Neon
@@ -19,8 +25,7 @@ CREDENTIALS NEEDED IN .env:
   MEROSHARE_PASSWORD=
   MEROSHARE_DP_ID=
   MEROSHARE_DEMAT=1301180000232764
-  TMS_CLIENT_ID=2181770
-  TMS_REQUEST_OWNER=109268
+  MEROSHARE_CLIENT_CODE=11800
 ─────────────────────────────────────────────────────────────────────────────
 """
 
@@ -36,7 +41,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from sheets import read_tab, upsert_row
-from modules.tms_scraper import get_session, BASE_HEADERS, TMS_BASE
 
 logging.basicConfig(
     level=logging.INFO,
@@ -46,13 +50,15 @@ log = logging.getLogger(__name__)
 
 NST           = timezone(timedelta(hours=5, minutes=45))
 DEMAT         = os.getenv("MEROSHARE_DEMAT", "1301180000232764")
-TMS_CLIENT_ID = os.getenv("TMS_CLIENT_ID", "2181770")
-REQUEST_OWNER = os.getenv("TMS_REQUEST_OWNER", "109268")
-MEMBER_CODE   = "49"
+CLIENT_CODE   = os.getenv("MEROSHARE_CLIENT_CODE", "11800")
 
-AUTH_URL      = "https://webbackend.cdsc.com.np/api/meroShare/auth/"
-WACC_URL      = "https://webbackend.cdsc.com.np/api/myPurchase/waccReport/"
-PORTFOLIO_URL = f"{TMS_BASE}/tmsapi/rtApi/ws/clientPortfolio/{TMS_CLIENT_ID}"
+AUTH_URL          = "https://webbackend.cdsc.com.np/api/meroShare/auth/"
+WACC_URL          = "https://webbackend.cdsc.com.np/api/myPurchase/waccReport/"
+WACC_SHARE_URL    = "https://webbackend.cdsc.com.np/api/myPurchase/share/"
+WACC_SEARCH_URL   = "https://webbackend.cdsc.com.np/api/myPurchase/search/wacc/"
+WACC_UPLOAD_URL   = "https://webbackend.cdsc.com.np/api/myPurchase/upload/"
+WACC_VIEW_URL     = "https://webbackend.cdsc.com.np/api/myPurchase/view/"
+MY_PORTFOLIO_URL  = "https://webbackend.cdsc.com.np/api/meroShareView/myPortfolio/"
 
 MEROSHARE_HEADERS = {
     "Accept":        "application/json, text/plain, */*",
@@ -170,54 +176,132 @@ def _fetch_wacc_report(token: str) -> dict[str, dict]:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 3 — TMS CLIENT PORTFOLIO (live prices)
+# SECTION 2B — AUTO-COMPLETE PENDING WACC
+# A scrip only shows up in waccReport once its purchase-rate transactions
+# have been confirmed. myPurchase/share/ lists scrips still waiting on that
+# confirmation; for each one, search -> upload (confirm at the known rate,
+# unchanged) -> view completes it, exactly mirroring the manual flow in the
+# Meroshare UI.
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _fetch_tms_portfolio() -> dict[str, dict]:
-    """
-    Returns dict keyed by symbol:
-    { "NABIL": { current_price, prev_close, day_change_pct, high, low, company }, ... }
-    """
+def _fetch_pending_wacc_scrips(token: str) -> list[str]:
+    """Scrips with unconfirmed WACC transactions. Empty list on any failure."""
+    headers = {**MEROSHARE_HEADERS, "Authorization": token}
     try:
-        session, host_sid = get_session()
-
-        headers = {
-            **BASE_HEADERS,
-            "Referer":         f"{TMS_BASE}/tms/client/dashboard",
-            "Membercode":      MEMBER_CODE,
-            "Request-Owner":   REQUEST_OWNER,
-            "Host-Session-Id": host_sid,
-            "X-Xsrf-Token":    session.cookies.get("XSRF-TOKEN", ""),
-        }
-
-        r = session.get(PORTFOLIO_URL, headers=headers, timeout=15)
+        r = requests.post(WACC_SHARE_URL, headers=headers,
+                          json={"isFilterByAllScript": False}, timeout=15)
         if r.status_code != 200:
-            log.error("TMS clientPortfolio failed: %d", r.status_code)
+            log.warning("myPurchase/share failed: %d", r.status_code)
+            return []
+        return list(r.json() or [])
+    except Exception as e:
+        log.warning("myPurchase/share error: %s", e)
+        return []
+
+
+def _confirm_wacc_for_scrip(token: str, scrip: str) -> Optional[dict]:
+    """
+    Confirm all pending purchase-rate transactions for one scrip at their
+    known rate (no rate changes), then return the finalized WACC summary.
+    Returns None on any failure — never raises.
+    """
+    headers = {**MEROSHARE_HEADERS, "Authorization": token}
+    try:
+        r = requests.post(WACC_SEARCH_URL, headers=headers,
+                          json={"demat": DEMAT, "scrip": scrip}, timeout=15)
+        if r.status_code != 200:
+            log.error("WACC search failed for %s: %d", scrip, r.status_code)
+            return None
+
+        pending = r.json().get("waccUpdateResponse", []) or []
+        if not pending:
+            log.info("  %-10s — no pending WACC transactions", scrip)
+            return r.json().get("waccSummaryResponse")
+
+        upload_payload = [{**rec, "isEdit": True, "remarks": ""} for rec in pending]
+
+        r2 = requests.post(WACC_UPLOAD_URL, headers=headers, json=upload_payload, timeout=15)
+        if r2.status_code != 202:
+            log.error("WACC upload failed for %s: %d — %s", scrip, r2.status_code, r2.text[:200])
+            return None
+        log.info("  %-10s — WACC confirmed (%d transaction(s))", scrip, len(pending))
+
+        r3 = requests.post(WACC_VIEW_URL, headers=headers,
+                           json={"demat": DEMAT, "scrip": scrip}, timeout=15)
+        if r3.status_code != 200:
+            log.error("WACC view failed for %s: %d", scrip, r3.status_code)
+            return None
+        return r3.json()
+
+    except Exception as e:
+        log.error("WACC confirm error for %s: %s", scrip, e)
+        return None
+
+
+def _complete_pending_wacc(token: str) -> dict:
+    """
+    Auto-complete WACC confirmation for every scrip that's pending it.
+    Returns {scrip: finalized_wacc_dict_or_None}. Never raises — a failure
+    on one scrip doesn't block the rest or the caller's sync().
+    """
+    pending_scrips = _fetch_pending_wacc_scrips(token)
+    if not pending_scrips:
+        log.info("No pending WACC confirmations")
+        return {}
+
+    log.info("Pending WACC confirmations: %s", pending_scrips)
+    results = {}
+    for scrip in pending_scrips:
+        results[scrip] = _confirm_wacc_for_scrip(token, scrip)
+    return results
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 3 — MEROSHARE MY PORTFOLIO (authoritative shares + live price)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _fetch_my_portfolio(token: str) -> dict[str, dict]:
+    """
+    Real current DEMAT balance via CDSC meroShareView/myPortfolio —
+    broker-agnostic (unlike ATrad's getPortfolio, which only reflects trades
+    executed through that specific broker/TMS and silently misses anything
+    bought elsewhere). This is the authoritative "what do I actually own"
+    source. Cost basis (wacc/total_cost) still comes from Meroshare's
+    waccReport — myPortfolio has no purchase-price data.
+
+    Returns dict keyed by symbol:
+    { "NABIL": { shares, current_price, market_value, company }, ... }
+    """
+    headers = {**MEROSHARE_HEADERS, "Authorization": token}
+    try:
+        r = requests.post(MY_PORTFOLIO_URL, headers=headers, json={
+            "sortBy":   "script",
+            "demat":    [DEMAT],
+            "clientCode": CLIENT_CODE,
+            "page":     1,
+            "size":     200,
+            "sortAsc":  True,
+        }, timeout=15)
+        if r.status_code != 200:
+            log.error("myPortfolio failed: %d", r.status_code)
             return {}
 
-        payload = r.json().get("payload", {})
-        records = payload.get("data", []) if isinstance(payload, dict) else payload
-        result  = {}
-
-        for rec in (records or []):
-            symbol = rec.get("symbol", "").upper().strip()
+        rows   = r.json().get("meroShareMyPortfolio", []) or []
+        result = {}
+        for row in rows:
+            symbol = row.get("script", "").upper().strip()
             if not symbol:
                 continue
             result[symbol] = {
-                "company":       rec.get("securityName", symbol),
-                "current_price": float(rec.get("lastTradePrice", 0)),
-                "prev_close":    float(rec.get("closePrice", 0)),
-                "day_change_pct":float(rec.get("perChange", 0)),
-                "high":          float(rec.get("highPrice", 0)),
-                "low":           float(rec.get("lowPrice", 0)),
-                "open_price":    float(rec.get("openPrice", 0)),
+                "shares":        int(row.get("currentBalance", 0) or 0),
+                "current_price": float(row.get("lastTransactionPrice", 0) or 0),
+                "market_value":  float(row.get("valueOfLastTransPrice", 0) or 0),
+                "company":       row.get("scriptDesc", symbol),
             }
-
-        log.info("TMS clientPortfolio: %d positions", len(result))
+        log.info("myPortfolio: %d positions", len(result))
         return result
-
     except Exception as e:
-        log.error("TMS portfolio error: %s", e)
+        log.error("myPortfolio error: %s", e)
         return {}
 
 
@@ -225,47 +309,47 @@ def _fetch_tms_portfolio() -> dict[str, dict]:
 # SECTION 4 — MERGE + BUILD HOLDINGS
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _build_holdings(wacc_data: dict, tms_data: dict) -> list[Holding]:
+def _build_holdings(wacc_data: dict, my_portfolio_data: dict) -> list[Holding]:
     """
-    Only build holdings for symbols present in BOTH waccReport AND TMS.
-    Symbols in waccReport but not TMS = already sold, skip them.
+    Only build holdings for symbols present in BOTH waccReport AND the real
+    DEMAT balance (myPortfolio). Symbols in waccReport but not in myPortfolio
+    = already sold, skip them. Shares and current_price come from myPortfolio
+    (CDSC-level, broker-agnostic, live); wacc/total_cost stay Meroshare's
+    waccReport (myPortfolio has no purchase-price data).
     """
     holdings = []
 
     for symbol, w in wacc_data.items():
-        # ✅ Skip if not in TMS — means already sold
-        if symbol not in tms_data:
-            log.info("  %-10s — not in TMS (already sold, skipping)", symbol)
+        # ✅ Skip if not in the real DEMAT balance — means already sold
+        if symbol not in my_portfolio_data:
+            log.info("  %-10s — not in myPortfolio (already sold, skipping)", symbol)
             continue
 
-        t             = tms_data[symbol]
-        shares        = w["shares"]
+        m             = my_portfolio_data[symbol]
+        shares        = m["shares"]
         wacc          = w["wacc"]
         total_cost    = w["total_cost"]
-        current_price = t.get("current_price", 0.0)
-        current_value = shares * current_price if current_price > 0 else 0.0
+        current_price = m.get("current_price", 0.0)
+        current_value = m.get("market_value") or (shares * current_price if current_price > 0 else 0.0)
         pnl_npr       = current_value - total_cost if total_cost > 0 else 0.0
         pnl_pct       = (pnl_npr / total_cost * 100) if total_cost > 0 else 0.0
 
         h = Holding(
             symbol         = symbol,
-            company        = t.get("company", symbol),
+            company        = m.get("company", symbol),
             shares         = shares,
             wacc           = round(wacc, 2),
             total_cost     = round(total_cost, 2),
             current_price  = round(current_price, 2),
-            prev_close     = round(t.get("prev_close", 0.0), 2),
             current_value  = round(current_value, 2),
             pnl_npr        = round(pnl_npr, 2),
             pnl_pct        = round(pnl_pct, 2),
-            day_change_pct = round(t.get("day_change_pct", 0.0), 2),
-            high           = round(t.get("high", 0.0), 2),
-            low            = round(t.get("low", 0.0), 2),
+            source         = "meroshare_portfolio+wacc",
         )
         holdings.append(h)
 
-        log.info("  %-10s %4d shares  WACC %7.2f  LTP %7.2f  P&L %+.1f%%  Day %+.1f%%",
-                 symbol, shares, wacc, current_price, pnl_pct, h.day_change_pct)
+        log.info("  %-10s %4d shares  WACC %7.2f  LTP %7.2f  P&L %+.1f%%",
+                 symbol, shares, wacc, current_price, pnl_pct)
 
     return holdings
 
@@ -309,7 +393,7 @@ def _write_portfolio(holdings: list[Holding]) -> int:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def sync() -> Optional[PortfolioSummary]:
-    """Full sync: waccReport + TMS → Neon. Called by capital_allocator."""
+    """Full sync: waccReport + myPortfolio (real DEMAT balance) → Neon. Called by capital_allocator."""
     log.info("=" * 60)
     log.info("PORTFOLIO SYNC — %s", datetime.now(tz=NST).strftime("%Y-%m-%d %H:%M NST"))
     log.info("=" * 60)
@@ -320,19 +404,23 @@ def sync() -> Optional[PortfolioSummary]:
         log.error("Cannot proceed without Meroshare token")
         return None
 
+    # Step 1b: auto-complete any pending WACC confirmations first — a scrip
+    # doesn't appear in waccReport until this is done.
+    _complete_pending_wacc(token)
+
     # Step 2: WACC report — symbols + shares + cost
     wacc_data = _fetch_wacc_report(token)
     if not wacc_data:
         log.error("No WACC data returned")
         return None
 
-    # Step 3: TMS live prices
-    tms_data = _fetch_tms_portfolio()
-    if not tms_data:
-        log.warning("No TMS price data — P&L will be 0")
+    # Step 3: myPortfolio — real DEMAT balance + live price (broker-agnostic)
+    my_portfolio_data = _fetch_my_portfolio(token)
+    if not my_portfolio_data:
+        log.warning("No myPortfolio data — holdings will be empty")
 
     # Step 4: Merge
-    holdings = _build_holdings(wacc_data, tms_data)
+    holdings = _build_holdings(wacc_data, my_portfolio_data)
     if not holdings:
         return PortfolioSummary()
 
@@ -358,6 +446,33 @@ def sync() -> Optional[PortfolioSummary]:
     log.info("✅ Sync complete — %d positions | Value NPR %.0f | P&L %+.1f%%",
             summary.total_holdings, summary.total_value_npr, summary.total_pnl_pct)
     return summary
+
+
+def verify_live_holding(symbol: str, min_shares: float = 1) -> bool:
+    """
+    Confirm `symbol` is actually held (>= min_shares) right now, via a fresh
+    myPortfolio call — the real, broker-agnostic DEMAT balance.
+
+    Safety gate for the LIVE execution monitor: a position can look OPEN in
+    the app's own `portfolio` table (e.g. from a stale import, or a symbol
+    never actually bought through this app's trading engine) without the
+    shares actually being there. Never auto-close a live position without
+    this confirming it first.
+
+    Fails closed — any error (login, network, missing symbol) returns False,
+    never True. Never raises.
+    """
+    try:
+        token = _get_token()
+        if not token:
+            log.error("verify_live_holding(%s): no Meroshare token", symbol)
+            return False
+        data = _fetch_my_portfolio(token)
+        held = data.get(symbol.upper().strip(), {}).get("shares", 0)
+        return held >= min_shares
+    except Exception as e:
+        log.error("verify_live_holding(%s) error: %s", symbol, e)
+        return False
 
 
 def get_portfolio_summary() -> Optional[PortfolioSummary]:
