@@ -218,6 +218,12 @@ def _confirm_wacc_for_scrip(token: str, scrip: str) -> Optional[dict]:
             log.info("  %-10s — no pending WACC transactions", scrip)
             return r.json().get("waccSummaryResponse")
 
+        # Confirm at the rate Meroshare already knows (rate/userPrice
+        # untouched) — this only accepts the pending transaction into the
+        # WACC calc, it doesn't change the price. isEdit:True is literally
+        # the "confirm" flag: the record comes back from search with it
+        # False, and flipping it True + adding remarks is what the manual
+        # Meroshare UI does when you click through the same confirmation.
         upload_payload = [{**rec, "isEdit": True, "remarks": ""} for rec in pending]
 
         r2 = requests.post(WACC_UPLOAD_URL, headers=headers, json=upload_payload, timeout=15)
@@ -330,6 +336,9 @@ def _build_holdings(wacc_data: dict, my_portfolio_data: dict) -> list[Holding]:
         wacc          = w["wacc"]
         total_cost    = w["total_cost"]
         current_price = m.get("current_price", 0.0)
+        # myPortfolio already gives valueOfLastTransPrice directly — prefer
+        # that over shares*price so rounding always matches what CDSC itself
+        # reports. Only fall back to computing it if that field is missing.
         current_value = m.get("market_value") or (shares * current_price if current_price > 0 else 0.0)
         pnl_npr       = current_value - total_cost if total_cost > 0 else 0.0
         pnl_pct       = (pnl_npr / total_cost * 100) if total_cost > 0 else 0.0

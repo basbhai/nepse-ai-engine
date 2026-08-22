@@ -83,7 +83,11 @@ def _safe_float(val: str, default: float = 0.0) -> float:
 
 
 def _login(kind: str, username: str, password: str) -> bool:
-    """kind: 'order' or 'data' — sets the matching module-level session."""
+    """
+    Shared login implementation for both accounts. kind is 'order' or 'data'
+    — it only decides which pair of module-level globals gets the resulting
+    session, so ORDER and DATA logins never write into each other's slot.
+    """
     global _order_session, _data_session, _order_last_login, _data_last_login
     s = requests.Session()
     s.headers.update(_get_headers())
@@ -103,6 +107,8 @@ def _login(kind: str, username: str, password: str) -> bool:
         data = _parse(r)
 
         if data.get("code") == "0":
+            # Only this account's session/timestamp pair gets updated — the
+            # other account's session is left completely untouched.
             if kind == "order":
                 _order_session    = s
                 _order_last_login = datetime.now(NST)
@@ -128,6 +134,12 @@ def _data_login() -> bool:
 
 
 def _keepalive(kind: str, session, username: str) -> bool:
+    """
+    Ping one account's existing session to keep it alive; re-login (fresh
+    session for that account only) if it's missing, expired, or the ping
+    itself fails. `session`/`username` are passed in rather than looked up
+    by `kind` so the caller controls exactly which account gets checked.
+    """
     if session is None:
         return _order_login() if kind == "order" else _data_login()
     try:
@@ -565,6 +577,9 @@ def get_portfolio(portfolio_asset: str = "EQUITY") -> dict:
 
         d          = data.get("data", {})
         rows       = d.get("portfolios", []) or []
+        # ATrad returns these as single-element lists (e.g. "markerValTot":
+        # [8489.0]), not scalars — confirmed by direct API testing, not a
+        # typo. Indexing [0] below is intentional, matching that shape.
         market_tot = d.get("markerValTot", [0.0])
         qty_tot    = d.get("quantityTot", [0])
 
